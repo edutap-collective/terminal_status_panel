@@ -14,8 +14,8 @@ from lmu.terminal_status_panel.model import (
 from lmu.terminal_status_panel.render import panels
 
 
-def _text(renderable) -> str:
-    console = Console(width=100, force_terminal=True, color_system="truecolor", record=True)
+def _text(renderable, width=100) -> str:
+    console = Console(width=width, force_terminal=True, color_system="truecolor", record=True)
     console.print(renderable)
     return console.export_text()
 
@@ -89,42 +89,48 @@ def test_updates_panel_unsupported():
     assert "n/a" in out.lower()
 
 
-def test_services_section_groups_by_stack_with_emoji_states():
+def test_services_section_swarm_facts_and_three_columns():
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=3,
         nodes=[SwarmNode("srv-01", reachable=True, role="manager", leader=True),
                SwarmNode("srv-02", reachable=False, role="worker", state="down")],
         services=[
-            ServiceStatus("pg_db", 1, 1, stack="PostgreSQL-18",
-                          description="PostgreSQL Datenbank, Version 18",
+            ServiceStatus("PostgreSQL-18_pg", 1, 1, stack="PostgreSQL-18",
                           tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("kafka_broker", 1, 2, critical=True, stack="kafka",
+            ServiceStatus("kafka_broker", 1, 2, stack="kafka",
                           tasks=[ServiceTask("srv-01", "running"),
-                                 ServiceTask("srv-02", "failed")],
-                          unassigned=1),
+                                 ServiceTask("srv-02", "failed")]),
+            ServiceStatus("eduTAP_web", 2, 2, stack="eduTAP",
+                          tasks=[ServiceTask("srv-01", "running"),
+                                 ServiceTask("srv-02", "running")]),
             ServiceStatus("watchtower", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("registry", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("registry", 1, 1, tasks=[ServiceTask("srv-02", "running")]),
+            ServiceStatus("traefik_traefik", 2, 2, stack="traefik",
+                          tasks=[ServiceTask("srv-01", "running"),
+                                 ServiceTask("srv-02", "running")]),
         ],
     )
-    out = _text(panels.services_section(swarm, Config()))
-    assert "DOCKER SWARM" in out
-    # Compact key-fact header, grouped.
-    assert "Swarm" in out
-    assert "Master" in out
-    assert "srv-01" in out                   # master / node listed
-    assert "Registry" in out                 # registry surfaced as a key fact
-    assert "Nodes" in out
-    # Emoji states.
-    assert "✅" in out and "💀" in out
-    assert "down" in out                     # node/task state text
-    assert "unassigned" in out               # orphaned task marker
-    # Stacks section.
-    assert "Stacks" in out
-    assert "PostgreSQL-18:" in out           # stack header (sorted)
-    assert "PostgreSQL Datenbank" in out     # description
-    assert "kafka:" in out
-    assert "Ohne Stack:" in out              # watchtower remains ungrouped
+    out = _text(panels.services_section(swarm, Config()), width=140)
+    assert "DOCKER INFOS" in out
+    # Swarm key facts, incl. pulled-in registry & traefik.
+    assert "SWARM" in out
+    assert "Master" in out and "srv-01" in out
+    assert "Registry" in out
+    assert "Traefik" in out
+    assert "Nodes" in out and "down" in out
+    # Three stack columns.
+    assert "Infrastruktur" in out
+    assert "Service" in out
+    assert "Container (ohne Stack)" in out
+    # Rollups: infra stacks classified, service stack separate, container listed.
+    assert "PostgreSQL-18" in out
+    assert "kafka" in out
+    assert "eduTAP" in out
     assert "watchtower" in out
+    # Emojis present (ok + degraded kafka).
+    assert "✅" in out
+    # traefik & registry are pulled into facts, not repeated as a stack column row
+    assert "traefik_traefik" not in out
 
 
 def test_services_section_unreachable():

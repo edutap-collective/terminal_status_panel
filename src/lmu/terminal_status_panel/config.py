@@ -20,12 +20,21 @@ class Thresholds:
     load_critical: float = 1.0  # per-CPU multiplier
 
 
+DEFAULT_INFRASTRUCTURE_STACKS = [
+    "postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer",
+    "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch",
+]
+
+
 @dataclass
 class Config:
     width: int = 80
     docker_timeout: float = 1.5
     critical_services: list[str] = field(default_factory=list)
     description_label: str = "lmu.service.description"
+    infrastructure_stacks: list[str] = field(
+        default_factory=lambda: list(DEFAULT_INFRASTRUCTURE_STACKS)
+    )
     thresholds: Thresholds = field(default_factory=Thresholds)
 
 
@@ -62,10 +71,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     )
     docker = _section(data, "docker")
     services = _section(data, "services")
+    infra = docker.get("infrastructure_stacks", services.get("infrastructure", None))
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
         critical_services=list(services.get("critical", [])),
         description_label=str(docker.get("description_label", "lmu.service.description")),
+        infrastructure_stacks=list(infra) if infra is not None
+        else list(DEFAULT_INFRASTRUCTURE_STACKS),
         thresholds=thresholds,
     )

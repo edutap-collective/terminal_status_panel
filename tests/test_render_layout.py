@@ -27,11 +27,12 @@ def test_build_layout_contains_all_sections():
     )
     out = _render(data)
     assert "SYSTEM OVERVIEW" in out
+    assert "UPDATES" in out
+    assert "SYSTEM STATUS" in out
     assert "SYSTEM LOAD" in out
     assert "MEMORY & SWAP" in out
     assert "FILESYSTEM USAGE" in out
-    assert "UPDATES" in out
-    assert "DOCKER" in out
+    assert "DOCKER INFOS" in out
     assert "srv01" in out
     assert "Last check:" in out
 

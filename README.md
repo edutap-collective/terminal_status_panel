@@ -1,12 +1,18 @@
 # lmu.terminal_status_panel
 
 A small Python package that renders a colorful server status panel on login
-via `update-motd.d`. It shows system identity, load & per-core CPU usage,
-memory/swap and filesystem bars, pending package updates, and the health of
-Dockerized services. Docker Swarm services are grouped by stack, with per-task node placement and
-per-node state markers (✅ running, 💀 failed, ❌ unassigned) plus an optional
-description label — all read from the Docker API (no database or broker
-protocol is ever spoken to).
+via `update-motd.d`. The full-width dashboard is laid out in three tiers:
+
+- **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
+- **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
+  usage table.
+- **DOCKER INFOS** — Swarm key facts (summary, master/leader, registry,
+  traefik, node health) over three compact stack columns: *Infrastruktur*,
+  *Service*, and standalone *Container*. Each stack is a health rollup
+  (✅ / ⚠️ / 💀 with running/desired counts).
+
+All Docker data is read from the Docker API only — no database or broker
+protocol is ever spoken to.
 
 ## Requirements
 
@@ -55,6 +61,9 @@ width = 80
 timeout = 1.5
 # Service label read as the human-readable description shown per service.
 description_label = "lmu.service.description"
+# Stacks whose name matches one of these (case-insensitive substring) go into
+# the "Infrastruktur" column; every other stack goes into "Service".
+infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer"]
 
 [services]
 critical = ["postgres", "kafka"]
@@ -89,6 +98,22 @@ services:
 ```
 
 Change the read label key via `docker.description_label` in the config.
+
+## OS logos
+
+Logos are **pre-rendered** from real PNGs into half-block ANSI (`▀` with
+fore/background colours) and bundled under
+`src/lmu/terminal_status_panel/render/logos/*.ans`. They are plain ANSI, so they
+render in MOTD and over SSH without any image protocol or runtime dependency.
+The correct logo is chosen automatically from the detected distribution
+(Debian / Ubuntu / generic Linux).
+
+To regenerate them (dev only, needs Pillow — `pip install -e '.[dev]'`), drop
+source PNGs into `assets/logos/` and run:
+
+```bash
+python tools/generate_logos.py
+```
 
 ## License
 
