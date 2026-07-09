@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import shutil
+import sys
 
 from rich.console import Console
 
 from .collectors.docker import collect_docker
 from .collectors.resources import collect_resources
 from .collectors.system import collect_system
+from .collectors.updates import collect_updates
 from .config import Config, load_config
 from .model import PanelData
 from .render.layout import build_layout
@@ -19,7 +22,21 @@ def collect_all(cfg: Config) -> PanelData:
         system=collect_system(),
         resources=collect_resources(),
         swarm=collect_docker(timeout=cfg.docker_timeout, critical=cfg.critical_services),
+        updates=collect_updates(timeout=cfg.docker_timeout),
     )
+
+
+def resolve_width(arg_width: int | None, cfg: Config) -> int:
+    """Pick the render width: explicit flag wins; otherwise use the real
+    terminal width when attached to one, else the configured fixed width
+    (as used for MOTD generation, where no TTY is present)."""
+    if arg_width is not None:
+        return arg_width
+    if sys.stdout.isatty():
+        columns = shutil.get_terminal_size(fallback=(cfg.width, 24)).columns
+        if columns > 0:
+            return columns
+    return cfg.width
 
 
 def build_console(width: int, no_color: bool) -> Console:
@@ -43,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = _parse_args(argv)
         cfg = load_config(args.config)
-        width = args.width if args.width is not None else cfg.width
+        width = resolve_width(args.width, cfg)
         console = build_console(width, args.no_color)
         data = collect_all(cfg)
         console.print(build_layout(data, cfg))

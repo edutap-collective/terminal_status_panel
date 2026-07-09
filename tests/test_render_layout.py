@@ -6,28 +6,37 @@ from lmu.terminal_status_panel.model import (
     ResourceUsage,
     SwarmInfo,
     SystemInfo,
+    UpdateInfo,
 )
 from lmu.terminal_status_panel.render import layout
+
+
+def _render(data, width=100) -> str:
+    console = Console(width=width, force_terminal=True, color_system="truecolor", record=True)
+    console.print(layout.build_layout(data, Config()))
+    return console.export_text()
 
 
 def test_build_layout_contains_all_sections():
     data = PanelData(
         system=SystemInfo(hostname="srv01", ip_addresses=["10.0.0.5"]),
-        resources=ResourceUsage(mem_percent=64.0, mem_used=1, mem_total=2),
+        resources=ResourceUsage(mem_percent=64.0, mem_used=1, mem_total=2,
+                                cpu_percent=12.0, cpu_per_core=[10.0, 14.0]),
         swarm=SwarmInfo(reachable=False),
+        updates=UpdateInfo(supported=True, available=3, security=1, standard=2),
     )
-    console = Console(width=80, force_terminal=True, color_system="truecolor", record=True)
-    console.print(layout.build_layout(data, Config()))
-    out = console.export_text()
-    assert "System" in out
-    assert "Resources" in out
-    assert "Services" in out
+    out = _render(data)
+    assert "SYSTEM OVERVIEW" in out
+    assert "SYSTEM LOAD" in out
+    assert "MEMORY & SWAP" in out
+    assert "FILESYSTEM USAGE" in out
+    assert "UPDATES" in out
+    assert "DOCKER" in out
     assert "srv01" in out
+    assert "Last check:" in out
 
 
 def test_build_layout_survives_all_none():
-    console = Console(width=80, force_terminal=True, record=True)
-    console.print(layout.build_layout(PanelData(), Config()))
-    out = console.export_text()
-    assert "System" in out
-    assert "Services" in out
+    out = _render(PanelData())
+    assert "SYSTEM OVERVIEW" in out
+    assert "DOCKER" in out

@@ -2,11 +2,12 @@ from lmu.terminal_status_panel import cli
 
 
 def test_main_exits_zero_and_prints(capsys):
-    rc = cli.main(["--width", "80"])
+    rc = cli.main(["--width", "100"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "System" in out
-    assert "Services" in out
+    assert "SYSTEM OVERVIEW" in out
+    assert "SYSTEM LOAD" in out
+    assert "DOCKER" in out
 
 
 def test_main_never_raises_even_if_collection_breaks(monkeypatch, capsys):
