@@ -39,6 +39,16 @@ class ResourceUsage:
     filesystems: list[FilesystemUsage] = field(default_factory=list)
     load_avg: tuple[float, float, float] | None = None
     cpu_count: int | None = None
+    cpu_percent: float | None = None
+    cpu_per_core: list[float] = field(default_factory=list)
+
+
+@dataclass
+class UpdateInfo:
+    supported: bool = False
+    available: int | None = None
+    security: int | None = None
+    standard: int | None = None
 
 
 @dataclass
@@ -63,3 +73,4 @@ class PanelData:
     system: SystemInfo | None = None
     resources: ResourceUsage | None = None
     swarm: SwarmInfo | None = None
+    updates: UpdateInfo | None = None

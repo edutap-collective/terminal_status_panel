@@ -54,6 +54,14 @@ def collect_resources() -> ResourceUsage:
     res.filesystems = _safe(_collect_filesystems, []) or []
     res.cpu_count = _safe(psutil.cpu_count)
 
+    # One short sample yields both the per-core and the aggregate figures.
+    per_core = _safe(lambda: psutil.cpu_percent(interval=0.15, percpu=True), []) or []
+    res.cpu_per_core = list(per_core)
+    if res.cpu_per_core:
+        res.cpu_percent = sum(res.cpu_per_core) / len(res.cpu_per_core)
+    else:
+        res.cpu_percent = _safe(lambda: psutil.cpu_percent(interval=0.1))
+
     load = _safe(lambda: psutil.getloadavg())
     if load is not None:
         res.load_avg = (load[0], load[1], load[2])
