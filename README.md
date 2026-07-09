@@ -8,9 +8,11 @@ via `update-motd.d`. The full-width dashboard is laid out in three tiers:
   usage table.
 - **DOCKER INFOS** — Swarm key facts (summary + node health) above three
   stacked node matrices: *Infrastruktur*, *Service*, and standalone *Container*.
-  Stacks and containers are sorted alphabetically; each matrix has a row per
-  stack (or per service when a stack has several), a column per node
-  (alphabetical) showing ✅ / 💀 placement, and a description column.
+  Per-node replicas of the same service (e.g. `kafka_kafka-<node>` on every
+  node) collapse into a single row; a stack with one logical service shows as
+  one row named after the stack, a stack with several shows a header plus one
+  sub-row per service (stack prefix and node name stripped). Columns are the
+  nodes (alphabetical) with ✅ / 💀 placement, plus a description column.
 
 All Docker data is read from the Docker API only — no database or broker
 protocol is ever spoken to.

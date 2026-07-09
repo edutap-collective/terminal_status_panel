@@ -89,57 +89,63 @@ def test_updates_panel_unsupported():
     assert "n/a" in out.lower()
 
 
-def test_services_section_swarm_facts_and_three_columns():
+def test_services_section_merges_per_node_replicas():
+    N1, N2, N3 = "lmzvd06-ccc-01", "lmzvd06-ccn-01", "lmzvd06-ccn-02"
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=3,
-        nodes=[SwarmNode("srv-01", reachable=True, role="manager", leader=True),
-               SwarmNode("srv-02", reachable=False, role="worker", state="down")],
+        nodes=[SwarmNode(N1, reachable=True, role="manager", leader=True),
+               SwarmNode(N2, reachable=True, role="worker"),
+               SwarmNode(N3, reachable=False, role="worker", state="down")],
         services=[
-            # Multi-service infra stack — must list each service individually.
-            ServiceStatus("PostgreSQL-18_a", 1, 1, stack="PostgreSQL-18",
-                          description="PG primary", tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("PostgreSQL-18_b", 1, 1, stack="PostgreSQL-18",
-                          description="PG replica", tasks=[ServiceTask("srv-02", "running")]),
-            ServiceStatus("kafka_broker", 1, 2, stack="kafka", description="Message broker",
-                          tasks=[ServiceTask("srv-01", "running"),
-                                 ServiceTask("srv-02", "failed")]),
-            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="eduTAP frontend",
-                          tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("watchtower", 1, 1, description="Auto-update",
-                          tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("registry", 1, 1, description="Docker registry",
-                          tasks=[ServiceTask("srv-02", "running")]),
+            # One kafka service per node — must collapse to a single "kafka" row.
+            ServiceStatus(f"kafka_kafka-{N1}", 1, 1, stack="kafka", description="Kafka broker",
+                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(f"kafka_kafka-{N2}", 1, 1, stack="kafka", description="Kafka broker",
+                          tasks=[ServiceTask(N2, "running")]),
+            ServiceStatus(f"kafka_kafka-{N3}", 1, 1, stack="kafka", description="Kafka broker",
+                          tasks=[ServiceTask(N3, "failed")]),
+            # PostgreSQL: per-node pg replicas + a distinct monitor service.
+            ServiceStatus(f"PostgreSQL-18_pg-{N1}", 1, 1, stack="PostgreSQL-18",
+                          description="PG", tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(f"PostgreSQL-18_pg-{N2}", 1, 1, stack="PostgreSQL-18",
+                          description="PG", tasks=[ServiceTask(N2, "running")]),
+            ServiceStatus("PostgreSQL-18_pg-monitor", 1, 1, stack="PostgreSQL-18",
+                          description="PG monitor", tasks=[ServiceTask(N3, "running")]),
+            # traefik: two distinct services.
             ServiceStatus("traefik_sockproxy", 1, 1, stack="traefik",
-                          description="socket proxy", tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("traefik_traefik", 2, 2, stack="traefik", description="ingress",
-                          tasks=[ServiceTask("srv-01", "running"),
-                                 ServiceTask("srv-02", "running")]),
+                          description="socket proxy", tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus("traefik_traefik", 3, 3, stack="traefik", description="ingress",
+                          tasks=[ServiceTask(N1, "running"), ServiceTask(N2, "running"),
+                                 ServiceTask(N3, "running")]),
+            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="eduTAP frontend",
+                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus("registry", 1, 1, description="Docker registry",
+                          tasks=[ServiceTask(N2, "running")]),
+            ServiceStatus("watchtower", 1, 1, description="Auto-update",
+                          tasks=[ServiceTask(N3, "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "DOCKER INFOS" in out
-    # Swarm facts: just summary + nodes (registry/traefik are NOT pulled up now).
-    assert "SWARM" in out
-    assert "Swarm" in out
-    assert "Nodes" in out
-    assert "srv-01" in out and "down" in out   # node line, srv-02 down
-    # Three stack matrices with a description column.
-    assert "Infrastruktur" in out
-    assert "Service" in out
-    assert "Container (ohne Stack)" in out
+    assert "Infrastruktur" in out and "Service" in out and "Container (ohne Stack)" in out
     assert "Description" in out
-    # traefik & registry now classified as Infrastruktur stacks/services.
-    assert "traefik_sockproxy" in out and "traefik_traefik" in out
-    assert "socket proxy" in out and "ingress" in out
+    assert "ccc-01" in out  # short node header
+
+    # kafka collapses to ONE row; per-node service names are gone.
+    assert "kafka" in out
+    assert f"kafka_kafka-{N1}" not in out
+    # PostgreSQL: merged 'pg' row + distinct 'pg-monitor', stack prefix stripped.
+    assert "PostgreSQL-18" in out
+    assert "pg-monitor" in out
+    assert f"PostgreSQL-18_pg-{N1}" not in out
+    # traefik sub-rows without stack prefix.
+    assert "sockproxy" in out
+    assert "traefik_sockproxy" not in out
+    # registry -> Infrastruktur, watchtower -> Container, eduTAP -> Service.
     assert "registry" in out and "Docker registry" in out
-    # Multi-service infra stack lists each service.
-    assert "PostgreSQL-18_a" in out and "PostgreSQL-18_b" in out
-    assert "PG primary" in out
-    # Single-service stacks stay one row; descriptions shown.
-    assert "kafka" in out and "Message broker" in out
-    assert "eduTAP" in out
     assert "watchtower" in out
-    # Per-node status emojis present (running ✅, failed 💀).
+    assert "eduTAP" in out
+    # Status emojis present (running ✅, failed 💀 for kafka on down node).
     assert "✅" in out and "💀" in out
 
 

@@ -318,7 +318,38 @@ def _node_cell(services, node_full: str) -> Text:
     return Text(_DEAD, style="red")
 
 
-def _stack_matrix(title: str, rows: list[tuple[str, list]], nodes) -> RenderableType:
+def _base_service_name(name: str, node_names) -> str:
+    """Strip a trailing '-<node hostname>' / '_<node hostname>' so per-node
+    replicas of the same service collapse (kafka_kafka-lmzvd06-ccc-01 ->
+    kafka_kafka)."""
+    for nn in sorted(node_names, key=len, reverse=True):
+        if nn and name.endswith(nn) and len(name) > len(nn) + 1:
+            base = name[: -len(nn)].rstrip("-_")
+            if base:
+                return base
+    return name
+
+
+def _strip_stack_prefix(base: str, stack: str) -> str:
+    for sep in ("_", "-"):
+        prefix = f"{stack}{sep}"
+        if base.startswith(prefix) and len(base) > len(prefix):
+            return base[len(prefix):]
+    return base
+
+
+def _base_groups(services, node_names) -> dict[str, list]:
+    groups: dict[str, list] = {}
+    for svc in services:
+        groups.setdefault(_base_service_name(svc.name, node_names), []).append(svc)
+    return groups
+
+
+def _group_desc(services) -> str:
+    return next((s.description for s in services if s.description), "")
+
+
+def _stack_matrix(title: str, entries: list[tuple[str, list]], nodes) -> RenderableType:
     short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")          # stack / service name
@@ -331,50 +362,58 @@ def _stack_matrix(title: str, rows: list[tuple[str, list]], nodes) -> Renderable
     header.append(Text("Description", style="cyan"))
     table.add_row(*header)
 
-    if not rows:
+    if not entries:
         table.add_row(Text("—", style="dim"), *[""] * (len(short) + 1))
 
-    for name, services in sorted(rows, key=lambda r: r[0].lower()):
-        if len(services) <= 1:
-            svc = services[0] if services else None
-            desc = svc.description if svc else ""
-            cells = [Text(name)]
-            cells += [_node_cell(services, full) for full, _ in short]
-            cells.append(Text(desc or ""))
-            table.add_row(*cells)
+    def _row(label, services, desc):
+        cells = [label] + [_node_cell(services, full) for full, _ in short]
+        cells.append(Text(desc or ""))
+        table.add_row(*cells)
+
+    for stack_name, subrows in sorted(entries, key=lambda e: e[0].lower()):
+        if len(subrows) == 1:
+            _, services, desc = subrows[0]
+            _row(Text(stack_name), services, desc)
         else:
-            # Multi-service stack: header row, then one row per service.
-            table.add_row(Text(name, style="bold cyan"), *[""] * (len(short) + 1))
-            for svc in sorted(services, key=lambda s: s.name):
-                cells = [Text(f"  {svc.name}")]
-                cells += [_node_cell([svc], full) for full, _ in short]
-                cells.append(Text(svc.description or ""))
-                table.add_row(*cells)
+            # Several distinct services: stack header, then one row each.
+            table.add_row(Text(stack_name, style="bold cyan"), *[""] * (len(short) + 1))
+            for label, services, desc in subrows:
+                _row(Text(f"  {label}"), services, desc)
     return table
 
 
 def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
+    node_names = [n.name for n in swarm.nodes]
 
     def is_infra(name: str) -> bool:
         return any(k in name.lower() for k in infra_keys)
 
+    def subrows_for(stack: str, services) -> list[tuple[str, list, str]]:
+        groups = _base_groups(services, node_names)
+        return [
+            (_strip_stack_prefix(base, stack) or base, groups[base], _group_desc(groups[base]))
+            for base in sorted(groups, key=str.lower)
+        ]
+
     stacks: dict[str, list] = {}
-    containers: list = []
+    ungrouped: list = []
     for svc in swarm.services:
         if svc.stack is None:
-            containers.append(svc)
+            ungrouped.append(svc)
         else:
             stacks.setdefault(svc.stack, []).append(svc)
 
     infra, service = [], []
     for name, svcs in stacks.items():
-        (infra if is_infra(name) else service).append((name, svcs))
+        entry = (name, subrows_for(name, svcs))
+        (infra if is_infra(name) else service).append(entry)
 
-    # Ungrouped services classify by their own name (e.g. registry -> infra).
+    # Ungrouped services: merge per-node replicas, classify each by base name.
     container_rows = []
-    for cont in containers:
-        (infra if is_infra(cont.name) else container_rows).append((cont.name, [cont]))
+    for base, svcs in _base_groups(ungrouped, node_names).items():
+        entry = (base, [(base, svcs, _group_desc(svcs))])
+        (infra if is_infra(base) else container_rows).append(entry)
 
     # Per-service rows plus a description column make each table wide, so the
     # three categories stack vertically (each full width) instead of side by side.
