@@ -1,6 +1,10 @@
 {
   "name": "lmu.terminal_status_panel on Debian",
   "image": "mcr.microsoft.com/devcontainers/python:3.14-trixie",
+  "mounts": [
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.claude,target=/host-home-folder/.claude,type=bind,consistency=cached",
+    
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
@@ -11,7 +15,8 @@
         "ms-python.isort",
         "ms-python.python",
         "ms-python.vscode-pylance",
-        "ms-python.vscode-python-envs"
+        "ms-python.vscode-python-envs",
+        "anthropic.claude-code"
       ],
       "settings": {
         "python.analysis.typeCheckingMode": "strict",
