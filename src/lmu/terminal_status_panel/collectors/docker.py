@@ -43,6 +43,7 @@ def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
                 state=state,
             )
         )
+    nodes.sort(key=lambda n: n.name)  # stable, alphabetical hostname order
     return nodes, id_to_name
 
 

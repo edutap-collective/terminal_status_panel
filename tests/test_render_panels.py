@@ -95,22 +95,28 @@ def test_services_section_swarm_facts_and_three_columns():
         nodes=[SwarmNode("srv-01", reachable=True, role="manager", leader=True),
                SwarmNode("srv-02", reachable=False, role="worker", state="down")],
         services=[
-            ServiceStatus("PostgreSQL-18_pg", 1, 1, stack="PostgreSQL-18",
-                          tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("kafka_broker", 1, 2, stack="kafka",
+            # Multi-service infra stack — must list each service individually.
+            ServiceStatus("PostgreSQL-18_a", 1, 1, stack="PostgreSQL-18",
+                          description="PG primary", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("PostgreSQL-18_b", 1, 1, stack="PostgreSQL-18",
+                          description="PG replica", tasks=[ServiceTask("srv-02", "running")]),
+            ServiceStatus("kafka_broker", 1, 2, stack="kafka", description="Message broker",
                           tasks=[ServiceTask("srv-01", "running"),
                                  ServiceTask("srv-02", "failed")]),
-            ServiceStatus("eduTAP_web", 2, 2, stack="eduTAP",
-                          tasks=[ServiceTask("srv-01", "running"),
-                                 ServiceTask("srv-02", "running")]),
-            ServiceStatus("watchtower", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("registry", 1, 1, tasks=[ServiceTask("srv-02", "running")]),
-            ServiceStatus("traefik_traefik", 2, 2, stack="traefik",
+            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="eduTAP frontend",
+                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("watchtower", 1, 1, description="Auto-update",
+                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("registry", 1, 1, description="Docker registry",
+                          tasks=[ServiceTask("srv-02", "running")]),
+            ServiceStatus("traefik_sockproxy", 1, 1, stack="traefik",
+                          description="socket proxy", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("traefik_traefik", 2, 2, stack="traefik", description="ingress",
                           tasks=[ServiceTask("srv-01", "running"),
                                  ServiceTask("srv-02", "running")]),
         ],
     )
-    out = _text(panels.services_section(swarm, Config()), width=160)
+    out = _text(panels.services_section(swarm, Config()), width=170)
     assert "DOCKER INFOS" in out
     # Swarm key facts split into two blocks, incl. pulled-in registry & traefik.
     assert "SWARM" in out
@@ -119,19 +125,23 @@ def test_services_section_swarm_facts_and_three_columns():
     assert "srv-01" in out and "down" in out   # node line, srv-02 down
     assert "Registry" in out
     assert "Traefik" in out
-    # Three stack matrices.
+    # Multi-service traefik lists both services with descriptions in the facts.
+    assert "traefik_sockproxy" in out and "traefik_traefik" in out
+    assert "socket proxy" in out and "ingress" in out
+    # Three stack matrices with a description column.
     assert "Infrastruktur" in out
     assert "Service" in out
     assert "Container (ohne Stack)" in out
-    # Stack/container names as matrix rows.
-    assert "PostgreSQL-18" in out
-    assert "kafka" in out
+    assert "Description" in out
+    # Multi-service infra stack lists each service.
+    assert "PostgreSQL-18_a" in out and "PostgreSQL-18_b" in out
+    assert "PG primary" in out
+    # Single-service stacks stay one row; descriptions shown.
+    assert "kafka" in out and "Message broker" in out
     assert "eduTAP" in out
     assert "watchtower" in out
     # Per-node status emojis present (running ✅, failed 💀).
     assert "✅" in out and "💀" in out
-    # traefik & registry are pulled into facts, not repeated as a stack row.
-    assert "traefik_traefik" not in out
 
 
 def test_services_section_unreachable():

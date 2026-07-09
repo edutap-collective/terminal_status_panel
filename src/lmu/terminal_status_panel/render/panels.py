@@ -17,7 +17,7 @@ from rich.table import Table
 from rich.text import Text
 
 from ..config import Config, Thresholds
-from ..model import ResourceUsage, ServiceStatus, SwarmInfo, SystemInfo, UpdateInfo
+from ..model import ResourceUsage, SwarmInfo, SystemInfo, UpdateInfo
 from .bars import STATUS_COLORS, classify, format_bytes, render_bar
 from .logo import os_logo
 
@@ -274,7 +274,7 @@ def _nodes_inline(nodes, mark_leader: bool = False) -> Text:
     if not nodes:
         return Text("n/a", style="dim")
     line = Text()
-    for i, node in enumerate(nodes):
+    for i, node in enumerate(sorted(nodes, key=lambda n: n.name)):
         if i:
             line.append("   ")
         line.append_text(_node_inline(node, mark_leader=mark_leader))
@@ -282,15 +282,16 @@ def _nodes_inline(nodes, mark_leader: bool = False) -> Text:
 
 
 def _short_node_names(nodes) -> list[tuple[str, str]]:
-    """Return (full, short) node names, stripping a shared hostname prefix
-    up to the last '-' (e.g. 'lmzvd06-ccc-01' -> 'ccc-01')."""
-    names = [n.name for n in nodes]
+    """Return (full, short) node names in alphabetical order, stripping a shared
+    hostname prefix up to the last '-' (e.g. 'lmzvd06-ccc-01' -> 'ccc-01')."""
+    ordered = sorted(nodes, key=lambda n: n.name)
+    names = [n.name for n in ordered]
     prefix = ""
     if len(names) > 1:
         common = os.path.commonprefix(names)
         cut = common.rfind("-")
         prefix = common[: cut + 1] if cut >= 0 else ""
-    return [(n.name, n.name[len(prefix):] or n.name) for n in nodes]
+    return [(n.name, n.name[len(prefix):] or n.name) for n in ordered]
 
 
 def _task_states(svc) -> Text:
@@ -323,20 +324,22 @@ def _is_highlight(svc) -> bool:
     return any(key in hay for key in _HIGHLIGHT_KEYS)
 
 
-def _highlight_line(services, key: str) -> Text | None:
+def _highlight_block(services, key: str) -> RenderableType | None:
+    """List each service matching *key* (e.g. traefik_sockproxy and
+    traefik_traefik) on its own line with node states and description."""
     matches = [s for s in services if key in f"{s.name} {s.stack or ''}".lower()]
     if not matches:
         return None
-    merged = ServiceStatus(
-        name=key,
-        running_replicas=sum(s.running_replicas for s in matches),
-        desired_replicas=sum(
-            (s.desired_replicas if s.desired_replicas is not None else s.running_replicas)
-            for s in matches) or None,
-        tasks=[t for s in matches for t in s.tasks],
-        unassigned=sum(s.unassigned for s in matches),
-    )
-    return _task_states(merged)
+    if len(matches) == 1 and not matches[0].description:
+        return _task_states(matches[0])
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold")   # service name
+    table.add_column()               # node states
+    table.add_column()               # description
+    for svc in sorted(matches, key=lambda s: s.name):
+        table.add_row(svc.name, _task_states(svc),
+                      Text(svc.description or "", style="dim"))
+    return table
 
 
 def _swarm_body(swarm: SwarmInfo) -> RenderableType:
@@ -355,12 +358,12 @@ def _swarm_body(swarm: SwarmInfo) -> RenderableType:
     left.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True))
 
     right = Table.grid(padding=(0, 2))
-    right.add_column(style="bold cyan")
+    right.add_column(style="bold cyan", vertical="top")
     right.add_column()
     for key in _HIGHLIGHT_KEYS:
-        line = _highlight_line(swarm.services, key)
-        if line is not None:
-            right.add_row(key.capitalize(), line)
+        block = _highlight_block(swarm.services, key)
+        if block is not None:
+            right.add_row(key.capitalize(), block)
 
     grid = Table.grid(expand=True, padding=(0, 6))
     grid.add_column()
@@ -383,16 +386,35 @@ def _node_cell(services, node_full: str) -> Text:
 def _stack_matrix(title: str, rows: list[tuple[str, list]], nodes) -> RenderableType:
     short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
-    table.add_column(style="bold")      # stack / container name
+    table.add_column(style="bold")          # stack / service name
     for _ in short:
-        table.add_column(justify="center")
-    header = [_subhead(title)] + [Text(s, style="cyan") for _, s in short]
+        table.add_column(justify="center")  # per-node status
+    table.add_column(style="dim")           # description
+
+    header = [_subhead(title)]
+    header += [Text(s, style="cyan") for _, s in short]
+    header.append(Text("Description", style="cyan"))
     table.add_row(*header)
+
     if not rows:
-        table.add_row(Text("—", style="dim"), *[""] * len(short))
+        table.add_row(Text("—", style="dim"), *[""] * (len(short) + 1))
+
     for name, services in sorted(rows, key=lambda r: r[0].lower()):
-        cells = [Text(name)] + [_node_cell(services, full) for full, _ in short]
-        table.add_row(*cells)
+        if len(services) <= 1:
+            svc = services[0] if services else None
+            desc = svc.description if svc else ""
+            cells = [Text(name)]
+            cells += [_node_cell(services, full) for full, _ in short]
+            cells.append(Text(desc or ""))
+            table.add_row(*cells)
+        else:
+            # Multi-service stack: header row, then one row per service.
+            table.add_row(Text(name, style="bold cyan"), *[""] * (len(short) + 1))
+            for svc in sorted(services, key=lambda s: s.name):
+                cells = [Text(f"  {svc.name}")]
+                cells += [_node_cell([svc], full) for full, _ in short]
+                cells.append(Text(svc.description or ""))
+                table.add_row(*cells)
     return table
 
 
@@ -418,16 +440,15 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
 
     container_rows = [(c.name, [c]) for c in containers]
 
-    grid = Table.grid(expand=True, padding=(0, 4))
-    grid.add_column(ratio=1)
-    grid.add_column(ratio=1)
-    grid.add_column(ratio=1)
-    grid.add_row(
+    # Per-service rows plus a description column make each table wide, so the
+    # three categories stack vertically (each full width) instead of side by side.
+    return Group(
         _stack_matrix("Infrastruktur", infra, swarm.nodes),
+        Text(""),
         _stack_matrix("Service", service, swarm.nodes),
+        Text(""),
         _stack_matrix("Container (ohne Stack)", container_rows, swarm.nodes),
     )
-    return grid
 
 
 def services_section(swarm: SwarmInfo | None, cfg: Config) -> Group:
