@@ -1,0 +1,31 @@
+{
+  "name": "lmu.terminal_status_panel on Debian",
+  "image": "mcr.microsoft.com/devcontainers/python:3.14-trixie",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "editorconfig.editorconfig",
+        "ms-python.black-formatter",
+        "ms-python.debugpy",
+        "ms-python.flake8",
+        "ms-python.isort",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.vscode-python-envs"
+      ],
+      "settings": {
+        "python.analysis.typeCheckingMode": "strict",
+        "python.formatting.provider": "ruff",
+        "python.linting.enabled": true,
+        "python.linting.flake8Enabled": true,
+        "python.linting.flake8Args": [
+          "--max-line-length=100"
+        ],
+        "python.linting.pylintEnabled": false,
+        "python.linting.mypyEnabled": false,
+        "editor.formatOnSave": true
+      }
+    }
+  },
+  "postCreateCommand": "pip install --user -e ."
+}

@@ -1,0 +1,84 @@
+[project]
+name = "lmu.terminal_status_panel"
+version = "0.1.0"
+description = "A short project description"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "EUPL-1.2" }
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "License :: OSI Approved :: European Union Public Licence 1.2 (EUPL 1.2)",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "Operating System :: OS Independent",
+]
+authors = [
+	{ name = "Alexander Loechel", email = "Alexander.Loechel@lmu.de" }
+]
+dependencies = [
+    "rich",
+    "docker",
+    "psutil",
+    "distro",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pdbp",
+	"pytest",
+	"ruff",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+typecheck  = [
+    "mypy",
+    "pytest-stub",
+]
+
+[project.urls]
+Source = "https://gitlab.lrz.de/LMU/lmu.terminal_status_panel"
+Issues = "https://gitlab.lrz.de/LMU/lmu.terminal_status_panel/issues"
+Documentation = "https://lmu.gitlab.lrz.de/packages/lmu.terminal_status_panel/docs/index.html"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lmu/terminal_status_panel"]
+
+
+
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra -q --cov-report term --cov=lmu.terminal_status_panel --cov-report html"
+testpaths = [
+    "tests"
+]
+
+[tool.isort]
+profile = "plone"
+src_paths = ["src", "tests"]
+
+[tool.check-manifest]
+ignore = [
+    ".editorconfig",
+    ".pre-commit-config.yaml",
+    "tox.ini",
+    ".flake8",
+    "tests/data/generated_passes/*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

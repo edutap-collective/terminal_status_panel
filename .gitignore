@@ -1,0 +1,51 @@
+# Generated from:
+# https://github.com/plone/meta/tree/master/config/default
+# See the inline comments on how to expand/tweak this configuration file
+# python related
+*.egg-info
+*.pyc
+*.pyo
+.env*
+
+# translation related
+*.mo
+
+# tools related
+build/
+.coverage
+coverage.xml
+dist/
+docs/_build
+__pycache__/
+.tox
+.vscode/
+.idea/
+node_modules/
+sandbox/
+
+# venv / buildout related
+bin/
+develop-eggs/
+eggs/
+.eggs/
+etc/
+.installed.cfg
+include/
+lib/
+lib64
+.mr.developer.cfg
+parts/
+pyvenv.cfg
+var/
+.mypy_cache/
+.pytest_cache/
+venv/
+.venv/
+
+/.env
+/*.json
+
+*.pem
+*.key
+*.cer
+*.csr
