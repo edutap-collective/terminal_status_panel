@@ -221,24 +221,33 @@ def _service_healthy(svc) -> bool:
     return desired is not None and svc.running_replicas >= desired
 
 
-def _nodes_block(nodes) -> RenderableType:
+def _node_health(node) -> Text:
+    if node.reachable:
+        return Text(_OK)
+    return Text(f"{_DEAD} {node.state or 'down'}", style="red")
+
+
+def _node_inline(node) -> Text:
+    return Text.assemble((node.name, "bold"), " ") + _node_health(node)
+
+
+def _nodes_inline(nodes) -> Text:
     if not nodes:
-        return Text("no node information", style="dim")
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="bold")   # hostname
-    table.add_column()               # status
-    table.add_column()               # role
-    for node in nodes:
-        if node.reachable:
-            status = Text(_OK)
-        else:
-            status = Text(f"{_DEAD} - {node.state or 'down'}", style="red")
-        role = node.role or ""
-        if node.leader:
-            role = f"{role}, leader" if role else "leader"
-        suffix = Text(f"({role})", style="dim") if role else Text("")
-        table.add_row(node.name, status, suffix)
-    return table
+        return Text("n/a", style="dim")
+    line = Text()
+    for i, node in enumerate(nodes):
+        if i:
+            line.append("   ")
+        line.append_text(_node_inline(node))
+    return line
+
+
+def _find_registry(services):
+    """Surface an ungrouped 'registry' service as a key fact, if present."""
+    for svc in services:
+        if svc.stack is None and "registry" in svc.name.lower():
+            return svc
+    return None
 
 
 def _task_states(svc) -> Text:
@@ -269,7 +278,8 @@ def _task_states(svc) -> Text:
     return line
 
 
-def _stacks_block(services) -> RenderableType:
+def _stacks_block(services, exclude=frozenset()) -> RenderableType:
+    services = [s for s in services if not (s.stack is None and s.name in exclude)]
     if not services:
         return Text("no services", style="dim")
 
@@ -279,36 +289,55 @@ def _stacks_block(services) -> RenderableType:
         grouped.setdefault(svc.stack, []).append(svc)
 
     named = sorted(k for k in grouped if k is not None)
-    parts: list[RenderableType] = []
+    table = Table.grid(padding=(0, 1))
+    table.add_column()
     for key in named + ([None] if None in grouped else []):
         title = key if key is not None else "Ohne Stack"
-        parts.append(Text(f"{title}:", style="bold cyan"))
-        inner = Table.grid(padding=(0, 1))
-        inner.add_column()
+        table.add_row(Text(f"{title}:", style="bold cyan"))
         for svc in sorted(grouped[key], key=lambda s: s.name):
             name = Text(svc.name, style="bold" if svc.critical else "")
-            inner.add_row(Text.assemble("  * ", name, ": ") + _task_states(svc))
+            table.add_row(Text.assemble("  ", name, ": ") + _task_states(svc))
             if svc.description:
-                inner.add_row(Text(f"      {svc.description}", style="dim"))
-        parts.append(inner)
-    return Group(*parts)
+                table.add_row(Text(f"     ↳ {svc.description}", style="dim"))
+    return table
+
+
+def _swarm_summary(swarm: SwarmInfo, registry) -> RenderableType:
+    role = swarm.node_role or "?"
+    n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
+    n_stacks = len({s.stack for s in swarm.services if s.stack})
+    leader = next((n for n in swarm.nodes if n.leader), None)
+
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold cyan")
+    table.add_column()
+    table.add_row("Swarm", Text.assemble(
+        ("active", "green"),
+        (f"  ·  {role}  ·  {n_nodes} nodes  ·  "
+         f"{len(swarm.services)} services  ·  {n_stacks} stacks", "default"),
+    ))
+    table.add_row("Master", _node_inline(leader) if leader else Text("n/a", style="dim"))
+    if registry is not None:
+        table.add_row("Registry", _task_states(registry))
+    table.add_row("Nodes", _nodes_inline(swarm.nodes))
+    return table
 
 
 def services_section(swarm: SwarmInfo | None, cfg: Config) -> Group:
     if swarm is None or not swarm.reachable:
         return section("DOCKER SWARM", Text("Docker not reachable", style="dim"))
 
-    title = "DOCKER SWARM" if swarm.enabled else "DOCKER (containers)"
+    if not swarm.enabled:
+        body = Group(
+            Text(f"Containers: {len(swarm.services)}", style="bold cyan"),
+            _stacks_block(swarm.services),
+        )
+        return section("DOCKER (containers)", body)
 
-    parts: list[RenderableType] = []
-    if swarm.enabled:
-        role = swarm.node_role or "?"
-        parts.append(Text("Swarm-Nodes ", style="bold cyan")
-                     + Text(f"(local: {role})", style="dim"))
-        parts.append(_nodes_block(swarm.nodes))
-        parts.append(Text(""))
-        parts.append(Text("Stacks:", style="bold cyan"))
-    else:
-        parts.append(Text(f"Containers: {len(swarm.services)}", style="cyan"))
-    parts.append(_stacks_block(swarm.services))
-    return section(title, Group(*parts))
+    registry = _find_registry(swarm.services)
+    body = Group(
+        _swarm_summary(swarm, registry),
+        Text("Stacks", style="bold cyan"),
+        _stacks_block(swarm.services, exclude={registry.name} if registry else frozenset()),
+    )
+    return section("DOCKER SWARM", body)

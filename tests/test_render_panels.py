@@ -102,22 +102,29 @@ def test_services_section_groups_by_stack_with_emoji_states():
                           tasks=[ServiceTask("srv-01", "running"),
                                  ServiceTask("srv-02", "failed")],
                           unassigned=1),
+            ServiceStatus("watchtower", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
             ServiceStatus("registry", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()))
     assert "DOCKER SWARM" in out
-    assert "Swarm-Nodes" in out
-    assert "srv-01" in out
-    assert "✅" in out                       # healthy marker
-    assert "💀" in out                       # dead task marker (kafka on srv-02)
-    assert "down" in out                     # node/ task state text
+    # Compact key-fact header, grouped.
+    assert "Swarm" in out
+    assert "Master" in out
+    assert "srv-01" in out                   # master / node listed
+    assert "Registry" in out                 # registry surfaced as a key fact
+    assert "Nodes" in out
+    # Emoji states.
+    assert "✅" in out and "💀" in out
+    assert "down" in out                     # node/task state text
     assert "unassigned" in out               # orphaned task marker
+    # Stacks section.
+    assert "Stacks" in out
     assert "PostgreSQL-18:" in out           # stack header (sorted)
-    assert "PostgreSQL Datenbank" in out     # description line
+    assert "PostgreSQL Datenbank" in out     # description
     assert "kafka:" in out
-    assert "Ohne Stack:" in out              # ungrouped bucket
-    assert "registry" in out
+    assert "Ohne Stack:" in out              # watchtower remains ungrouped
+    assert "watchtower" in out
 
 
 def test_services_section_unreachable():
