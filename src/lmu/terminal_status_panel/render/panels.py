@@ -28,10 +28,6 @@ _CPU_CRITICAL = 90.0
 # Emoji status markers — readable regardless of color perception.
 _OK = "✅"
 _DEAD = "💀"
-_MISSING = "❌"
-
-# Services surfaced as Swarm key facts (and hidden from the stack columns).
-_HIGHLIGHT_KEYS = ("registry", "traefik")
 
 
 def section(title: str, body: RenderableType) -> Group:
@@ -294,82 +290,21 @@ def _short_node_names(nodes) -> list[tuple[str, str]]:
     return [(n.name, n.name[len(prefix):] or n.name) for n in ordered]
 
 
-def _task_states(svc) -> Text:
-    """Per-node task states: ``node ✅`` running, ``node 💀 - <state>`` else,
-    plus ``(❌ N unassigned)`` for orphaned tasks."""
-    parts: list[Text] = []
-    for task in svc.tasks:
-        if task.running:
-            parts.append(Text.assemble((task.node or "?", "bold"), " ", _OK))
-        else:
-            parts.append(Text.assemble(
-                (task.node or "?", "bold"), " ", (f"{_DEAD} - {task.state}", "red")))
-    if svc.unassigned:
-        parts.append(Text(f"({_MISSING} {svc.unassigned} unassigned)", style="red"))
-    if not parts:
-        mark = _OK if (svc.desired_replicas is not None
-                       and svc.running_replicas >= svc.desired_replicas) else _DEAD
-        desired = svc.desired_replicas if svc.desired_replicas is not None else "-"
-        return Text(f"{svc.running_replicas}/{desired} {mark}")
-    line = Text()
-    for i, part in enumerate(parts):
-        if i:
-            line.append(", ")
-        line.append_text(part)
-    return line
-
-
-def _is_highlight(svc) -> bool:
-    hay = f"{svc.name} {svc.stack or ''}".lower()
-    return any(key in hay for key in _HIGHLIGHT_KEYS)
-
-
-def _highlight_block(services, key: str) -> RenderableType | None:
-    """List each service matching *key* (e.g. traefik_sockproxy and
-    traefik_traefik) on its own line with node states and description."""
-    matches = [s for s in services if key in f"{s.name} {s.stack or ''}".lower()]
-    if not matches:
-        return None
-    if len(matches) == 1 and not matches[0].description:
-        return _task_states(matches[0])
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="bold")   # service name
-    table.add_column()               # node states
-    table.add_column()               # description
-    for svc in sorted(matches, key=lambda s: s.name):
-        table.add_row(svc.name, _task_states(svc),
-                      Text(svc.description or "", style="dim"))
-    return table
-
-
 def _swarm_body(swarm: SwarmInfo) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
     n_stacks = len({s.stack for s in swarm.services if s.stack})
 
-    left = Table.grid(padding=(0, 2))
-    left.add_column(style="bold cyan")
-    left.add_column()
-    left.add_row("Swarm", Text.assemble(
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold cyan")
+    table.add_column()
+    table.add_row("Swarm", Text.assemble(
         ("active", "green"),
         (f"  ·  {role}  ·  {n_nodes} nodes  ·  "
          f"{len(swarm.services)} services  ·  {n_stacks} stacks", "default"),
     ))
-    left.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True))
-
-    right = Table.grid(padding=(0, 2))
-    right.add_column(style="bold cyan", vertical="top")
-    right.add_column()
-    for key in _HIGHLIGHT_KEYS:
-        block = _highlight_block(swarm.services, key)
-        if block is not None:
-            right.add_row(key.capitalize(), block)
-
-    grid = Table.grid(expand=True, padding=(0, 6))
-    grid.add_column()
-    grid.add_column(ratio=1)
-    grid.add_row(left, right)
-    return grid
+    table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True))
+    return table
 
 
 def _node_cell(services, node_full: str) -> Text:
@@ -421,11 +356,12 @@ def _stack_matrix(title: str, rows: list[tuple[str, list]], nodes) -> Renderable
 def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
 
+    def is_infra(name: str) -> bool:
+        return any(k in name.lower() for k in infra_keys)
+
     stacks: dict[str, list] = {}
     containers: list = []
     for svc in swarm.services:
-        if _is_highlight(svc):
-            continue
         if svc.stack is None:
             containers.append(svc)
         else:
@@ -433,12 +369,12 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
 
     infra, service = [], []
     for name, svcs in stacks.items():
-        if any(k in name.lower() for k in infra_keys):
-            infra.append((name, svcs))
-        else:
-            service.append((name, svcs))
+        (infra if is_infra(name) else service).append((name, svcs))
 
-    container_rows = [(c.name, [c]) for c in containers]
+    # Ungrouped services classify by their own name (e.g. registry -> infra).
+    container_rows = []
+    for cont in containers:
+        (infra if is_infra(cont.name) else container_rows).append((cont.name, [cont]))
 
     # Per-service rows plus a description column make each table wide, so the
     # three categories stack vertically (each full width) instead of side by side.

@@ -118,21 +118,20 @@ def test_services_section_swarm_facts_and_three_columns():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "DOCKER INFOS" in out
-    # Swarm key facts split into two blocks, incl. pulled-in registry & traefik.
+    # Swarm facts: just summary + nodes (registry/traefik are NOT pulled up now).
     assert "SWARM" in out
     assert "Swarm" in out
     assert "Nodes" in out
     assert "srv-01" in out and "down" in out   # node line, srv-02 down
-    assert "Registry" in out
-    assert "Traefik" in out
-    # Multi-service traefik lists both services with descriptions in the facts.
-    assert "traefik_sockproxy" in out and "traefik_traefik" in out
-    assert "socket proxy" in out and "ingress" in out
     # Three stack matrices with a description column.
     assert "Infrastruktur" in out
     assert "Service" in out
     assert "Container (ohne Stack)" in out
     assert "Description" in out
+    # traefik & registry now classified as Infrastruktur stacks/services.
+    assert "traefik_sockproxy" in out and "traefik_traefik" in out
+    assert "socket proxy" in out and "ingress" in out
+    assert "registry" in out and "Docker registry" in out
     # Multi-service infra stack lists each service.
     assert "PostgreSQL-18_a" in out and "PostgreSQL-18_b" in out
     assert "PG primary" in out

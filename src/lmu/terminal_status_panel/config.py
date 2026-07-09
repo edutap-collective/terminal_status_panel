@@ -22,7 +22,8 @@ class Thresholds:
 
 DEFAULT_INFRASTRUCTURE_STACKS = [
     "postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer",
-    "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch",
+    "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql",
+    "elasticsearch",
 ]
 
 

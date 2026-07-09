@@ -6,12 +6,11 @@ via `update-motd.d`. The full-width dashboard is laid out in three tiers:
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
 - **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
   usage table.
-- **DOCKER INFOS** — Swarm key facts in two blocks (summary + node health |
-  registry & traefik, each service listed with its description) above three
+- **DOCKER INFOS** — Swarm key facts (summary + node health) above three
   stacked node matrices: *Infrastruktur*, *Service*, and standalone *Container*.
-  Each matrix has a row per stack (or per service when a stack has several),
-  a column per node (alphabetical) showing ✅ / 💀 placement, and a description
-  column.
+  Stacks and containers are sorted alphabetically; each matrix has a row per
+  stack (or per service when a stack has several), a column per node
+  (alphabetical) showing ✅ / 💀 placement, and a description column.
 
 All Docker data is read from the Docker API only — no database or broker
 protocol is ever spoken to.
@@ -64,8 +63,9 @@ timeout = 1.5
 # Service label read as the human-readable description shown per service.
 description_label = "lmu.service.description"
 # Stacks whose name matches one of these (case-insensitive substring) go into
-# the "Infrastruktur" column; every other stack goes into "Service".
-infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer"]
+# "Infrastruktur"; other stacks go into "Service". Ungrouped services matching
+# a key (e.g. registry) are treated as infrastructure too.
+infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry"]
 
 [services]
 critical = ["postgres", "kafka"]
