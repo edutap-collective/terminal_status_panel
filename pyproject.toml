@@ -41,6 +41,9 @@ typecheck  = [
     "pytest-stub",
 ]
 
+[project.scripts]
+lmu-status-panel = "lmu.terminal_status_panel.cli:main"
+
 [project.urls]
 Source = "https://gitlab.lrz.de/LMU/lmu.terminal_status_panel"
 Issues = "https://gitlab.lrz.de/LMU/lmu.terminal_status_panel/issues"
