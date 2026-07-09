@@ -21,7 +21,8 @@ def collect_all(cfg: Config) -> PanelData:
     return PanelData(
         system=collect_system(),
         resources=collect_resources(),
-        swarm=collect_docker(timeout=cfg.docker_timeout, critical=cfg.critical_services),
+        swarm=collect_docker(timeout=cfg.docker_timeout, critical=cfg.critical_services,
+                             description_label=cfg.description_label),
         updates=collect_updates(timeout=cfg.docker_timeout),
     )
 

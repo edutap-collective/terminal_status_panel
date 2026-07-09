@@ -6,6 +6,7 @@ from lmu.terminal_status_panel.model import (
     ResourceUsage,
     ServiceStatus,
     SwarmInfo,
+    SwarmNode,
     SystemInfo,
     UpdateInfo,
 )
@@ -87,17 +88,30 @@ def test_updates_panel_unsupported():
     assert "n/a" in out.lower()
 
 
-def test_services_section_lists_services():
-    swarm = SwarmInfo(reachable=True, enabled=True, node_role="manager", node_count=3,
-                      services=[ServiceStatus("postgres", 1, 1),
-                                ServiceStatus("kafka", 2, 3, critical=True)])
+def test_services_section_groups_by_stack_and_lists_nodes():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=3,
+        nodes=[SwarmNode("srv-01", reachable=True, role="manager", leader=True),
+               SwarmNode("srv-02", reachable=False, role="worker")],
+        services=[
+            ServiceStatus("pg_db", 1, 1, stack="PostgreSQL-18",
+                          description="PostgreSQL Datenbank, Version 18", nodes=["srv-01"]),
+            ServiceStatus("kafka_broker", 2, 3, critical=True, stack="kafka",
+                          nodes=["srv-01", "srv-02"]),
+            ServiceStatus("registry", 1, 1),  # ungrouped
+        ],
+    )
     out = _text(panels.services_section(swarm, Config()))
     assert "DOCKER SWARM" in out
-    assert "manager" in out
-    assert "postgres" in out
+    assert "Swarm-Nodes" in out
+    assert "srv-01" in out
+    assert "PostgreSQL-18:" in out          # stack header
+    assert "PostgreSQL Datenbank" in out    # description line
+    assert "kafka:" in out
     assert "1/1" in out
-    assert "kafka" in out
     assert "2/3" in out
+    assert "Ohne Stack:" in out             # ungrouped bucket
+    assert "registry" in out
 
 
 def test_services_section_unreachable():

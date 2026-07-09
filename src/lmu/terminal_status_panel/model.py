@@ -57,6 +57,17 @@ class ServiceStatus:
     running_replicas: int
     desired_replicas: int | None
     critical: bool = False
+    stack: str | None = None  # com.docker.stack.namespace label
+    description: str | None = None  # from a curated service label
+    nodes: list[str] = field(default_factory=list)  # hostnames running a task
+
+
+@dataclass
+class SwarmNode:
+    name: str
+    reachable: bool = False
+    role: str | None = None  # manager / worker
+    leader: bool = False
 
 
 @dataclass
@@ -66,6 +77,7 @@ class SwarmInfo:
     node_role: str | None = None
     node_count: int | None = None
     services: list[ServiceStatus] = field(default_factory=list)
+    nodes: list[SwarmNode] = field(default_factory=list)
 
 
 @dataclass

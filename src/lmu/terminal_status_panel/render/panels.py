@@ -210,47 +210,89 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
     return section("UPDATES", table)
 
 
-def _swarm_summary(swarm: SwarmInfo) -> Table:
-    table = _kv_table()
-    role = swarm.node_role or "?"
-    table.add_row("Swarm", Text(f"active ({role})", style="green"))
-    table.add_row("Nodes", str(swarm.node_count if swarm.node_count is not None else "?"))
-    table.add_row("Services", str(len(swarm.services)))
+_DOT = "●"
+
+
+def _service_healthy(svc) -> bool:
+    desired = svc.desired_replicas
+    return desired is not None and svc.running_replicas >= desired
+
+
+def _nodes_block(nodes) -> RenderableType:
+    if not nodes:
+        return Text("no node information", style="dim")
+    table = Table.grid(padding=(0, 1))
+    table.add_column()
+    table.add_column()
+    for node in nodes:
+        color = "green" if node.reachable else "red"
+        role = node.role or ""
+        if node.leader:
+            role = f"{role}, leader" if role else "leader"
+        suffix = Text(f"({role})", style="dim") if role else Text("")
+        table.add_row(Text(f"{_DOT} ", style=color) + Text(node.name), suffix)
     return table
 
 
-def _service_cell(svc) -> Text:
+def _service_line(svc) -> Text:
+    color = "green" if _service_healthy(svc) else "red"
     desired = svc.desired_replicas
-    healthy = desired is not None and svc.running_replicas >= desired
-    color = "green" if healthy else "red"
     desired_str = desired if desired is not None else "-"
     name = Text(svc.name, style="bold" if svc.critical else "")
-    return Text.assemble(
-        ("● ", color), name, (f" {svc.running_replicas}/{desired_str}", color)
-    )
+    line = Text.assemble((f"{_DOT} ", color), name)
+    line.append(f"  {svc.running_replicas}/{desired_str}", style=color)
+    if svc.nodes:
+        line.append(f"  [{', '.join(svc.nodes)}]", style="dim")
+    return line
+
+
+def _stacks_block(services) -> RenderableType:
+    if not services:
+        return Text("no services", style="dim")
+
+    # Preserve first-seen stack order; ungrouped services go under a final group.
+    order: list[str | None] = []
+    grouped: dict[str | None, list] = {}
+    for svc in services:
+        key = svc.stack
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append(svc)
+
+    parts: list[RenderableType] = []
+    named = [k for k in order if k is not None]
+    for key in named + ([None] if None in grouped else []):
+        title = key if key is not None else "Ohne Stack"
+        parts.append(Text(f"{title}:", style="bold cyan"))
+        inner = Table.grid(padding=(0, 1))
+        inner.add_column()
+        for svc in grouped[key]:
+            inner.add_row(Text("  ") + _service_line(svc))
+            if svc.description:
+                inner.add_row(Text(f"      {svc.description}", style="dim"))
+        parts.append(inner)
+    return Group(*parts)
 
 
 def services_section(swarm: SwarmInfo | None, cfg: Config) -> Group:
     if swarm is None or not swarm.reachable:
         return section("DOCKER SWARM", Text("Docker not reachable", style="dim"))
 
-    if not swarm.enabled:
-        title = "DOCKER (containers)"
-        left = _kv_table()
-        left.add_row("Swarm", Text("inactive", style="yellow"))
-        left.add_row("Services", str(len(swarm.services)))
-    else:
-        title = "DOCKER SWARM"
-        left = _swarm_summary(swarm)
+    title = "DOCKER SWARM" if swarm.enabled else "DOCKER (containers)"
 
-    if swarm.services:
-        cells: list[RenderableType] = [_service_cell(s) for s in swarm.services]
-        right: RenderableType = Columns(cells, padding=(0, 3), equal=True)
+    left_parts: list[RenderableType] = []
+    if swarm.enabled:
+        role = swarm.node_role or "?"
+        left_parts.append(Text("Swarm-Nodes ", style="bold cyan")
+                          + Text(f"(local: {role})", style="dim"))
+        left_parts.append(_nodes_block(swarm.nodes))
     else:
-        right = Text("no services", style="dim")
+        left_parts.append(Text(f"Containers: {len(swarm.services)}", style="cyan"))
+    left = Group(*left_parts)
 
     grid = Table.grid(expand=True, padding=(0, 4))
     grid.add_column()
     grid.add_column(ratio=1)
-    grid.add_row(left, right)
+    grid.add_row(left, _stacks_block(swarm.services))
     return section(title, grid)

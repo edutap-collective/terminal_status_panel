@@ -1,4 +1,4 @@
-from lmu.terminal_status_panel.config import Config, Thresholds, load_config
+from lmu.terminal_status_panel.config import load_config
 
 
 def test_defaults_when_no_file(tmp_path):

@@ -1,8 +1,11 @@
 # lmu.terminal_status_panel
 
 A small Python package that renders a colorful server status panel on login
-via `update-motd.d`. It shows system identity, resource usage (with bar
-charts), and the health of Dockerized services, including Docker Swarm.
+via `update-motd.d`. It shows system identity, load & per-core CPU usage,
+memory/swap and filesystem bars, pending package updates, and the health of
+Dockerized services. Docker Swarm services are grouped by stack, with per-task
+node placement and an optional description label — all read from the Docker API
+(no database or broker protocol is ever spoken to).
 
 ## Requirements
 
@@ -49,6 +52,8 @@ width = 80
 
 [docker]
 timeout = 1.5
+# Service label read as the human-readable description shown per service.
+description_label = "description"
 
 [services]
 critical = ["postgres", "kafka"]
@@ -65,6 +70,23 @@ critical = 90
 warning = 0.8   # per-CPU multiplier
 critical = 1.0
 ```
+
+## Service descriptions (Docker Swarm)
+
+Services are grouped by their `com.docker.stack.namespace` label (set
+automatically for stack deployments). To show a human-readable description per
+service, add a label to the service — by default the key `description`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:18
+    deploy:
+      labels:
+        description: "PostgreSQL Datenbank, Version 18"
+```
+
+Change the read label key via `docker.description_label` in the config.
 
 ## License
 
