@@ -1,0 +1,7 @@
+#!/bin/sh
+# Example update-motd.d hook for lmu.terminal_status_panel.
+# Install by copying to /etc/update-motd.d/ and making it executable:
+#   sudo cp contrib/50-lmu-status-panel /etc/update-motd.d/
+#   sudo chmod +x /etc/update-motd.d/50-lmu-status-panel
+# Adjust the path below to the interpreter/venv where the package is installed.
+exec lmu-status-panel
