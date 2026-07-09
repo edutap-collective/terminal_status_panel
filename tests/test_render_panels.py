@@ -110,26 +110,27 @@ def test_services_section_swarm_facts_and_three_columns():
                                  ServiceTask("srv-02", "running")]),
         ],
     )
-    out = _text(panels.services_section(swarm, Config()), width=140)
+    out = _text(panels.services_section(swarm, Config()), width=160)
     assert "DOCKER INFOS" in out
-    # Swarm key facts, incl. pulled-in registry & traefik.
+    # Swarm key facts split into two blocks, incl. pulled-in registry & traefik.
     assert "SWARM" in out
-    assert "Master" in out and "srv-01" in out
+    assert "Swarm" in out
+    assert "Nodes" in out
+    assert "srv-01" in out and "down" in out   # node line, srv-02 down
     assert "Registry" in out
     assert "Traefik" in out
-    assert "Nodes" in out and "down" in out
-    # Three stack columns.
+    # Three stack matrices.
     assert "Infrastruktur" in out
     assert "Service" in out
     assert "Container (ohne Stack)" in out
-    # Rollups: infra stacks classified, service stack separate, container listed.
+    # Stack/container names as matrix rows.
     assert "PostgreSQL-18" in out
     assert "kafka" in out
     assert "eduTAP" in out
     assert "watchtower" in out
-    # Emojis present (ok + degraded kafka).
-    assert "✅" in out
-    # traefik & registry are pulled into facts, not repeated as a stack column row
+    # Per-node status emojis present (running ✅, failed 💀).
+    assert "✅" in out and "💀" in out
+    # traefik & registry are pulled into facts, not repeated as a stack row.
     assert "traefik_traefik" not in out
 
 

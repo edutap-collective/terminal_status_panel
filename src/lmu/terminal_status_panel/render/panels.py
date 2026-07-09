@@ -8,9 +8,9 @@ rule header via :func:`section`; sub-blocks inside them use the lighter
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
-from rich.columns import Columns
 from rich.console import Group, RenderableType
 from rich.rule import Rule
 from rich.table import Table
@@ -27,7 +27,6 @@ _CPU_CRITICAL = 90.0
 
 # Emoji status markers — readable regardless of color perception.
 _OK = "✅"
-_WARN = "⚠️"
 _DEAD = "💀"
 _MISSING = "❌"
 
@@ -93,7 +92,13 @@ def system_overview(info: SystemInfo | None) -> Group:
     table.add_row("IP", ", ".join(info.ip_addresses) or "n/a")
 
     logo = os_logo(info.os_name)
-    body = Columns([logo, table], padding=(0, 3)) if logo.plain else table
+    if logo.plain:
+        body = Table.grid(padding=(0, 3))
+        body.add_column(vertical="middle")  # logo
+        body.add_column()                   # label + value table
+        body.add_row(logo, table)
+    else:
+        body = table
     return section("SYSTEM OVERVIEW", body)
 
 
@@ -130,7 +135,7 @@ def _bar_row(table: Table, label: str, percent: float | None,
     if percent is None:
         table.add_row(label, Text("n/a", style="dim"), "", "")
         return
-    bar = render_bar(percent, status, width=22)
+    bar = render_bar(percent, status, width=44)
     pct = Text(f"{percent:5.1f}%", style=STATUS_COLORS.get(status, "white"))
     detail = f"{format_bytes(used)} / {format_bytes(total)}"
     table.add_row(label, bar, pct, detail)
@@ -159,7 +164,7 @@ def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
     head.add_row("Load Average", _load_text(res.load_avg, res.cpu_count, cfg.thresholds), "")
     if res.cpu_percent is not None:
         status = classify(res.cpu_percent, _CPU_WARNING, _CPU_CRITICAL)
-        head.add_row("CPU", render_bar(res.cpu_percent, status, width=22),
+        head.add_row("CPU", render_bar(res.cpu_percent, status, width=44),
                      Text(f"{res.cpu_percent:5.1f}%", style=STATUS_COLORS.get(status, "white")))
 
     parts: list[RenderableType] = [head]
@@ -171,7 +176,7 @@ def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
         cores.add_column(justify="right")
         for idx, pct in enumerate(res.cpu_per_core, start=1):
             status = classify(pct, _CPU_WARNING, _CPU_CRITICAL)
-            cores.add_row(f"Core {idx}", render_bar(pct, status, width=18),
+            cores.add_row(f"Core {idx}", render_bar(pct, status, width=36),
                           Text(f"{pct:5.1f}%", style=STATUS_COLORS.get(status, "white")))
         parts.append(cores)
     return Group(*parts)
@@ -208,7 +213,7 @@ def _filesystem_body(res: ResourceUsage) -> RenderableType:
         avail = max(fs.total - fs.used, 0)
         table.add_row(
             fs.mountpoint, format_bytes(fs.total), format_bytes(fs.used),
-            format_bytes(avail), render_bar(fs.percent, status, width=12),
+            format_bytes(avail), render_bar(fs.percent, status, width=24),
             Text(f"{fs.percent:.0f}%", style=STATUS_COLORS.get(status, "white")),
         )
     return table
@@ -258,19 +263,34 @@ def _node_health(node) -> Text:
     return Text(f"{_DEAD} {node.state or 'down'}", style="red")
 
 
-def _node_inline(node) -> Text:
-    return Text.assemble((node.name, "bold"), " ") + _node_health(node)
+def _node_inline(node, mark_leader: bool = False) -> Text:
+    line = Text.assemble((node.name, "bold"), " ") + _node_health(node)
+    if mark_leader and node.leader:
+        line.append(" (leader)", style="dim")
+    return line
 
 
-def _nodes_inline(nodes) -> Text:
+def _nodes_inline(nodes, mark_leader: bool = False) -> Text:
     if not nodes:
         return Text("n/a", style="dim")
     line = Text()
     for i, node in enumerate(nodes):
         if i:
             line.append("   ")
-        line.append_text(_node_inline(node))
+        line.append_text(_node_inline(node, mark_leader=mark_leader))
     return line
+
+
+def _short_node_names(nodes) -> list[tuple[str, str]]:
+    """Return (full, short) node names, stripping a shared hostname prefix
+    up to the last '-' (e.g. 'lmzvd06-ccc-01' -> 'ccc-01')."""
+    names = [n.name for n in nodes]
+    prefix = ""
+    if len(names) > 1:
+        common = os.path.commonprefix(names)
+        cut = common.rfind("-")
+        prefix = common[: cut + 1] if cut >= 0 else ""
+    return [(n.name, n.name[len(prefix):] or n.name) for n in nodes]
 
 
 def _task_states(svc) -> Text:
@@ -323,54 +343,57 @@ def _swarm_body(swarm: SwarmInfo) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
     n_stacks = len({s.stack for s in swarm.services if s.stack})
-    leader = next((n for n in swarm.nodes if n.leader), None)
 
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="bold cyan")
-    table.add_column()
-    table.add_row("Swarm", Text.assemble(
+    left = Table.grid(padding=(0, 2))
+    left.add_column(style="bold cyan")
+    left.add_column()
+    left.add_row("Swarm", Text.assemble(
         ("active", "green"),
         (f"  ·  {role}  ·  {n_nodes} nodes  ·  "
          f"{len(swarm.services)} services  ·  {n_stacks} stacks", "default"),
     ))
-    table.add_row("Master", _node_inline(leader) if leader else Text("n/a", style="dim"))
+    left.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True))
+
+    right = Table.grid(padding=(0, 2))
+    right.add_column(style="bold cyan")
+    right.add_column()
     for key in _HIGHLIGHT_KEYS:
         line = _highlight_line(swarm.services, key)
         if line is not None:
-            table.add_row(key.capitalize(), line)
-    table.add_row("Nodes", _nodes_inline(swarm.nodes))
-    return table
+            right.add_row(key.capitalize(), line)
+
+    grid = Table.grid(expand=True, padding=(0, 6))
+    grid.add_column()
+    grid.add_column(ratio=1)
+    grid.add_row(left, right)
+    return grid
 
 
-def _stack_emoji(running: int, desired: int, unassigned: int, degraded: bool) -> str:
-    if running == 0:
-        return _DEAD
-    if running < desired or unassigned or degraded:
-        return _WARN
-    return _OK
+def _node_cell(services, node_full: str) -> Text:
+    """Aggregate status of a stack's tasks on one node: ✅ all running,
+    💀 some failed, blank when the stack has no task there."""
+    tasks = [t for s in services for t in s.tasks if t.node == node_full]
+    if not tasks:
+        return Text(" ")
+    if all(t.running for t in tasks):
+        return Text(_OK)
+    return Text(_DEAD, style="red")
 
 
-def _aggregate(services) -> tuple[int, int, str]:
-    running = sum(s.running_replicas for s in services)
-    desired = sum(
-        (s.desired_replicas if s.desired_replicas is not None else s.running_replicas)
-        for s in services)
-    unassigned = sum(s.unassigned for s in services)
-    degraded = any(not t.running for s in services for t in s.tasks)
-    return running, desired, _stack_emoji(running, desired, unassigned, degraded)
-
-
-def _rollup_column(title: str, rows: list[tuple[str, list]]) -> RenderableType:
+def _stack_matrix(title: str, rows: list[tuple[str, list]], nodes) -> RenderableType:
+    short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
-    table.add_column(style="bold")      # name
-    table.add_column()                  # emoji
-    table.add_column(justify="right")   # count
+    table.add_column(style="bold")      # stack / container name
+    for _ in short:
+        table.add_column(justify="center")
+    header = [_subhead(title)] + [Text(s, style="cyan") for _, s in short]
+    table.add_row(*header)
     if not rows:
-        table.add_row(Text("—", style="dim"), "", "")
+        table.add_row(Text("—", style="dim"), *[""] * len(short))
     for name, services in sorted(rows, key=lambda r: r[0].lower()):
-        running, desired, emoji = _aggregate(services)
-        table.add_row(name, emoji, f"{running}/{desired}")
-    return Group(_subhead(title), table)
+        cells = [Text(name)] + [_node_cell(services, full) for full, _ in short]
+        table.add_row(*cells)
+    return table
 
 
 def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
@@ -395,14 +418,14 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
 
     container_rows = [(c.name, [c]) for c in containers]
 
-    grid = Table.grid(expand=True, padding=(0, 3))
+    grid = Table.grid(expand=True, padding=(0, 4))
     grid.add_column(ratio=1)
     grid.add_column(ratio=1)
     grid.add_column(ratio=1)
     grid.add_row(
-        _rollup_column("Infrastruktur", infra),
-        _rollup_column("Service", service),
-        _rollup_column("Container (ohne Stack)", container_rows),
+        _stack_matrix("Infrastruktur", infra, swarm.nodes),
+        _stack_matrix("Service", service, swarm.nodes),
+        _stack_matrix("Container (ohne Stack)", container_rows, swarm.nodes),
     )
     return grid
 
@@ -412,10 +435,7 @@ def services_section(swarm: SwarmInfo | None, cfg: Config) -> Group:
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
     if not swarm.enabled:
-        body = Group(
-            _subhead("CONTAINER"),
-            _stack_columns(swarm, cfg),
-        )
+        body = Group(_subhead("CONTAINER"), _stack_columns(swarm, cfg))
         return section("DOCKER INFOS", body)
 
     body = Group(
