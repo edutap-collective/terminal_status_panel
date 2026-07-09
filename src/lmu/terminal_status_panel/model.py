@@ -52,6 +52,16 @@ class UpdateInfo:
 
 
 @dataclass
+class ServiceTask:
+    node: str | None  # hostname running the task, or None when unassigned
+    state: str  # actual task state: running / preparing / failed / ...
+
+    @property
+    def running(self) -> bool:
+        return self.state == "running"
+
+
+@dataclass
 class ServiceStatus:
     name: str
     running_replicas: int
@@ -59,7 +69,8 @@ class ServiceStatus:
     critical: bool = False
     stack: str | None = None  # com.docker.stack.namespace label
     description: str | None = None  # from a curated service label
-    nodes: list[str] = field(default_factory=list)  # hostnames running a task
+    tasks: list[ServiceTask] = field(default_factory=list)  # per-node placement
+    unassigned: int = 0  # desired-running tasks with no node
 
 
 @dataclass
@@ -68,6 +79,7 @@ class SwarmNode:
     reachable: bool = False
     role: str | None = None  # manager / worker
     leader: bool = False
+    state: str | None = None  # raw node state (ready / down / ...)
 
 
 @dataclass

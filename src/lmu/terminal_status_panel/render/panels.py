@@ -210,7 +210,10 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
     return section("UPDATES", table)
 
 
-_DOT = "●"
+# Emoji status markers — readable regardless of color perception.
+_OK = "✅"
+_DEAD = "💀"
+_MISSING = "❌"
 
 
 def _service_healthy(svc) -> bool:
@@ -221,28 +224,48 @@ def _service_healthy(svc) -> bool:
 def _nodes_block(nodes) -> RenderableType:
     if not nodes:
         return Text("no node information", style="dim")
-    table = Table.grid(padding=(0, 1))
-    table.add_column()
-    table.add_column()
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="bold")   # hostname
+    table.add_column()               # status
+    table.add_column()               # role
     for node in nodes:
-        color = "green" if node.reachable else "red"
+        if node.reachable:
+            status = Text(_OK)
+        else:
+            status = Text(f"{_DEAD} - {node.state or 'down'}", style="red")
         role = node.role or ""
         if node.leader:
             role = f"{role}, leader" if role else "leader"
         suffix = Text(f"({role})", style="dim") if role else Text("")
-        table.add_row(Text(f"{_DOT} ", style=color) + Text(node.name), suffix)
+        table.add_row(node.name, status, suffix)
     return table
 
 
-def _service_line(svc) -> Text:
-    color = "green" if _service_healthy(svc) else "red"
-    desired = svc.desired_replicas
-    desired_str = desired if desired is not None else "-"
-    name = Text(svc.name, style="bold" if svc.critical else "")
-    line = Text.assemble((f"{_DOT} ", color), name)
-    line.append(f"  {svc.running_replicas}/{desired_str}", style=color)
-    if svc.nodes:
-        line.append(f"  [{', '.join(svc.nodes)}]", style="dim")
+def _task_states(svc) -> Text:
+    """Per-node task states, mirroring the ops script:
+    ``node ✅`` for running, ``node 💀 - <state>`` otherwise, plus an
+    ``(❌ N unassigned)`` marker for orphaned tasks."""
+    parts: list[Text] = []
+    for task in svc.tasks:
+        if task.running:
+            parts.append(Text.assemble((task.node or "?", "bold"), " ", _OK))
+        else:
+            parts.append(Text.assemble(
+                (task.node or "?", "bold"), " ", (f"{_DEAD} - {task.state}", "red")))
+    if svc.unassigned:
+        parts.append(Text(f"({_MISSING} {svc.unassigned} unassigned)", style="red"))
+
+    if not parts:
+        # Container fallback (no Swarm tasks): fall back to a simple health mark.
+        mark = _OK if _service_healthy(svc) else _DEAD
+        desired = svc.desired_replicas if svc.desired_replicas is not None else "-"
+        return Text(f"{svc.running_replicas}/{desired} {mark}")
+
+    line = Text()
+    for i, part in enumerate(parts):
+        if i:
+            line.append(", ")
+        line.append_text(part)
     return line
 
 
@@ -250,25 +273,21 @@ def _stacks_block(services) -> RenderableType:
     if not services:
         return Text("no services", style="dim")
 
-    # Preserve first-seen stack order; ungrouped services go under a final group.
-    order: list[str | None] = []
+    # Group by stack; ungrouped services fall into a final "Ohne Stack" bucket.
     grouped: dict[str | None, list] = {}
     for svc in services:
-        key = svc.stack
-        if key not in grouped:
-            grouped[key] = []
-            order.append(key)
-        grouped[key].append(svc)
+        grouped.setdefault(svc.stack, []).append(svc)
 
+    named = sorted(k for k in grouped if k is not None)
     parts: list[RenderableType] = []
-    named = [k for k in order if k is not None]
     for key in named + ([None] if None in grouped else []):
         title = key if key is not None else "Ohne Stack"
         parts.append(Text(f"{title}:", style="bold cyan"))
         inner = Table.grid(padding=(0, 1))
         inner.add_column()
-        for svc in grouped[key]:
-            inner.add_row(Text("  ") + _service_line(svc))
+        for svc in sorted(grouped[key], key=lambda s: s.name):
+            name = Text(svc.name, style="bold" if svc.critical else "")
+            inner.add_row(Text.assemble("  * ", name, ": ") + _task_states(svc))
             if svc.description:
                 inner.add_row(Text(f"      {svc.description}", style="dim"))
         parts.append(inner)
@@ -281,18 +300,15 @@ def services_section(swarm: SwarmInfo | None, cfg: Config) -> Group:
 
     title = "DOCKER SWARM" if swarm.enabled else "DOCKER (containers)"
 
-    left_parts: list[RenderableType] = []
+    parts: list[RenderableType] = []
     if swarm.enabled:
         role = swarm.node_role or "?"
-        left_parts.append(Text("Swarm-Nodes ", style="bold cyan")
-                          + Text(f"(local: {role})", style="dim"))
-        left_parts.append(_nodes_block(swarm.nodes))
+        parts.append(Text("Swarm-Nodes ", style="bold cyan")
+                     + Text(f"(local: {role})", style="dim"))
+        parts.append(_nodes_block(swarm.nodes))
+        parts.append(Text(""))
+        parts.append(Text("Stacks:", style="bold cyan"))
     else:
-        left_parts.append(Text(f"Containers: {len(swarm.services)}", style="cyan"))
-    left = Group(*left_parts)
-
-    grid = Table.grid(expand=True, padding=(0, 4))
-    grid.add_column()
-    grid.add_column(ratio=1)
-    grid.add_row(left, _stacks_block(swarm.services))
-    return section(title, grid)
+        parts.append(Text(f"Containers: {len(swarm.services)}", style="cyan"))
+    parts.append(_stacks_block(swarm.services))
+    return section(title, Group(*parts))

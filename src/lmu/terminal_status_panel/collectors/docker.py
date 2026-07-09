@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import docker
 
-from ..model import ServiceStatus, SwarmInfo, SwarmNode
+from ..model import ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
 
 STACK_LABEL = "com.docker.stack.namespace"
 
@@ -33,12 +33,14 @@ def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
         if node_id:
             id_to_name[node_id] = name
         manager = attrs.get("ManagerStatus") or {}
+        state = attrs.get("Status", {}).get("State")
         nodes.append(
             SwarmNode(
                 name=name,
-                reachable=attrs.get("Status", {}).get("State") == "ready",
+                reachable=state == "ready",
                 role=attrs.get("Spec", {}).get("Role"),
                 leader=bool(manager.get("Leader", False)),
+                state=state,
             )
         )
     return nodes, id_to_name
@@ -60,12 +62,27 @@ def _desired_count(service) -> int | None:
         return None  # e.g. global-mode services
 
 
-def _running_tasks(service):
+def _service_tasks(service, id_to_name: dict[str, str]) -> tuple[list[ServiceTask], int]:
+    """Return (per-node tasks, unassigned count) for tasks that should run.
+
+    Mirrors the operations script: filter to desired-state ``running``, split
+    into node-assigned tasks (reporting their *actual* state) and orphaned
+    tasks with no node (e.g. pinned to a node that is down)."""
     try:
-        tasks = service.tasks(filters={"desired-state": "running"})
+        all_tasks = service.tasks(filters={"desired-state": "running"})
     except Exception:
-        return []
-    return [t for t in tasks if t.get("Status", {}).get("State") == "running"]
+        return [], 0
+    tasks: list[ServiceTask] = []
+    unassigned = 0
+    for t in all_tasks:
+        node_id = t.get("NodeID")
+        state = t.get("Status", {}).get("State", "unknown")
+        if node_id:
+            tasks.append(ServiceTask(node=id_to_name.get(node_id, node_id), state=state))
+        else:
+            unassigned += 1
+    tasks.sort(key=lambda task: task.node or "")
+    return tasks, unassigned
 
 
 def _swarm_services(client, critical: set[str], description_label: str,
@@ -73,18 +90,17 @@ def _swarm_services(client, critical: set[str], description_label: str,
     services = []
     for svc in client.services.list():
         labels = _labels(svc)
-        tasks = _running_tasks(svc)
-        placements = [id_to_name.get(t.get("NodeID", ""), t.get("NodeID", "?"))
-                      for t in tasks if t.get("NodeID")]
+        tasks, unassigned = _service_tasks(svc, id_to_name)
         services.append(
             ServiceStatus(
                 name=svc.name,
-                running_replicas=len(tasks),
+                running_replicas=sum(1 for t in tasks if t.running),
                 desired_replicas=_desired_count(svc),
                 critical=svc.name in critical,
                 stack=labels.get(STACK_LABEL),
                 description=labels.get(description_label),
-                nodes=placements,
+                tasks=tasks,
+                unassigned=unassigned,
             )
         )
     return services
@@ -105,7 +121,7 @@ def _container_services(client, critical: set[str]) -> list[ServiceStatus]:
 
 
 def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
-                   description_label: str = "description") -> SwarmInfo:
+                   description_label: str = "lmu.service.description") -> SwarmInfo:
     """Return Swarm/service health; never raises."""
     critical_set = set(critical or [])
     try:

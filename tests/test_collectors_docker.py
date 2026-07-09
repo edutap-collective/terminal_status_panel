@@ -3,27 +3,28 @@ from lmu.terminal_status_panel.model import SwarmInfo
 
 
 class _FakeService:
-    def __init__(self, name, desired, running, stack=None, description=None,
-                 node_ids=None):
+    """*tasks* is a list of (node_id | None, state) for desired-state=running."""
+
+    def __init__(self, name, desired, tasks, stack=None, description=None):
         self.name = name
         labels = {}
         if stack is not None:
             labels["com.docker.stack.namespace"] = stack
         if description is not None:
-            labels["description"] = description
+            labels["lmu.service.description"] = description
         self.attrs = {
             "Spec": {"Mode": {"Replicated": {"Replicas": desired}}, "Labels": labels}
         }
-        self._running = running
-        self._node_ids = node_ids or []
+        self._tasks = tasks
 
     def tasks(self, filters=None):
-        running = [
-            {"Status": {"State": "running"}, "NodeID": self._node_ids[i]
-             if i < len(self._node_ids) else ""}
-            for i in range(self._running)
-        ]
-        return running + [{"Status": {"State": "failed"}}]
+        result = []
+        for node_id, state in self._tasks:
+            task = {"Status": {"State": state}}
+            if node_id is not None:
+                task["NodeID"] = node_id
+            result.append(task)
+        return result
 
 
 class _FakeNode:
@@ -81,59 +82,68 @@ def test_unreachable_when_from_env_raises(monkeypatch):
     assert result.reachable is False
 
 
-def test_swarm_active_lists_services(monkeypatch):
+def test_swarm_active_counts_running_replicas(monkeypatch):
     client = _FakeClient(
         "active",
-        services=[_FakeService("postgres", desired=1, running=1),
-                  _FakeService("kafka", desired=3, running=2)],
+        nodes=[_FakeNode("n1", "srv-01"), _FakeNode("n2", "srv-02"),
+               _FakeNode("n3", "srv-03")],
+        services=[
+            _FakeService("postgres", desired=1, tasks=[("n1", "running")]),
+            _FakeService("kafka", desired=3,
+                         tasks=[("n1", "running"), ("n2", "running"), ("n3", "failed")]),
+        ],
     )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker(critical=["postgres"])
-    assert result.reachable is True
-    assert result.enabled is True
+    assert result.reachable is True and result.enabled is True
     assert result.node_role == "manager"
-    assert result.node_count == 3
     by_name = {s.name: s for s in result.services}
     assert by_name["postgres"].running_replicas == 1
-    assert by_name["postgres"].desired_replicas == 1
     assert by_name["postgres"].critical is True
-    assert by_name["kafka"].running_replicas == 2
+    assert by_name["kafka"].running_replicas == 2  # failed task not counted
     assert by_name["kafka"].desired_replicas == 3
-    assert by_name["kafka"].critical is False
 
 
-def test_swarm_groups_stacks_nodes_and_descriptions(monkeypatch):
+def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
     nodes = [
         _FakeNode("n1", "srv-ccc-01", role="manager", leader=True),
         _FakeNode("n2", "srv-ccn-01"),
         _FakeNode("n3", "srv-ccn-02", state="down"),
     ]
     services = [
-        _FakeService("PostgreSQL-18_pg", desired=1, running=1, stack="PostgreSQL-18",
-                     description="PostgreSQL Datenbank, Version 18", node_ids=["n1"]),
-        _FakeService("registry", desired=1, running=1, node_ids=["n2"]),
+        _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="PostgreSQL-18",
+                     description="PostgreSQL Datenbank, Version 18"),
+        _FakeService("kafka", desired=2, tasks=[("n2", "running"), ("n3", "failed")],
+                     stack="kafka"),
+        _FakeService("registry", desired=1, tasks=[(None, "pending")]),  # unassigned
     ]
     client = _FakeClient("active", services=services, nodes=nodes)
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
 
     assert [n.name for n in result.nodes] == ["srv-ccc-01", "srv-ccn-01", "srv-ccn-02"]
-    assert result.nodes[0].leader is True
-    assert result.nodes[0].role == "manager"
-    assert result.nodes[2].reachable is False  # state "down"
+    assert result.nodes[0].leader is True and result.nodes[0].role == "manager"
+    assert result.nodes[2].reachable is False and result.nodes[2].state == "down"
 
-    pg = next(s for s in result.services if s.name == "PostgreSQL-18_pg")
+    pg = next(s for s in result.services if s.name == "pg")
     assert pg.stack == "PostgreSQL-18"
     assert pg.description == "PostgreSQL Datenbank, Version 18"
-    assert pg.nodes == ["srv-ccc-01"]
+    assert [(t.node, t.state) for t in pg.tasks] == [("srv-ccc-01", "running")]
+
+    kafka = next(s for s in result.services if s.name == "kafka")
+    assert {(t.node, t.state) for t in kafka.tasks} == {
+        ("srv-ccn-01", "running"), ("srv-ccn-02", "failed")}
+
     reg = next(s for s in result.services if s.name == "registry")
-    assert reg.stack is None  # ungrouped
+    assert reg.stack is None
+    assert reg.tasks == [] and reg.unassigned == 1
 
 
 def test_custom_description_label(monkeypatch):
-    svc = _FakeService("app", desired=1, running=1)
+    svc = _FakeService("app", desired=1, tasks=[("n1", "running")])
     svc.attrs["Spec"]["Labels"]["info"] = "my custom description"
-    client = _FakeClient("active", services=[svc], nodes=[])
+    client = _FakeClient("active", services=[svc],
+                         nodes=[_FakeNode("n1", "srv-01")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker(description_label="info")
     assert result.services[0].description == "my custom description"
@@ -147,7 +157,6 @@ def test_swarm_inactive_falls_back_to_containers(monkeypatch):
     client = _FakeClient("inactive", containers=[_C("redis"), _C("nginx")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
-    assert result.reachable is True
-    assert result.enabled is False
+    assert result.reachable is True and result.enabled is False
     assert {s.name for s in result.services} == {"redis", "nginx"}
     assert all(s.running_replicas == 1 and s.desired_replicas == 1 for s in result.services)

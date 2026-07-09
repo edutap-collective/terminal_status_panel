@@ -3,9 +3,10 @@
 A small Python package that renders a colorful server status panel on login
 via `update-motd.d`. It shows system identity, load & per-core CPU usage,
 memory/swap and filesystem bars, pending package updates, and the health of
-Dockerized services. Docker Swarm services are grouped by stack, with per-task
-node placement and an optional description label — all read from the Docker API
-(no database or broker protocol is ever spoken to).
+Dockerized services. Docker Swarm services are grouped by stack, with per-task node placement and
+per-node state markers (✅ running, 💀 failed, ❌ unassigned) plus an optional
+description label — all read from the Docker API (no database or broker
+protocol is ever spoken to).
 
 ## Requirements
 
@@ -53,7 +54,7 @@ width = 80
 [docker]
 timeout = 1.5
 # Service label read as the human-readable description shown per service.
-description_label = "description"
+description_label = "lmu.service.description"
 
 [services]
 critical = ["postgres", "kafka"]
@@ -75,7 +76,8 @@ critical = 1.0
 
 Services are grouped by their `com.docker.stack.namespace` label (set
 automatically for stack deployments). To show a human-readable description per
-service, add a label to the service — by default the key `description`:
+service, add a label to the service — by default the key
+`lmu.service.description`:
 
 ```yaml
 services:
@@ -83,7 +85,7 @@ services:
     image: postgres:18
     deploy:
       labels:
-        description: "PostgreSQL Datenbank, Version 18"
+        lmu.service.description: "PostgreSQL Datenbank, Version 18"
 ```
 
 Change the read label key via `docker.description_label` in the config.

@@ -25,7 +25,7 @@ class Config:
     width: int = 80
     docker_timeout: float = 1.5
     critical_services: list[str] = field(default_factory=list)
-    description_label: str = "description"
+    description_label: str = "lmu.service.description"
     thresholds: Thresholds = field(default_factory=Thresholds)
 
 
@@ -66,6 +66,6 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
         critical_services=list(services.get("critical", [])),
-        description_label=str(docker.get("description_label", "description")),
+        description_label=str(docker.get("description_label", "lmu.service.description")),
         thresholds=thresholds,
     )

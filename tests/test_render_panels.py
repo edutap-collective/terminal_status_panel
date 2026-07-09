@@ -5,6 +5,7 @@ from lmu.terminal_status_panel.model import (
     FilesystemUsage,
     ResourceUsage,
     ServiceStatus,
+    ServiceTask,
     SwarmInfo,
     SwarmNode,
     SystemInfo,
@@ -88,29 +89,34 @@ def test_updates_panel_unsupported():
     assert "n/a" in out.lower()
 
 
-def test_services_section_groups_by_stack_and_lists_nodes():
+def test_services_section_groups_by_stack_with_emoji_states():
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=3,
         nodes=[SwarmNode("srv-01", reachable=True, role="manager", leader=True),
-               SwarmNode("srv-02", reachable=False, role="worker")],
+               SwarmNode("srv-02", reachable=False, role="worker", state="down")],
         services=[
             ServiceStatus("pg_db", 1, 1, stack="PostgreSQL-18",
-                          description="PostgreSQL Datenbank, Version 18", nodes=["srv-01"]),
-            ServiceStatus("kafka_broker", 2, 3, critical=True, stack="kafka",
-                          nodes=["srv-01", "srv-02"]),
-            ServiceStatus("registry", 1, 1),  # ungrouped
+                          description="PostgreSQL Datenbank, Version 18",
+                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("kafka_broker", 1, 2, critical=True, stack="kafka",
+                          tasks=[ServiceTask("srv-01", "running"),
+                                 ServiceTask("srv-02", "failed")],
+                          unassigned=1),
+            ServiceStatus("registry", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()))
     assert "DOCKER SWARM" in out
     assert "Swarm-Nodes" in out
     assert "srv-01" in out
-    assert "PostgreSQL-18:" in out          # stack header
-    assert "PostgreSQL Datenbank" in out    # description line
+    assert "✅" in out                       # healthy marker
+    assert "💀" in out                       # dead task marker (kafka on srv-02)
+    assert "down" in out                     # node/ task state text
+    assert "unassigned" in out               # orphaned task marker
+    assert "PostgreSQL-18:" in out           # stack header (sorted)
+    assert "PostgreSQL Datenbank" in out     # description line
     assert "kafka:" in out
-    assert "1/1" in out
-    assert "2/3" in out
-    assert "Ohne Stack:" in out             # ungrouped bucket
+    assert "Ohne Stack:" in out              # ungrouped bucket
     assert "registry" in out
 
 
