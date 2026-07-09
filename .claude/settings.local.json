@@ -4,7 +4,8 @@
       "Bash(git commit -m ' *)",
       "Bash(git add *)",
       "Bash(git commit -q -m 'feat: add data model and remove exploratory skeleton *)",
-      "Bash(git commit -q -m 'feat: add config with defaults and optional TOML override *)"
+      "Bash(git commit -q -m 'feat: add config with defaults and optional TOML override *)",
+      "Bash(git commit -q -m 'feat: add system info collector *)"
     ]
   }
 }
