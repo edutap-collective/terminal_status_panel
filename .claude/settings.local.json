@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'feat: add data model and remove exploratory skeleton *)"
+    ]
+  }
+}
