@@ -1,7 +1,9 @@
 # lmu.terminal_status_panel
 
-A small Python package that renders a colorful server status panel on login
-via `update-motd.d`. The full-width dashboard is laid out in three tiers:
+A small Python package that renders a colorful server status panel on login —
+best run from a `profile.d` snippet so it uses the full terminal width (see
+[Running it at login](#running-it-at-login)). The full-width dashboard is laid
+out in three tiers:
 
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
 - **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
@@ -118,51 +120,101 @@ critical = 1.0
 
 ## Running it at login
 
-Pick **one** of the two methods below (running both would print the panel
-twice).
+**Recommended: run it from `profile.d` (the login shell), not from
+`update-motd.d`.** This is the setup we use in production, and the reasoning is
+explained below. Use *one* method only — running both prints the panel twice.
 
-### Option A — `/etc/profile.d` (recommended, always full width)
+### Why profile.d and not update-motd.d?
 
-Because a login shell's output is a real terminal, the tool auto-detects and
-uses the **full current terminal width**. Install a small profile snippet:
+`update-motd.d` looks like the natural home for a login banner, but it cannot
+render at the viewer's terminal width:
 
-```sh
-# /etc/profile.d/zz-lmu-status-panel.sh
-# Show the status panel on interactive login shells, at full terminal width.
-case $- in *i*) ;; *) return ;; esac        # interactive shells only
-command -v lmu-status-panel >/dev/null 2>&1 && lmu-status-panel
-```
+- `pam_motd` runs the `update-motd.d` scripts **during PAM session setup, before
+  the login shell starts**. At that moment the script has **no controlling TTY**
+  and the terminal size is not available; `COLUMNS`/`LINES` are only set later,
+  by the interactive shell.
+- **SSH does not change this.** SSH knows the client's window size (from its
+  `pty-req`), but it does not pass it to the MOTD scripts. So whether you connect
+  by SSH or by a VM console, the result is the same.
+- The output is also typically **cached** (`/run/motd.dynamic`) and shown to
+  every subsequent login regardless of their window — a single fixed rendering.
+
+The net effect: `update-motd.d` always renders at a **fixed** width (the config
+`width`, default 80). For our environment that is exactly wrong:
+
+- We reach every server **only over SSH** — never a VM/VMware console — so a
+  real terminal with a known size is always present *at the shell*, just not at
+  MOTD-generation time.
+- We work from **MacBooks and 4K displays**, where an 80-column banner is either
+  cramped or wastes most of the screen. We want the panel to fill whatever
+  window the login happens in.
+
+A `profile.d` snippet runs **inside the interactive login shell**, where stdout
+*is* the SSH pty and its (SSH-negotiated) size is available. The tool then
+auto-detects and uses the **full current terminal width** on every login — wide
+on a 4K display, snug in a small MacBook window — with no fixed value to
+maintain. That flexibility is why we chose it.
+
+### Install (global — all users)
 
 ```bash
 sudo install -m 0644 contrib/zz-lmu-status-panel.sh /etc/profile.d/
 ```
 
-If the command lives in a virtualenv, call it by absolute path instead, e.g.
+The snippet is intentionally tiny and safe:
+
+```sh
+# /etc/profile.d/zz-lmu-status-panel.sh
+case $- in *i*) ;; *) return ;; esac        # interactive shells only
+command -v lmu-status-panel >/dev/null 2>&1 && lmu-status-panel
+```
+
+`/etc/profile.d/*.sh` is sourced by `/etc/profile` for **login** shells
+(`sh`/`bash`). For **zsh** logins, source it from `/etc/zsh/zprofile` instead
+(zsh does not read `/etc/profile`):
+
+```bash
+echo '. /etc/profile.d/zz-lmu-status-panel.sh' | sudo tee -a /etc/zsh/zprofile
+```
+
+### Install (local — a single user)
+
+No root needed — add the same call to your personal login profile
+(`~/.profile` or `~/.bash_profile`, or `~/.zprofile` for zsh):
+
+```bash
+cat >> ~/.profile <<'EOF'
+case $- in *i*) command -v lmu-status-panel >/dev/null 2>&1 && lmu-status-panel ;; esac
+EOF
+```
+
+Global vs. local gives you flexibility: roll it out for everyone via
+`/etc/profile.d`, or let individual users opt in (or override the global one)
+from their own profile.
+
+If the command lives in a virtualenv, call it by absolute path, e.g.
 `/opt/lmu/venv/bin/lmu-status-panel`. To avoid a duplicate static banner, make
-sure no `update-motd.d` hook (Option B) is installed and, if present, empty
-`/etc/motd`.
+sure no `update-motd.d` hook is installed and, if present, empty `/etc/motd`
+(and optionally set `PrintMotd no` in `/etc/ssh/sshd_config`).
 
 > Note: `profile.d` runs for **login** shells (SSH logins, `bash -l`), not for
 > every new terminal tab on an existing session — matching typical MOTD
-> behaviour.
+> behaviour. It renders once at login; resizing the window afterwards re-renders
+> only on the next login.
 
-### Option B — `update-motd.d` (cached, fixed width)
+### Fallback: update-motd.d (fixed width, not recommended here)
 
-The classic MOTD mechanism runs the hook and **caches** its output
-(`/run/motd.dynamic`) without knowing the viewer's terminal — so there is no
-TTY and the width comes from the config `width` (it **cannot** adapt to each
-login's terminal size). Set `width` to your standard console width.
+If you must use the classic MOTD mechanism, install the hook and set a fixed
+wide `width` in the config — accepting that it will not adapt to each login:
 
 ```bash
 sudo cp contrib/50-lmu-status-panel /etc/update-motd.d/
 sudo chmod +x /etc/update-motd.d/50-lmu-status-panel
 ```
 
-The hook is just `exec lmu-status-panel`; adjust it to an absolute path if the
-command is installed in a virtualenv. ANSI colours are forced on, so terminals
-display them despite the missing TTY at generation time.
-
-**For full width, prefer Option A** — `update-motd.d` is inherently fixed-width.
+The hook is just `exec lmu-status-panel`; use an absolute path for a virtualenv.
+Colours are forced on, so terminals show them despite the missing TTY. For our
+mix of 4K and laptop screens this is the wrong trade-off — prefer `profile.d`.
 
 ## Service descriptions (Docker Swarm)
 
