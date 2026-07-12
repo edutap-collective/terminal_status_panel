@@ -37,36 +37,64 @@ This installs the `lmu-status-panel` command.
 lmu-status-panel [--width N] [--no-color] [--config PATH]
 ```
 
-The command always exits 0 so it can never break a login shell.
+The command **always exits 0** so it can never break a login shell. If a
+collector fails (no Docker socket, non-Debian host, …) that section degrades to
+a placeholder instead of erroring.
 
-## update-motd.d integration
+### Command-line options
 
-Copy the example hook and make it executable:
+| Option        | Default | Description |
+|---------------|---------|-------------|
+| `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
+| `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
+| `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
 
-```bash
-sudo cp contrib/50-lmu-status-panel /etc/update-motd.d/
-sudo chmod +x /etc/update-motd.d/50-lmu-status-panel
-```
+Colours are always **forced on** (unless `--no-color`), because at MOTD
+generation time there is no TTY to auto-detect a colour terminal.
 
-The hook runs at login; its output is cached in `/run/motd.dynamic`. ANSI
-colors are forced on, so terminals display them even though no TTY is present
-at generation time.
+### How the render width is chosen
+
+The width is resolved in this order (first match wins):
+
+1. **`--width N`** — an explicit flag always wins.
+2. **The current terminal width** — used automatically when standard output is
+   a real terminal (TTY), i.e. when you run the command interactively or from a
+   shell-login hook. This is what gives you the *full screen width*.
+3. **`width` from the config** (default **80**) — the fallback when there is no
+   TTY, e.g. when `update-motd.d` pre-generates the cached MOTD.
+
+> The panel is designed for wide terminals. Narrow widths still render but wrap.
 
 ## Configuration
 
-Zero configuration is required. To customize, create
-`/etc/lmu-status-panel/config.toml`:
+Zero configuration is required. Settings are read from
+`/etc/lmu-status-panel/config.toml` (override with `--config PATH`). A missing
+or unreadable file falls back to the built-in defaults — it never raises.
+
+### Configuration reference
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `width` | `80` | Fallback render width when no TTY is available (see width resolution above). |
+| `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
+| `docker.description_label` | `"lmu.service.description"` | Docker **service label** read as the per-service description column. |
+| `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch"]` | Case-insensitive substrings. A stack (or ungrouped service, e.g. `registry`) whose name matches goes into the **Infrastruktur** column; everything else goes into **Service**. |
+| `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
+| `thresholds.memory.warning` / `.critical` | `75` / `90` | RAM usage % thresholds (yellow / red). |
+| `thresholds.swap.warning` | `1` | Swap usage % above which SWAP turns yellow. |
+| `thresholds.filesystem.warning` / `.critical` | `80` / `90` | Filesystem usage % thresholds. |
+| `thresholds.load.warning` / `.critical` | `0.8` / `1.0` | Load-average thresholds as a **per-CPU multiplier** (compared against `load1 / cpu_count`). |
+
+### Full example
 
 ```toml
-width = 80
+# Fallback width for non-TTY (MOTD) rendering. Interactive logins auto-detect
+# the real terminal width regardless of this value.
+width = 200
 
 [docker]
 timeout = 1.5
-# Service label read as the human-readable description shown per service.
 description_label = "lmu.service.description"
-# Stacks whose name matches one of these (case-insensitive substring) go into
-# "Infrastruktur"; other stacks go into "Service". Ungrouped services matching
-# a key (e.g. registry) are treated as infrastructure too.
 infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry"]
 
 [services]
@@ -76,6 +104,9 @@ critical = ["postgres", "kafka"]
 warning = 75
 critical = 90
 
+[thresholds.swap]
+warning = 1
+
 [thresholds.filesystem]
 warning = 80
 critical = 90
@@ -84,6 +115,54 @@ critical = 90
 warning = 0.8   # per-CPU multiplier
 critical = 1.0
 ```
+
+## Running it at login
+
+Pick **one** of the two methods below (running both would print the panel
+twice).
+
+### Option A — `/etc/profile.d` (recommended, always full width)
+
+Because a login shell's output is a real terminal, the tool auto-detects and
+uses the **full current terminal width**. Install a small profile snippet:
+
+```sh
+# /etc/profile.d/zz-lmu-status-panel.sh
+# Show the status panel on interactive login shells, at full terminal width.
+case $- in *i*) ;; *) return ;; esac        # interactive shells only
+command -v lmu-status-panel >/dev/null 2>&1 && lmu-status-panel
+```
+
+```bash
+sudo install -m 0644 contrib/zz-lmu-status-panel.sh /etc/profile.d/
+```
+
+If the command lives in a virtualenv, call it by absolute path instead, e.g.
+`/opt/lmu/venv/bin/lmu-status-panel`. To avoid a duplicate static banner, make
+sure no `update-motd.d` hook (Option B) is installed and, if present, empty
+`/etc/motd`.
+
+> Note: `profile.d` runs for **login** shells (SSH logins, `bash -l`), not for
+> every new terminal tab on an existing session — matching typical MOTD
+> behaviour.
+
+### Option B — `update-motd.d` (cached, fixed width)
+
+The classic MOTD mechanism runs the hook and **caches** its output
+(`/run/motd.dynamic`) without knowing the viewer's terminal — so there is no
+TTY and the width comes from the config `width` (it **cannot** adapt to each
+login's terminal size). Set `width` to your standard console width.
+
+```bash
+sudo cp contrib/50-lmu-status-panel /etc/update-motd.d/
+sudo chmod +x /etc/update-motd.d/50-lmu-status-panel
+```
+
+The hook is just `exec lmu-status-panel`; adjust it to an absolute path if the
+command is installed in a virtualenv. ANSI colours are forced on, so terminals
+display them despite the missing TTY at generation time.
+
+**For full width, prefer Option A** — `update-motd.d` is inherently fixed-width.
 
 ## Service descriptions (Docker Swarm)
 
