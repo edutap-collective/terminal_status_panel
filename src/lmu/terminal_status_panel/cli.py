@@ -2,12 +2,12 @@
 
 Three console scripts share this module:
 
-- ``lmu-status-panel``  — both sections (``server`` + ``docker``).
-- ``lmu-server-status`` — only the system/server section.
-- ``lmu-docker-status`` — only the Docker section.
+- ``status-full``  — both sections (``server`` + ``docker``).
+- ``status-server`` — only the system/server section.
+- ``status-docker`` — only the Docker section.
 
-Each section collects only the data it needs, so ``lmu-docker-status`` never
-touches the system collectors and ``lmu-server-status`` never opens the Docker
+Each section collects only the data it needs, so ``status-docker`` never
+touches the system collectors and ``status-server`` never opens the Docker
 socket.
 """
 
@@ -80,7 +80,7 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None, sections: tuple[str, ...] = SECTIONS,
-         prog: str = "lmu-status-panel") -> int:
+         prog: str = "status-full") -> int:
     """Render the status panel. Always returns 0 — never fails a login."""
     try:
         args = _parse_args(argv, prog)
@@ -97,13 +97,13 @@ def main(argv: list[str] | None = None, sections: tuple[str, ...] = SECTIONS,
 
 
 def server_main(argv: list[str] | None = None) -> int:
-    """Entry point for ``lmu-server-status`` — system section only."""
-    return main(argv, sections=("server",), prog="lmu-server-status")
+    """Entry point for ``status-server`` — system section only."""
+    return main(argv, sections=("server",), prog="status-server")
 
 
 def docker_main(argv: list[str] | None = None) -> int:
-    """Entry point for ``lmu-docker-status`` — Docker section only."""
-    return main(argv, sections=("docker",), prog="lmu-docker-status")
+    """Entry point for ``status-docker`` — Docker section only."""
+    return main(argv, sections=("docker",), prog="status-docker")
 
 
 if __name__ == "__main__":

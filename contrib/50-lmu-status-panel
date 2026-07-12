@@ -4,4 +4,4 @@
 #   sudo cp contrib/50-lmu-status-panel /etc/update-motd.d/
 #   sudo chmod +x /etc/update-motd.d/50-lmu-status-panel
 # Adjust the path below to the interpreter/venv where the package is installed.
-exec lmu-status-panel
+exec status-full

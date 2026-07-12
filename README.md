@@ -40,25 +40,25 @@ own entry point — plus the combined command:
 
 | Command | Sections | Use |
 |---------|----------|-----|
-| `lmu-status-panel` | server + docker | The full panel (default). |
-| `lmu-server-status` | server only | System overview, updates, load/mem/fs. |
-| `lmu-docker-status` | docker only | The Docker Swarm block. |
+| `status-full` | server + docker | The full panel (default). |
+| `status-server` | server only | System overview, updates, load/mem/fs. |
+| `status-docker` | docker only | The Docker Swarm block. |
 
-Each section only collects the data it needs: `lmu-docker-status` never touches
-the system collectors, and `lmu-server-status` never opens the Docker socket —
+Each section only collects the data it needs: `status-docker` never touches
+the system collectors, and `status-server` never opens the Docker socket —
 so you can run just what a given host cares about. The combined command also
 accepts `--sections server,docker` to pick explicitly.
 
 Any of the three works in the profile.d snippet (see *Running it at login*) —
-e.g. call `lmu-docker-status` on Docker Swarm nodes and `lmu-server-status` on
+e.g. call `status-docker` on Docker Swarm nodes and `status-server` on
 plain servers.
 
 ## Usage
 
 ```bash
-lmu-status-panel   [--sections server,docker] [--width N] [--no-color] [--config PATH]
-lmu-server-status  [--width N] [--no-color] [--config PATH]
-lmu-docker-status  [--width N] [--no-color] [--config PATH]
+status-full   [--sections server,docker] [--width N] [--no-color] [--config PATH]
+status-server  [--width N] [--no-color] [--config PATH]
+status-docker  [--width N] [--no-color] [--config PATH]
 ```
 
 The command **always exits 0** so it can never break a login shell. If a
@@ -69,7 +69,7 @@ a placeholder instead of erroring.
 
 | Option        | Default | Description |
 |---------------|---------|-------------|
-| `--sections`  | *(all / per command)* | Comma-separated sections to render: `server`, `docker`. On `lmu-status-panel` the default is both; the dedicated commands fix their own section. |
+| `--sections`  | *(all / per command)* | Comma-separated sections to render: `server`, `docker`. On `status-full` the default is both; the dedicated commands fix their own section. |
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
 | `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
@@ -189,7 +189,7 @@ The snippet is intentionally tiny and safe:
 ```sh
 # /etc/profile.d/zz-lmu-status-panel.sh
 case $- in *i*) ;; *) return ;; esac        # interactive shells only
-command -v lmu-status-panel >/dev/null 2>&1 && lmu-status-panel
+command -v status-full >/dev/null 2>&1 && status-full
 ```
 
 `/etc/profile.d/*.sh` is sourced by `/etc/profile` for **login** shells
@@ -207,7 +207,7 @@ No root needed — add the same call to your personal login profile
 
 ```bash
 cat >> ~/.profile <<'EOF'
-case $- in *i*) command -v lmu-status-panel >/dev/null 2>&1 && lmu-status-panel ;; esac
+case $- in *i*) command -v status-full >/dev/null 2>&1 && status-full ;; esac
 EOF
 ```
 
@@ -216,7 +216,7 @@ Global vs. local gives you flexibility: roll it out for everyone via
 from their own profile.
 
 If the command lives in a virtualenv, call it by absolute path, e.g.
-`/opt/lmu/venv/bin/lmu-status-panel`. To avoid a duplicate static banner, make
+`/opt/lmu/venv/bin/status-full`. To avoid a duplicate static banner, make
 sure no `update-motd.d` hook is installed and, if present, empty `/etc/motd`
 (and optionally set `PrintMotd no` in `/etc/ssh/sshd_config`).
 
@@ -235,7 +235,7 @@ sudo cp contrib/50-lmu-status-panel /etc/update-motd.d/
 sudo chmod +x /etc/update-motd.d/50-lmu-status-panel
 ```
 
-The hook is just `exec lmu-status-panel`; use an absolute path for a virtualenv.
+The hook is just `exec status-full`; use an absolute path for a virtualenv.
 Colours are forced on, so terminals show them despite the missing TTY. For our
 mix of 4K and laptop screens this is the wrong trade-off — prefer `profile.d`.
 

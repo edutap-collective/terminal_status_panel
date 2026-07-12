@@ -43,9 +43,9 @@ typecheck  = [
 ]
 
 [project.scripts]
-lmu-status-panel = "lmu.terminal_status_panel.cli:main"
-lmu-server-status = "lmu.terminal_status_panel.cli:server_main"
-lmu-docker-status = "lmu.terminal_status_panel.cli:docker_main"
+status-full = "lmu.terminal_status_panel.cli:main"
+status-server = "lmu.terminal_status_panel.cli:server_main"
+status-docker = "lmu.terminal_status_panel.cli:docker_main"
 
 [project.urls]
 Source = "https://gitlab.lrz.de/LMU/lmu.terminal_status_panel"
