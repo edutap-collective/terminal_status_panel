@@ -1,16 +1,19 @@
-"""Compose sections into the final full-width dashboard layout.
+"""Compose sections into the final dashboard layout.
 
-Top row: system overview (logo + identity) beside the updates panel.
-Middle: a SYSTEM STATUS section grouping load, memory/swap and filesystems.
-Bottom: a DOCKER INFOS section (swarm key facts over three stack columns).
-Everything stretches to the console width.
+The panel is split into two independently selectable sections:
+
+- ``server``  — SYSTEM OVERVIEW + UPDATES (top row) and the SYSTEM STATUS block.
+- ``docker``  — the DOCKER INFOS block.
+
+``build_layout`` renders whichever sections are requested (default: both),
+followed by a shared footer, and stretches to the console width.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
@@ -18,6 +21,8 @@ from rich.text import Text
 from ..config import Config
 from ..model import PanelData
 from .panels import services_section, system_overview, system_status, updates_panel
+
+SECTIONS: tuple[str, ...] = ("server", "docker")
 
 
 def _footer() -> Table:
@@ -31,18 +36,36 @@ def _footer() -> Table:
     return grid
 
 
-def build_layout(data: PanelData, cfg: Config) -> Group:
+def server_section(data: PanelData, cfg: Config) -> RenderableType:
+    """Top row (system overview + updates) over the system status block."""
     top = Table.grid(expand=True, padding=(0, 3))
     top.add_column(ratio=3)
     top.add_column(ratio=2)
     top.add_row(system_overview(data.system), updates_panel(data.updates))
+    return Group(top, Text(""), system_status(data.resources, cfg))
 
-    return Group(
-        top,
-        Text(""),
-        system_status(data.resources, cfg),
-        Text(""),
-        services_section(data.swarm, cfg),
-        Rule(style="dim blue"),
-        _footer(),
-    )
+
+def docker_section(data: PanelData, cfg: Config) -> RenderableType:
+    """The DOCKER INFOS block."""
+    return services_section(data.swarm, cfg)
+
+
+_SECTION_BUILDERS = {
+    "server": server_section,
+    "docker": docker_section,
+}
+
+
+def build_layout(data: PanelData, cfg: Config,
+                 sections: tuple[str, ...] = SECTIONS) -> Group:
+    parts: list[RenderableType] = []
+    for name in sections:
+        builder = _SECTION_BUILDERS.get(name)
+        if builder is None:
+            continue
+        if parts:
+            parts.append(Text(""))
+        parts.append(builder(data, cfg))
+    parts.append(Rule(style="dim blue"))
+    parts.append(_footer())
+    return Group(*parts)

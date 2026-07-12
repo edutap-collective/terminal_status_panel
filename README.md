@@ -31,12 +31,34 @@ protocol is ever spoken to.
 pip install .
 ```
 
-This installs the `lmu-status-panel` command.
+This installs three console scripts.
+
+## Commands (sections)
+
+The dashboard is split into two independently runnable sections, each with its
+own entry point — plus the combined command:
+
+| Command | Sections | Use |
+|---------|----------|-----|
+| `lmu-status-panel` | server + docker | The full panel (default). |
+| `lmu-server-status` | server only | System overview, updates, load/mem/fs. |
+| `lmu-docker-status` | docker only | The Docker Swarm block. |
+
+Each section only collects the data it needs: `lmu-docker-status` never touches
+the system collectors, and `lmu-server-status` never opens the Docker socket —
+so you can run just what a given host cares about. The combined command also
+accepts `--sections server,docker` to pick explicitly.
+
+Any of the three works in the profile.d snippet (see *Running it at login*) —
+e.g. call `lmu-docker-status` on Docker Swarm nodes and `lmu-server-status` on
+plain servers.
 
 ## Usage
 
 ```bash
-lmu-status-panel [--width N] [--no-color] [--config PATH]
+lmu-status-panel   [--sections server,docker] [--width N] [--no-color] [--config PATH]
+lmu-server-status  [--width N] [--no-color] [--config PATH]
+lmu-docker-status  [--width N] [--no-color] [--config PATH]
 ```
 
 The command **always exits 0** so it can never break a login shell. If a
@@ -47,6 +69,7 @@ a placeholder instead of erroring.
 
 | Option        | Default | Description |
 |---------------|---------|-------------|
+| `--sections`  | *(all / per command)* | Comma-separated sections to render: `server`, `docker`. On `lmu-status-panel` the default is both; the dedicated commands fix their own section. |
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
 | `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
