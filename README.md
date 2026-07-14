@@ -28,10 +28,13 @@ protocol is ever spoken to.
 ## Installation
 
 ```bash
+pip install terminal-status-panel     # from PyPI, once published
+# or, from a checkout:
 pip install .
 ```
 
-This installs three console scripts.
+This installs three panel commands (`status-full`, `status-server`,
+`status-docker`) plus an `install-panel` helper to wire it into a login shell.
 
 ## Commands (sections)
 
@@ -178,66 +181,54 @@ auto-detects and uses the **full current terminal width** on every login — wid
 on a 4K display, snug in a small MacBook window — with no fixed value to
 maintain. That flexibility is why we chose it.
 
-### Install (global — all users)
+### Install with `install-panel`
+
+The `install-panel` command writes the login snippet for you — system-wide or
+per-user — and is idempotent (safe to re-run) and reversible.
 
 ```bash
-sudo install -m 0644 contrib/zz-lmu-status-panel.sh /etc/profile.d/
+# System-wide, all users (writes /etc/profile.d/zz-terminal-status-panel.sh):
+sudo install-panel --scope global
+
+# Per user, no root needed (managed block in ~/.profile or ~/.zprofile):
+install-panel --scope user
+
+# Pick which panel(s) to show — e.g. only Docker on a Swarm node:
+sudo install-panel --scope global --panel docker
+# …or both sections as separate commands:
+install-panel --scope user --panel server --panel docker
+
+# Preview without writing, then remove again:
+install-panel --scope user --dry-run
+install-panel --scope user --uninstall
 ```
 
-The snippet is intentionally tiny and safe:
+Options:
 
-```sh
-# /etc/profile.d/zz-lmu-status-panel.sh
-case $- in *i*) ;; *) return ;; esac        # interactive shells only
-command -v status-full >/dev/null 2>&1 && status-full
-```
+| Option | Values | Default | Meaning |
+|--------|--------|---------|---------|
+| `--scope` | `global` \| `user` | `user` | `/etc/profile.d` (needs root) vs. your own login profile. |
+| `--panel` | `full` \| `server` \| `docker` | `full` | Which command to run; repeatable. |
+| `--shell` | `auto` \| `bash` \| `zsh` | `auto` | Target profile; `zsh` uses `zprofile` (zsh does not read `/etc/profile`). |
+| `--uninstall` | — | — | Remove a previous install. |
+| `--dry-run` | — | — | Show what would change, write nothing. |
 
-`/etc/profile.d/*.sh` is sourced by `/etc/profile` for **login** shells
-(`sh`/`bash`). For **zsh** logins, source it from `/etc/zsh/zprofile` instead
-(zsh does not read `/etc/profile`):
-
-```bash
-echo '. /etc/profile.d/zz-lmu-status-panel.sh' | sudo tee -a /etc/zsh/zprofile
-```
-
-### Install (local — a single user)
-
-No root needed — add the same call to your personal login profile
-(`~/.profile` or `~/.bash_profile`, or `~/.zprofile` for zsh):
-
-```bash
-cat >> ~/.profile <<'EOF'
-case $- in *i*) command -v status-full >/dev/null 2>&1 && status-full ;; esac
-EOF
-```
-
-Global vs. local gives you flexibility: roll it out for everyone via
+Global vs. user gives you flexibility: roll it out for everyone via
 `/etc/profile.d`, or let individual users opt in (or override the global one)
-from their own profile.
+from their own profile. The snippet only runs for **login** shells (SSH logins,
+`bash -l`) and only when interactive — it renders once at login; resizing the
+window afterwards re-renders on the next login.
 
-If the command lives in a virtualenv, call it by absolute path, e.g.
-`/opt/lmu/venv/bin/status-full`. To avoid a duplicate static banner, make
-sure no `update-motd.d` hook is installed and, if present, empty `/etc/motd`
-(and optionally set `PrintMotd no` in `/etc/ssh/sshd_config`).
-
-> Note: `profile.d` runs for **login** shells (SSH logins, `bash -l`), not for
-> every new terminal tab on an existing session — matching typical MOTD
-> behaviour. It renders once at login; resizing the window afterwards re-renders
-> only on the next login.
+To avoid a duplicate static banner, make sure no `update-motd.d` hook is
+installed and, if present, empty `/etc/motd` (and optionally set `PrintMotd no`
+in `/etc/ssh/sshd_config`).
 
 ### Fallback: update-motd.d (fixed width, not recommended here)
 
-If you must use the classic MOTD mechanism, install the hook and set a fixed
-wide `width` in the config — accepting that it will not adapt to each login:
-
-```bash
-sudo cp contrib/50-lmu-status-panel /etc/update-motd.d/
-sudo chmod +x /etc/update-motd.d/50-lmu-status-panel
-```
-
-The hook is just `exec status-full`; use an absolute path for a virtualenv.
-Colours are forced on, so terminals show them despite the missing TTY. For our
-mix of 4K and laptop screens this is the wrong trade-off — prefer `profile.d`.
+If you must use the classic MOTD mechanism, drop a one-line hook
+(`exec status-full`) into `/etc/update-motd.d/` and set a fixed wide `width` in
+the config — accepting that it will **not** adapt to each login's window. For a
+mix of 4K and laptop screens that is the wrong trade-off; prefer `install-panel`.
 
 ## Service descriptions (Docker Swarm)
 
