@@ -1,4 +1,4 @@
-from lmu.terminal_status_panel.model import (
+from terminal_status_panel.model import (
     FilesystemUsage,
     PanelData,
     ResourceUsage,

@@ -1,6 +1,6 @@
 from rich.text import Text
 
-from lmu.terminal_status_panel.render import bars
+from terminal_status_panel.render import bars
 
 
 def test_classify_thresholds():

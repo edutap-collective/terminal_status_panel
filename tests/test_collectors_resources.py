@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from lmu.terminal_status_panel.collectors import resources
-from lmu.terminal_status_panel.model import ResourceUsage
+from terminal_status_panel.collectors import resources
+from terminal_status_panel.model import ResourceUsage
 
 
 @pytest.fixture

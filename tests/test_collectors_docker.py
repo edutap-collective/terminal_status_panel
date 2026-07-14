@@ -1,5 +1,5 @@
-from lmu.terminal_status_panel.collectors import docker as docker_collector
-from lmu.terminal_status_panel.model import SwarmInfo
+from terminal_status_panel.collectors import docker as docker_collector
+from terminal_status_panel.model import SwarmInfo
 
 
 class _FakeService:

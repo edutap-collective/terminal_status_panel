@@ -1,4 +1,4 @@
-# lmu.terminal_status_panel
+# terminal-status-panel
 
 A small Python package that renders a colorful server status panel on login —
 best run from a `profile.d` snippet so it uses the full terminal width (see
@@ -93,7 +93,7 @@ The width is resolved in this order (first match wins):
 ## Configuration
 
 Zero configuration is required. Settings are read from
-`/etc/lmu-status-panel/config.toml` (override with `--config PATH`). A missing
+`/etc/terminal-status-panel/config.toml` (override with `--config PATH`). A missing
 or unreadable file falls back to the built-in defaults — it never raises.
 
 ### Configuration reference
@@ -261,7 +261,7 @@ Change the read label key via `docker.description_label` in the config.
 
 Logos are **pre-rendered** from real PNGs into half-block ANSI (`▀` with
 fore/background colours) and bundled under
-`src/lmu/terminal_status_panel/render/logos/*.ans`. They are plain ANSI, so they
+`src/terminal_status_panel/render/logos/*.ans`. They are plain ANSI, so they
 render in MOTD and over SSH without any image protocol or runtime dependency.
 The correct logo is chosen automatically from the detected distribution
 (Debian / Ubuntu / generic Linux).

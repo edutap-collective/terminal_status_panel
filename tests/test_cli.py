@@ -1,4 +1,4 @@
-from lmu.terminal_status_panel import cli
+from terminal_status_panel import cli
 
 
 def test_main_exits_zero_and_prints(capsys):

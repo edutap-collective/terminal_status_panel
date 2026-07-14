@@ -1,20 +1,23 @@
 [project]
-name = "lmu.terminal_status_panel"
+name = "terminal-status-panel"
 version = "0.1.0"
-description = "A short project description"
+description = "Colorful login status panel for servers: system, resources, and Docker Swarm health"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "EUPL-1.2" }
+license = "EUPL-1.2"
+license-files = ["LICENSE"]
+keywords = ["motd", "status", "dashboard", "docker", "swarm", "server", "terminal", "rich"]
 classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "License :: OSI Approved :: European Union Public Licence 1.2 (EUPL 1.2)",
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Topic :: Software Development :: Libraries",
-    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: System Administrators",
+    "Topic :: System :: Systems Administration",
+    "Topic :: System :: Monitoring",
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
 ]
 authors = [
 	{ name = "Alexander Loechel", email = "Alexander.Loechel@lmu.de" }
@@ -43,29 +46,33 @@ typecheck  = [
 ]
 
 [project.scripts]
-status-full = "lmu.terminal_status_panel.cli:main"
-status-server = "lmu.terminal_status_panel.cli:server_main"
-status-docker = "lmu.terminal_status_panel.cli:docker_main"
+status-full = "terminal_status_panel.cli:main"
+status-server = "terminal_status_panel.cli:server_main"
+status-docker = "terminal_status_panel.cli:docker_main"
+install-panel = "terminal_status_panel.install:main"
 
 [project.urls]
-Source = "https://gitlab.lrz.de/LMU/lmu.terminal_status_panel"
-Issues = "https://gitlab.lrz.de/LMU/lmu.terminal_status_panel/issues"
-Documentation = "https://lmu.gitlab.lrz.de/packages/lmu.terminal_status_panel/docs/index.html"
+Homepage = "https://github.com/edutap-collective/terminal_status_panel"
+Repository = "https://github.com/edutap-collective/terminal_status_panel"
+Issues = "https://github.com/edutap-collective/terminal_status_panel/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/lmu"]
+packages = ["src/terminal_status_panel"]
 artifacts = ["**/*.ans"]  # pre-rendered half-block OS logos
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "tools", "README.md", "LICENSE", "pyproject.toml"]
 
 
 
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra -q --cov-report term --cov=lmu.terminal_status_panel --cov-report html"
+addopts = "-ra -q --cov-report term --cov=terminal_status_panel --cov-report html"
 testpaths = [
     "tests"
 ]

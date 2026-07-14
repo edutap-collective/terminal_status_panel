@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from lmu.terminal_status_panel.collectors import updates
-from lmu.terminal_status_panel.model import UpdateInfo
+from terminal_status_panel.collectors import updates
+from terminal_status_panel.model import UpdateInfo
 
 
 def test_parses_apt_check_output(monkeypatch):

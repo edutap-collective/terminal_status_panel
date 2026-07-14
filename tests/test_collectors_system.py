@@ -1,8 +1,8 @@
 import socket
 from types import SimpleNamespace
 
-from lmu.terminal_status_panel.collectors import system
-from lmu.terminal_status_panel.model import SystemInfo
+from terminal_status_panel.collectors import system
+from terminal_status_panel.model import SystemInfo
 
 
 def test_collect_system_populates_fields(monkeypatch):

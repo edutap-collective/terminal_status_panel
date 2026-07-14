@@ -1,14 +1,14 @@
 from rich.console import Console
 
-from lmu.terminal_status_panel.config import Config
-from lmu.terminal_status_panel.model import (
+from terminal_status_panel.config import Config
+from terminal_status_panel.model import (
     PanelData,
     ResourceUsage,
     SwarmInfo,
     SystemInfo,
     UpdateInfo,
 )
-from lmu.terminal_status_panel.render import layout
+from terminal_status_panel.render import layout
 
 
 def _render(data, width=100) -> str:

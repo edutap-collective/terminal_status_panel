@@ -1,7 +1,7 @@
 from rich.console import Console
 
-from lmu.terminal_status_panel.config import Config
-from lmu.terminal_status_panel.model import (
+from terminal_status_panel.config import Config
+from terminal_status_panel.model import (
     FilesystemUsage,
     ResourceUsage,
     ServiceStatus,
@@ -11,7 +11,7 @@ from lmu.terminal_status_panel.model import (
     SystemInfo,
     UpdateInfo,
 )
-from lmu.terminal_status_panel.render import panels
+from terminal_status_panel.render import panels
 
 
 def _text(renderable, width=100) -> str:

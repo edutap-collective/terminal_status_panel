@@ -6,7 +6,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 
-DEFAULT_CONFIG_PATH = "/etc/lmu-status-panel/config.toml"
+DEFAULT_CONFIG_PATH = "/etc/terminal-status-panel/config.toml"
 
 
 @dataclass
