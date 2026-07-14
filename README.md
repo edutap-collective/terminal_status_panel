@@ -264,6 +264,46 @@ source PNGs into `assets/logos/` and run:
 python tools/generate_logos.py
 ```
 
+## Development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e '.[dev,test]'
+ruff check src tests
+python -m pytest
+```
+
+CI (`.github/workflows/ci.yml`) runs ruff and the test suite on every push and
+pull request across Python 3.11–3.13.
+
+## Publishing to PyPI
+
+Releases are automated. Pushing a version tag `vX.Y.Z` triggers
+`.github/workflows/release.yml`, which builds the sdist + wheel and publishes to
+PyPI via **Trusted Publishing (OIDC)** — no API token is stored in the repo.
+
+Release steps:
+
+```bash
+# 1. bump the version in pyproject.toml (must match the tag)
+# 2. commit, then tag and push
+git commit -am "release: v0.1.0"
+git tag v0.1.0
+git push && git push --tags
+```
+
+One-time setup (before the first release):
+
+1. On <https://pypi.org> → *Your projects* → *Publishing*, add a **pending
+   trusted publisher** with:
+   - **PyPI project name:** `terminal-status-panel`
+   - **Owner:** `edutap-collective`
+   - **Repository name:** `terminal_status_panel`
+   - **Workflow name:** `release.yml`
+   - **Environment name:** `pypi`
+2. In the GitHub repo → *Settings → Environments*, create an environment named
+   `pypi` (optionally add required reviewers to gate publishes).
+
 ## License
 
-EUPL-1.2
+Licensed under the [EUPL-1.2](LICENSE).
