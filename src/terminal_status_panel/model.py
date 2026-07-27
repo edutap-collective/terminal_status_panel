@@ -80,6 +80,18 @@ class SwarmNode:
     role: str | None = None  # manager / worker
     leader: bool = False
     state: str | None = None  # raw node state (ready / down / ...)
+    availability: str | None = None  # active / pause / drain (Spec.Availability)
+
+    @property
+    def operational(self) -> bool:
+        """Ready *and* accepting tasks.
+
+        A drained or paused node still reports ``ready`` — it talks to the
+        managers but runs no tasks, so it must not be shown as healthy.
+        ``None`` means the daemon did not report availability; treat that as
+        active so behaviour is unchanged against older daemons.
+        """
+        return self.reachable and self.availability in (None, "active")
 
 
 @dataclass
