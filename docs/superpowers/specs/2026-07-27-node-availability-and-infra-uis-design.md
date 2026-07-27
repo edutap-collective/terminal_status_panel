@@ -136,6 +136,12 @@ of a synthetic stack entry named `infra-uis`, which is placed **first** in the
 same base-name logic as elsewhere (node suffix and stack prefix stripped), so
 `kafka_kafbat-ui-<node>` shows as `kafbat-ui`.
 
+A service that came along only because its *stack* name matched — a sidecar
+such as `portainer_agent` or `cloudbeaver_db` — would otherwise render as a
+bare `agent` / `db` row, meaningless once detached from its stack. Such a row
+keeps its origin as `stack/service`. The rule: qualify the label with the
+origin stack whenever the stripped label does not itself match a UI key.
+
 If nothing matches, no `infra-uis` row is emitted at all.
 
 The entry always renders in the "stack header plus one sub-row per service"
@@ -146,14 +152,15 @@ keep their existing single-service collapse.
 Example:
 
 ```
-Infrastruktur    ccc-01  ccn-01  ccn-02   Description
+Infrastruktur      ccc-01  ccn-01  ccn-02   Description
 infra-uis
-  cloudbeaver      ✅
-  kafbat-ui                ✅
-  mongo-express    ✅
-  rustfs-console           ✅
-kafka              ✅      ✅      ✅
-PostgreSQL-18      ✅
+  cloudbeaver        ✅
+  cloudbeaver/db     ✅              backing postgres
+  kafbat-ui                  ✅
+  mongo-express      ✅
+  rustfs-console             ✅
+kafka                ✅      ✅      ✅
+PostgreSQL-18        ✅
 ```
 
 ## Error handling

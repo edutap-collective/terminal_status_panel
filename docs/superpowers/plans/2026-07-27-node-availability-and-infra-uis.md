@@ -882,5 +882,8 @@ Report changed files, test results, risks and open questions to the user.
 - **Whole-stack capture.** A stack whose *name* matches a UI key (e.g. a stack
   named `cloudbeaver`) moves entirely into `infra-uis`, including any sidecar
   services it contains. This is intended for single-purpose UI stacks.
+  **Amended during execution** (plan owner's ruling on a Task 5 review
+  finding): such a sidecar keeps its origin as a `stack/service` label, so a
+  detached row stays attributable. See the spec's *Grouping* section.
 - **Behaviour change for existing deployments.** Hosts running Portainer will
   see it move from a top-level *Infrastruktur* row into the `infra-uis` group.
