@@ -34,3 +34,19 @@ def test_toml_overrides_defaults(tmp_path):
     assert cfg.thresholds.memory_critical == 85.0
     # untouched thresholds keep defaults
     assert cfg.thresholds.filesystem_critical == 90.0
+
+
+def test_infra_ui_services_default(tmp_path):
+    cfg = load_config(tmp_path / "does-not-exist.toml")
+    assert "kafbat-ui" in cfg.infra_ui_services
+    assert "cloudbeaver" in cfg.infra_ui_services
+    assert "mongo-express" in cfg.infra_ui_services
+
+
+def test_infra_ui_services_from_toml(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[docker]\ninfra_ui_services = ["cloudbeaver", "my-own-ui"]\n')
+    cfg = load_config(path)
+    assert cfg.infra_ui_services == ["cloudbeaver", "my-own-ui"]
+    # An unrelated option keeps its default.
+    assert cfg.docker_timeout == 1.5

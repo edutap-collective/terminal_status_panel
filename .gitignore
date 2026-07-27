@@ -41,6 +41,9 @@ var/
 .pytest_cache/
 venv/
 .venv/
+# lockfile from `uv venv` bootstrap; this is a library distributed via PyPI,
+# not an application, and CI installs with pip, so it should not be committed.
+uv.lock
 
 /.env
 /*.json

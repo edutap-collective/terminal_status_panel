@@ -27,7 +27,11 @@ _CPU_CRITICAL = 90.0
 
 # Emoji status markers — readable regardless of color perception.
 _OK = "✅"
+_WARN = "⚠️"
 _DEAD = "💀"
+
+# Name of the synthetic stack collecting infrastructure admin UIs.
+INFRA_UI_STACK = "infra-uis"
 
 
 def section(title: str, body: RenderableType) -> Group:
@@ -254,9 +258,12 @@ def filesystem_panel(res: ResourceUsage | None) -> Group:
 # --------------------------------------------------------------------------- #
 
 def _node_health(node) -> Text:
-    if node.reachable:
-        return Text(_OK)
-    return Text(f"{_DEAD} {node.state or 'down'}", style="red")
+    """✅ ready and active · ⚠️ ready but drained/paused · 💀 unreachable."""
+    if not node.reachable:
+        return Text(f"{_DEAD} {node.state or 'down'}", style="red")
+    if not node.operational:
+        return Text(f"{_WARN} {node.availability or 'unavailable'}", style="yellow")
+    return Text(_OK)
 
 
 def _node_inline(node, mark_leader: bool = False) -> Text:
@@ -290,6 +297,33 @@ def _short_node_names(nodes) -> list[tuple[str, str]]:
     return [(n.name, n.name[len(prefix):] or n.name) for n in ordered]
 
 
+def _node_capacity(nodes) -> Text | None:
+    """A ' (1 drain, 1 down)' note, or None when every node is operational.
+
+    Unreachable nodes count as 'down' only — their availability is moot."""
+    withdrawn: dict[str, int] = {}
+    down = 0
+    for node in nodes:
+        if not node.reachable:
+            down += 1
+        elif not node.operational:
+            key = node.availability or "unavailable"
+            withdrawn[key] = withdrawn.get(key, 0) + 1
+    if not withdrawn and not down:
+        return None
+
+    parts = [(f"{count} {name}", "yellow") for name, count in sorted(withdrawn.items())]
+    if down:
+        parts.append((f"{down} down", "red"))
+    note = Text(" (")
+    for index, (label, style) in enumerate(parts):
+        if index:
+            note.append(", ")
+        note.append(label, style=style)
+    note.append(")")
+    return note
+
+
 def _swarm_body(swarm: SwarmInfo) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
@@ -298,11 +332,14 @@ def _swarm_body(swarm: SwarmInfo) -> RenderableType:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan")
     table.add_column()
-    table.add_row("Swarm", Text.assemble(
-        ("active", "green"),
-        (f"  ·  {role}  ·  {n_nodes} nodes  ·  "
-         f"{len(swarm.services)} services  ·  {n_stacks} stacks", "default"),
-    ))
+    summary = Text()
+    summary.append("active", style="green")
+    summary.append(f"  ·  {role}  ·  {n_nodes} nodes")
+    capacity = _node_capacity(swarm.nodes)
+    if capacity is not None:
+        summary.append_text(capacity)
+    summary.append(f"  ·  {len(swarm.services)} services  ·  {n_stacks} stacks")
+    table.add_row("Swarm", summary)
     table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True))
     return table
 
@@ -349,6 +386,37 @@ def _group_desc(services) -> str:
     return next((s.description for s in services if s.description), "")
 
 
+def _split_infra_uis(services, ui_keys, node_names) -> tuple[list, list]:
+    """Split *services* into (admin UIs, everything else).
+
+    A service matches when one of *ui_keys* occurs in its stack name or in its
+    node-suffix-stripped service name, so a UI is found whether it runs as a
+    standalone container, as its own stack, or inside a larger stack."""
+    uis, rest = [], []
+    for svc in services:
+        base = _base_service_name(svc.name, node_names)
+        haystack = f"{svc.stack or ''} {base}".lower()
+        (uis if any(key in haystack for key in ui_keys) else rest).append(svc)
+    return uis, rest
+
+
+def _ui_subrows(ui_services, node_names, ui_keys) -> list[tuple[str, list, str]]:
+    """One sub-row per admin UI, labelled without stack prefix or node suffix.
+
+    A service that only came along because its *stack* name matched — a sidecar
+    such as ``portainer_agent`` — keeps its origin as ``stack/service``, so a
+    detached row stays attributable."""
+    rows = []
+    for base, group in _base_groups(ui_services, node_names).items():
+        stack = next((s.stack for s in group if s.stack), "")
+        label = (_strip_stack_prefix(base, stack) if stack else base) or base
+        if stack and not any(key in label.lower() for key in ui_keys):
+            label = f"{stack}/{label}"
+        rows.append((label, group, _group_desc(group)))
+    rows.sort(key=lambda row: row[0].lower())
+    return rows
+
+
 def _stack_matrix(title: str, entries: list[tuple[str, list]], nodes) -> RenderableType:
     short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
@@ -370,8 +438,12 @@ def _stack_matrix(title: str, entries: list[tuple[str, list]], nodes) -> Rendera
         cells.append(Text(desc or ""))
         table.add_row(*cells)
 
-    for stack_name, subrows in sorted(entries, key=lambda e: e[0].lower()):
-        if len(subrows) == 1:
+    # The pseudo stack heads the block; real stacks stay alphabetical.
+    for stack_name, subrows in sorted(
+        entries, key=lambda e: (e[0] != INFRA_UI_STACK, e[0].lower())
+    ):
+        # A lone UI must keep its own name; collapsing would hide which one runs.
+        if len(subrows) == 1 and stack_name != INFRA_UI_STACK:
             _, services, desc = subrows[0]
             _row(Text(stack_name), services, desc)
         else:
@@ -384,6 +456,7 @@ def _stack_matrix(title: str, entries: list[tuple[str, list]], nodes) -> Rendera
 
 def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
+    ui_keys = [k.lower() for k in cfg.infra_ui_services]
     node_names = [n.name for n in swarm.nodes]
 
     def is_infra(name: str) -> bool:
@@ -396,15 +469,20 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
             for base in sorted(groups, key=str.lower)
         ]
 
+    # Admin UIs leave their origin stack and form one pseudo stack.
+    ui_services, remaining = _split_infra_uis(swarm.services, ui_keys, node_names)
+
     stacks: dict[str, list] = {}
     ungrouped: list = []
-    for svc in swarm.services:
+    for svc in remaining:
         if svc.stack is None:
             ungrouped.append(svc)
         else:
             stacks.setdefault(svc.stack, []).append(svc)
 
     infra, service = [], []
+    if ui_services:
+        infra.append((INFRA_UI_STACK, _ui_subrows(ui_services, node_names, ui_keys)))
     for name, svcs in stacks.items():
         entry = (name, subrows_for(name, svcs))
         (infra if is_infra(name) else service).append(entry)

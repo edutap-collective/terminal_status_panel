@@ -26,6 +26,18 @@ DEFAULT_INFRASTRUCTURE_STACKS = [
     "elasticsearch",
 ]
 
+# Admin web UIs for infrastructure services. Matched case-insensitively against
+# the stack name *and* the service name; matches are grouped into the
+# "infra-uis" pseudo stack and win over DEFAULT_INFRASTRUCTURE_STACKS.
+DEFAULT_INFRA_UI_SERVICES = [
+    "kafbat-ui", "kafka-ui", "kafdrop",
+    "cloudbeaver", "pgadmin", "adminer",
+    "mongo-express", "mongo-gui",
+    "rustfs-console", "rustfs-ui", "s3-browser", "s3browser",
+    "redisinsight", "redis-commander",
+    "portainer", "dozzle", "kibana",
+]
+
 
 @dataclass
 class Config:
@@ -35,6 +47,9 @@ class Config:
     description_label: str = "lmu.service.description"
     infrastructure_stacks: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRASTRUCTURE_STACKS)
+    )
+    infra_ui_services: list[str] = field(
+        default_factory=lambda: list(DEFAULT_INFRA_UI_SERVICES)
     )
     thresholds: Thresholds = field(default_factory=Thresholds)
 
@@ -73,6 +88,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     docker = _section(data, "docker")
     services = _section(data, "services")
     infra = docker.get("infrastructure_stacks", services.get("infrastructure", None))
+    infra_uis = docker.get("infra_ui_services", None)
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
@@ -80,5 +96,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         description_label=str(docker.get("description_label", "lmu.service.description")),
         infrastructure_stacks=list(infra) if infra is not None
         else list(DEFAULT_INFRASTRUCTURE_STACKS),
+        infra_ui_services=list(infra_uis) if infra_uis is not None
+        else list(DEFAULT_INFRA_UI_SERVICES),
         thresholds=thresholds,
     )

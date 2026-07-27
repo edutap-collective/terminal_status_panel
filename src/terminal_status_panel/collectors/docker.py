@@ -34,13 +34,16 @@ def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
             id_to_name[node_id] = name
         manager = attrs.get("ManagerStatus") or {}
         state = attrs.get("Status", {}).get("State")
+        spec = attrs.get("Spec", {})
         nodes.append(
             SwarmNode(
                 name=name,
                 reachable=state == "ready",
-                role=attrs.get("Spec", {}).get("Role"),
+                role=spec.get("Role"),
                 leader=bool(manager.get("Leader", False)),
                 state=state,
+                # active / pause / drain — a drained node is ready but idle.
+                availability=spec.get("Availability"),
             )
         )
     nodes.sort(key=lambda n: n.name)  # stable, alphabetical hostname order
