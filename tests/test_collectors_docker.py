@@ -28,13 +28,14 @@ class _FakeService:
 
 
 class _FakeNode:
-    def __init__(self, node_id, hostname, state="ready", role="worker", leader=False):
+    def __init__(self, node_id, hostname, state="ready", role="worker", leader=False,
+                 availability="active"):
         self.id = node_id
         self.attrs = {
             "ID": node_id,
             "Description": {"Hostname": hostname},
             "Status": {"State": state},
-            "Spec": {"Role": role},
+            "Spec": {"Role": role, "Availability": availability},
         }
         if leader:
             self.attrs["ManagerStatus"] = {"Leader": True}
@@ -160,3 +161,30 @@ def test_swarm_inactive_falls_back_to_containers(monkeypatch):
     assert result.reachable is True and result.enabled is False
     assert {s.name for s in result.services} == {"redis", "nginx"}
     assert all(s.running_replicas == 1 and s.desired_replicas == 1 for s in result.services)
+
+
+def test_drained_node_is_ready_but_not_operational(monkeypatch):
+    client = _FakeClient("active", nodes=[
+        _FakeNode("n1", "srv-01"),
+        _FakeNode("n2", "srv-02", availability="drain"),
+    ])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    active, drained = docker_collector.collect_docker().nodes
+
+    assert active.availability == "active" and active.operational is True
+    # Drained nodes still report 'ready' — that must not read as healthy.
+    assert drained.reachable is True
+    assert drained.state == "ready"
+    assert drained.availability == "drain"
+    assert drained.operational is False
+
+
+def test_missing_availability_field_stays_operational(monkeypatch):
+    node = _FakeNode("n1", "srv-01")
+    del node.attrs["Spec"]["Availability"]
+    client = _FakeClient("active", nodes=[node])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+
+    assert result.nodes[0].availability is None
+    assert result.nodes[0].operational is True
