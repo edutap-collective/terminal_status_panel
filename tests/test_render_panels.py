@@ -220,6 +220,10 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
                           tasks=[ServiceTask(N1, "running")]),
             ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="frontend",
                           tasks=[ServiceTask(N1, "running")]),
+            # A real infrastructure stack that sorts alphabetically before
+            # 'infra-uis' — the pseudo stack must still come first.
+            ServiceStatus("elasticsearch_es", 1, 1, stack="elasticsearch",
+                          description="Search", tasks=[ServiceTask(N1, "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -229,9 +233,11 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     kafka_at = _line_index(out, lambda ln: ln.strip().startswith("kafka"))
     service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
     container_at = _line_index(out, lambda ln: ln.strip().startswith("Container (ohne"))
+    es_at = _line_index(out, lambda ln: ln.strip().startswith("elasticsearch"))
 
     # The pseudo stack heads the Infrastruktur block.
     assert infra_at < uis_at < kafka_at < service_at
+    assert uis_at < es_at  # pseudo stack is hoisted, not sorted alphabetically
     # All three UI shapes ended up inside it.
     for ui in ("kafbat-ui", "cloudbeaver", "mongo-express"):
         assert uis_at < _line_index(out, lambda ln, ui=ui: ui in ln) < kafka_at
@@ -274,6 +280,29 @@ def test_infra_ui_services_win_over_infrastructure_stacks():
     assert _line_index(out, lambda ln: ln.strip().startswith("portainer")) < _line_index(
         out, lambda ln: ln.strip().startswith("kafka")
     )
+
+
+def test_ui_sidecar_keeps_its_stack_for_attribution():
+    """A service pulled in only because its STACK name matched a UI key (a
+    sidecar such as 'portainer_agent') keeps 'stack/service' as its label —
+    the UI itself still renders under its plain, unqualified name."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[
+            ServiceStatus("portainer_portainer", 1, 1, stack="portainer",
+                          description="Docker UI", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("portainer_agent", 1, 1, stack="portainer",
+                          description="Portainer agent", tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "portainer/agent" in out
+    # The UI row itself stays plain, not qualified as 'portainer/portainer'.
+    lines = out.splitlines()
+    portainer_line = next(ln for ln in lines if ln.strip().startswith("portainer") and
+                          "portainer/agent" not in ln)
+    assert "portainer/portainer" not in portainer_line
 
 
 def test_no_infra_uis_row_without_matching_services():

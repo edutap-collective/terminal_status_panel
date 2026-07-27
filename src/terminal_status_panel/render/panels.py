@@ -400,13 +400,19 @@ def _split_infra_uis(services, ui_keys, node_names) -> tuple[list, list]:
     return uis, rest
 
 
-def _ui_subrows(ui_services, node_names) -> list[tuple[str, list, str]]:
-    """One sub-row per admin UI, labelled without stack prefix or node suffix."""
+def _ui_subrows(ui_services, node_names, ui_keys) -> list[tuple[str, list, str]]:
+    """One sub-row per admin UI, labelled without stack prefix or node suffix.
+
+    A service that only came along because its *stack* name matched — a sidecar
+    such as ``portainer_agent`` — keeps its origin as ``stack/service``, so a
+    detached row stays attributable."""
     rows = []
     for base, group in _base_groups(ui_services, node_names).items():
         stack = next((s.stack for s in group if s.stack), "")
-        label = _strip_stack_prefix(base, stack) if stack else base
-        rows.append((label or base, group, _group_desc(group)))
+        label = (_strip_stack_prefix(base, stack) if stack else base) or base
+        if stack and not any(key in label.lower() for key in ui_keys):
+            label = f"{stack}/{label}"
+        rows.append((label, group, _group_desc(group)))
     rows.sort(key=lambda row: row[0].lower())
     return rows
 
@@ -476,7 +482,7 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
 
     infra, service = [], []
     if ui_services:
-        infra.append((INFRA_UI_STACK, _ui_subrows(ui_services, node_names)))
+        infra.append((INFRA_UI_STACK, _ui_subrows(ui_services, node_names, ui_keys)))
     for name, svcs in stacks.items():
         entry = (name, subrows_for(name, svcs))
         (infra if is_infra(name) else service).append(entry)
