@@ -92,8 +92,11 @@ Drain/pause counts render yellow, down counts red. Nodes are counted by their
 an unreachable node counts only once, as `down`, regardless of its
 availability.
 
-The service matrix needs no change: a drained node has no tasks, so
-`_node_cell()` already renders an empty cell rather than a misleading ✅.
+The service matrix needs no change. A *drained* node has had its tasks
+rescheduled elsewhere, so `_node_cell()` already renders an empty cell rather
+than a misleading ✅. A *paused* node keeps its running tasks — there the ✅ is
+accurate, and the `⚠️ pause` on the node line supplies the missing context that
+no new work will land there.
 
 ## Change 2 — `infra-uis` pseudo stack
 
