@@ -152,3 +152,44 @@ def test_services_section_merges_per_node_replicas():
 def test_services_section_unreachable():
     out = _text(panels.services_section(SwarmInfo(reachable=False), Config()))
     assert "not reachable" in out.lower()
+
+
+def _mixed_availability_swarm() -> SwarmInfo:
+    """One active, one drained, one down node — no services."""
+    return SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=3,
+        nodes=[
+            SwarmNode("srv-01", reachable=True, role="manager", leader=True,
+                      state="ready", availability="active"),
+            SwarmNode("srv-02", reachable=True, role="worker",
+                      state="ready", availability="drain"),
+            SwarmNode("srv-03", reachable=False, role="worker",
+                      state="down", availability="active"),
+        ],
+    )
+
+
+def test_drained_node_is_not_rendered_as_healthy():
+    out = _text(panels.services_section(_mixed_availability_swarm(), Config()), width=170)
+    nodes_line = next(line for line in out.splitlines() if "srv-02" in line)
+    assert "⚠" in nodes_line and "drain" in nodes_line
+    assert "srv-02 ✅" not in nodes_line
+    # The healthy and the dead node keep their existing markers.
+    assert "srv-01 ✅" in nodes_line
+    assert "💀" in nodes_line and "down" in nodes_line
+
+
+def test_swarm_summary_counts_unavailable_nodes():
+    out = _text(panels.services_section(_mixed_availability_swarm(), Config()), width=170)
+    assert "3 nodes (1 drain, 1 down)" in out
+
+
+def test_swarm_summary_omits_capacity_note_when_all_nodes_are_active():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=2,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active"),
+               SwarmNode("srv-02", reachable=True, state="ready", availability="active")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "2 nodes  ·" in out
+    assert "drain" not in out and "down" not in out

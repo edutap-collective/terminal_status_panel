@@ -10,6 +10,9 @@ out in three tiers:
   usage table.
 - **DOCKER INFOS** — Swarm key facts (summary + node health) above three
   stacked node matrices: *Infrastruktur*, *Service*, and standalone *Container*.
+  Node health has three states: ✅ ready and active, ⚠️ ready but drained or
+  paused (it accepts no tasks), 💀 unreachable; the summary line counts the
+  non-operational ones, e.g. `5 nodes (1 drain, 1 down)`.
   Per-node replicas of the same service (e.g. `kafka_kafka-<node>` on every
   node) collapse into a single row; a stack with one logical service shows as
   one row named after the stack, a stack with several shows a header plus one

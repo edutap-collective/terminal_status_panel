@@ -27,6 +27,7 @@ _CPU_CRITICAL = 90.0
 
 # Emoji status markers — readable regardless of color perception.
 _OK = "✅"
+_WARN = "⚠️"
 _DEAD = "💀"
 
 
@@ -254,9 +255,12 @@ def filesystem_panel(res: ResourceUsage | None) -> Group:
 # --------------------------------------------------------------------------- #
 
 def _node_health(node) -> Text:
-    if node.reachable:
-        return Text(_OK)
-    return Text(f"{_DEAD} {node.state or 'down'}", style="red")
+    """✅ ready and active · ⚠️ ready but drained/paused · 💀 unreachable."""
+    if not node.reachable:
+        return Text(f"{_DEAD} {node.state or 'down'}", style="red")
+    if not node.operational:
+        return Text(f"{_WARN} {node.availability}", style="yellow")
+    return Text(_OK)
 
 
 def _node_inline(node, mark_leader: bool = False) -> Text:
@@ -290,6 +294,33 @@ def _short_node_names(nodes) -> list[tuple[str, str]]:
     return [(n.name, n.name[len(prefix):] or n.name) for n in ordered]
 
 
+def _node_capacity(nodes) -> Text | None:
+    """A ' (1 drain, 1 down)' note, or None when every node is operational.
+
+    Unreachable nodes count as 'down' only — their availability is moot."""
+    withdrawn: dict[str, int] = {}
+    down = 0
+    for node in nodes:
+        if not node.reachable:
+            down += 1
+        elif not node.operational:
+            key = node.availability or "unavailable"
+            withdrawn[key] = withdrawn.get(key, 0) + 1
+    if not withdrawn and not down:
+        return None
+
+    parts = [(f"{count} {name}", "yellow") for name, count in sorted(withdrawn.items())]
+    if down:
+        parts.append((f"{down} down", "red"))
+    note = Text(" (")
+    for index, (label, style) in enumerate(parts):
+        if index:
+            note.append(", ")
+        note.append(label, style=style)
+    note.append(")")
+    return note
+
+
 def _swarm_body(swarm: SwarmInfo) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
@@ -298,11 +329,14 @@ def _swarm_body(swarm: SwarmInfo) -> RenderableType:
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan")
     table.add_column()
-    table.add_row("Swarm", Text.assemble(
-        ("active", "green"),
-        (f"  ·  {role}  ·  {n_nodes} nodes  ·  "
-         f"{len(swarm.services)} services  ·  {n_stacks} stacks", "default"),
-    ))
+    summary = Text()
+    summary.append("active", style="green")
+    summary.append(f"  ·  {role}  ·  {n_nodes} nodes")
+    capacity = _node_capacity(swarm.nodes)
+    if capacity is not None:
+        summary.append_text(capacity)
+    summary.append(f"  ·  {len(swarm.services)} services  ·  {n_stacks} stacks")
+    table.add_row("Swarm", summary)
     table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True))
     return table
 
