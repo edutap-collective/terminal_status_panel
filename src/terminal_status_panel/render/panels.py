@@ -262,7 +262,7 @@ def _node_health(node) -> Text:
     if not node.reachable:
         return Text(f"{_DEAD} {node.state or 'down'}", style="red")
     if not node.operational:
-        return Text(f"{_WARN} {node.availability}", style="yellow")
+        return Text(f"{_WARN} {node.availability or 'unavailable'}", style="yellow")
     return Text(_OK)
 
 

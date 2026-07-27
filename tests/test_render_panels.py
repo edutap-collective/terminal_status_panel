@@ -195,6 +195,20 @@ def test_swarm_summary_omits_capacity_note_when_all_nodes_are_active():
     assert "drain" not in out and "down" not in out
 
 
+def test_node_with_empty_availability_falls_back_to_unavailable():
+    # SwarmNode(..., availability="") is not operational, because
+    # "" not in (None, "active") — this pins the same fallback _node_capacity
+    # already applies, so both read "unavailable" instead of a blank label.
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-09", reachable=True, state="ready", availability="")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    nodes_line = next(line for line in out.splitlines() if "srv-09" in line)
+    assert "⚠" in nodes_line and "unavailable" in nodes_line
+    assert "(1 unavailable)" in out
+
+
 def _line_index(out: str, predicate) -> int:
     lines = out.splitlines()
     return next(i for i, line in enumerate(lines) if predicate(line))
@@ -246,6 +260,10 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     assert "cloudbeaver_cloudbeaver" not in out
     # Unrelated services keep their block.
     assert service_at < _line_index(out, lambda ln: "eduTAP" in ln) < container_at
+    # mongo-express must appear exactly once: under infra-uis, not left behind
+    # as a row in the "Container (ohne Stack)" matrix too (_line_index above
+    # only finds the FIRST match, so it would miss a stray leftover row).
+    assert out.count("mongo-express") == 1
 
 
 def test_single_infra_ui_keeps_its_own_name():
