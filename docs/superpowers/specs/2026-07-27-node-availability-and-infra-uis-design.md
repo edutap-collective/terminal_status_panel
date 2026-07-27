@@ -138,8 +138,10 @@ same base-name logic as elsewhere (node suffix and stack prefix stripped), so
 
 If nothing matches, no `infra-uis` row is emitted at all.
 
-Because the entry carries several sub-rows, the existing "stack header plus one
-sub-row per service" rendering in `_stack_matrix()` applies unchanged.
+The entry always renders in the "stack header plus one sub-row per service"
+form of `_stack_matrix()`, even when only a single UI matches — collapsing it
+to one row labelled `infra-uis` would hide *which* UI is running. Real stacks
+keep their existing single-service collapse.
 
 Example:
 
