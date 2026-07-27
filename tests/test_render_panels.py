@@ -193,3 +193,95 @@ def test_swarm_summary_omits_capacity_note_when_all_nodes_are_active():
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "2 nodes  ·" in out
     assert "drain" not in out and "down" not in out
+
+
+def _line_index(out: str, predicate) -> int:
+    lines = out.splitlines()
+    return next(i for i, line in enumerate(lines) if predicate(line))
+
+
+def test_infra_uis_are_grouped_into_a_pseudo_stack():
+    N1, N2 = "srv-01", "srv-02"
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=2,
+        nodes=[SwarmNode(N1, reachable=True, state="ready", availability="active"),
+               SwarmNode(N2, reachable=True, state="ready", availability="active")],
+        services=[
+            ServiceStatus("kafka_kafka", 1, 1, stack="kafka", description="Broker",
+                          tasks=[ServiceTask(N1, "running")]),
+            # A UI living inside a real stack must leave that stack.
+            ServiceStatus("kafka_kafbat-ui", 1, 1, stack="kafka", description="Kafka UI",
+                          tasks=[ServiceTask(N2, "running")]),
+            # A UI deployed as its own stack.
+            ServiceStatus("cloudbeaver_cloudbeaver", 1, 1, stack="cloudbeaver",
+                          description="SQL UI", tasks=[ServiceTask(N1, "running")]),
+            # A UI running as a standalone container.
+            ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
+                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="frontend",
+                          tasks=[ServiceTask(N1, "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastruktur"))
+    uis_at = _line_index(out, lambda ln: ln.strip().startswith("infra-uis"))
+    kafka_at = _line_index(out, lambda ln: ln.strip().startswith("kafka"))
+    service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
+    container_at = _line_index(out, lambda ln: ln.strip().startswith("Container (ohne"))
+
+    # The pseudo stack heads the Infrastruktur block.
+    assert infra_at < uis_at < kafka_at < service_at
+    # All three UI shapes ended up inside it.
+    for ui in ("kafbat-ui", "cloudbeaver", "mongo-express"):
+        assert uis_at < _line_index(out, lambda ln, ui=ui: ui in ln) < kafka_at
+    # Stack prefixes are stripped on the sub-rows.
+    assert "kafka_kafbat-ui" not in out
+    assert "cloudbeaver_cloudbeaver" not in out
+    # Unrelated services keep their block.
+    assert service_at < _line_index(out, lambda ln: "eduTAP" in ln) < container_at
+
+
+def test_single_infra_ui_keeps_its_own_name():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
+                                tasks=[ServiceTask("srv-01", "running")])],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    # Not collapsed to a single row labelled 'infra-uis' — the UI stays named.
+    assert "infra-uis" in out
+    assert "mongo-express" in out
+
+
+def test_infra_ui_services_win_over_infrastructure_stacks():
+    """'portainer' is in both default lists — the UI list decides."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[
+            ServiceStatus("portainer_portainer", 1, 1, stack="portainer",
+                          description="Docker UI", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("kafka_kafka", 1, 1, stack="kafka",
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    uis_at = _line_index(out, lambda ln: ln.strip().startswith("infra-uis"))
+    # Rendered as a sub-row of the pseudo stack, not as a top-level infra row.
+    assert uis_at < _line_index(out, lambda ln: ln.strip().startswith("portainer"))
+    assert _line_index(out, lambda ln: ln.strip().startswith("portainer")) < _line_index(
+        out, lambda ln: ln.strip().startswith("kafka")
+    )
+
+
+def test_no_infra_uis_row_without_matching_services():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("kafka_kafka", 1, 1, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "infra-uis" not in out
