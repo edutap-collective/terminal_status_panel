@@ -33,7 +33,8 @@ DEFAULT_INFRA_UI_SERVICES = [
     "kafbat-ui", "kafka-ui", "kafdrop",
     "cloudbeaver", "pgadmin", "adminer",
     "mongo-express", "mongo-gui",
-    "rustfs-console", "rustfs-ui", "s3-browser", "s3browser",
+    "rustfs-console", "rustfs-ui",
+    "s3-browser", "s3browser", "s3manager",
     "redisinsight", "redis-commander",
     "portainer", "dozzle", "kibana",
 ]
