@@ -202,6 +202,7 @@ def test_parse_mongo_hello_without_a_primary_has_no_quorum():
 def test_probe_mongodb_is_not_applicable_without_a_local_container():
     service = clusters.probe_mongodb(_FakeClient([]))
     assert service.applicable is False
+    assert service.error is None
 
 
 def test_probe_mongodb_runs_mongosh_unauthenticated():
