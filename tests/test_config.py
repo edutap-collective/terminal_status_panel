@@ -1,4 +1,10 @@
-from terminal_status_panel.config import load_config
+from terminal_status_panel.config import DEFAULT_HEALTH_KINDS, load_config
+
+
+def _write(tmp_path, text):
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    return str(path)
 
 
 def test_defaults_when_no_file(tmp_path):
@@ -50,3 +56,58 @@ def test_infra_ui_services_from_toml(tmp_path):
     assert cfg.infra_ui_services == ["cloudbeaver", "my-own-ui"]
     # An unrelated option keeps its default.
     assert cfg.docker_timeout == 1.5
+
+
+def test_health_defaults_without_a_config_file():
+    health = load_config("/nonexistent/config.toml").health
+    assert health.budget == 5.0
+    assert health.enabled == list(DEFAULT_HEALTH_KINDS)
+    assert health.timeouts["kafka"] == 4.0
+    assert health.timeouts["postgres"] == 1.5
+    assert health.dns_expect == []
+
+
+def test_health_budget_and_timeouts_are_overridable(tmp_path):
+    path = _write(tmp_path, """
+[health]
+budget = 8.5
+
+[health.timeout]
+kafka = 6.0
+""")
+    health = load_config(path).health
+    assert health.budget == 8.5
+    assert health.timeouts["kafka"] == 6.0
+    # untouched keys keep their defaults
+    assert health.timeouts["postgres"] == 1.5
+
+
+def test_enabled_kinds_can_be_narrowed(tmp_path):
+    path = _write(tmp_path, """
+[health]
+enabled = ["postgres", "glusterfs"]
+""")
+    assert load_config(path).health.enabled == ["postgres", "glusterfs"]
+
+
+def test_dns_expectations_are_parsed(tmp_path):
+    path = _write(tmp_path, """
+[[health.dns.expect]]
+name = "login.lmu.de"
+addresses = ["10.9.9.9"]
+
+[[health.dns.expect]]
+name = "www.portal.uni-muenchen.de"
+""")
+    expectations = load_config(path).health.dns_expect
+    assert [e.name for e in expectations] == ["login.lmu.de", "www.portal.uni-muenchen.de"]
+    assert expectations[0].addresses == ["10.9.9.9"]
+    assert expectations[1].addresses == []
+
+
+def test_a_broken_health_block_falls_back_to_defaults_instead_of_raising(tmp_path):
+    path = _write(tmp_path, """
+[health]
+budget = "not a number"
+""")
+    assert load_config(path).health.budget == 5.0

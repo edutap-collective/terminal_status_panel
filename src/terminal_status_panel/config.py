@@ -20,6 +20,22 @@ class Thresholds:
     load_critical: float = 1.0  # per-CPU multiplier
 
 
+@dataclass
+class DnsExpectation:
+    name: str
+    addresses: list[str] = field(default_factory=list)
+
+
+@dataclass
+class HealthConfig:
+    budget: float = 5.0
+    timeouts: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_HEALTH_TIMEOUTS)
+    )
+    enabled: list[str] = field(default_factory=lambda: list(DEFAULT_HEALTH_KINDS))
+    dns_expect: list[DnsExpectation] = field(default_factory=list)
+
+
 DEFAULT_INFRASTRUCTURE_STACKS = [
     "postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer",
     "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql",
@@ -39,6 +55,20 @@ DEFAULT_INFRA_UI_SERVICES = [
     "dozzle", "kibana",
 ]
 
+DEFAULT_HEALTH_KINDS = ("postgres", "mongodb", "kafka", "glusterfs", "rustfs")
+
+# Individual timeouts, all below the total budget so one slow check cannot
+# starve the others. Kafka is the expensive one: ~2.6s of JVM startup.
+DEFAULT_HEALTH_TIMEOUTS = {
+    "postgres": 1.5,
+    "mongodb": 2.5,
+    "kafka": 4.0,
+    "glusterfs": 1.0,
+    "rustfs": 2.0,
+    "wireguard": 1.0,
+    "dns": 2.5,
+}
+
 
 @dataclass
 class Config:
@@ -53,6 +83,7 @@ class Config:
         default_factory=lambda: list(DEFAULT_INFRA_UI_SERVICES)
     )
     thresholds: Thresholds = field(default_factory=Thresholds)
+    health: HealthConfig = field(default_factory=HealthConfig)
 
 
 def _section(data: dict, *keys: str) -> dict:
@@ -60,6 +91,45 @@ def _section(data: dict, *keys: str) -> dict:
     for key in keys:
         node = node.get(key, {}) if isinstance(node, dict) else {}
     return node if isinstance(node, dict) else {}
+
+
+def _health_config(data: dict) -> HealthConfig:
+    """Parse the [health] block. A malformed value falls back to its default."""
+    health = _section(data, "health")
+    defaults = HealthConfig()
+
+    try:
+        budget = float(health.get("budget", defaults.budget))
+    except (TypeError, ValueError):
+        budget = defaults.budget
+
+    timeouts = dict(DEFAULT_HEALTH_TIMEOUTS)
+    for key, value in _section(data, "health", "timeout").items():
+        try:
+            timeouts[key] = float(value)
+        except (TypeError, ValueError):
+            continue
+
+    enabled = health.get("enabled")
+    kinds = list(enabled) if isinstance(enabled, list) else list(DEFAULT_HEALTH_KINDS)
+
+    expectations = []
+    raw_expectations = _section(data, "health", "dns").get("expect", [])
+    if isinstance(raw_expectations, list):
+        for entry in raw_expectations:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                continue
+            addresses = entry.get("addresses", [])
+            expectations.append(
+                DnsExpectation(
+                    name=str(entry["name"]),
+                    addresses=list(addresses) if isinstance(addresses, list) else [],
+                )
+            )
+
+    return HealthConfig(
+        budget=budget, timeouts=timeouts, enabled=kinds, dns_expect=expectations
+    )
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:
@@ -100,4 +170,5 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         infra_ui_services=list(infra_uis) if infra_uis is not None
         else list(DEFAULT_INFRA_UI_SERVICES),
         thresholds=thresholds,
+        health=_health_config(data),
     )
