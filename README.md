@@ -26,9 +26,10 @@ out in four tiers:
   runs out renders `…`, deliberately distinct from `✗` for a check that
   actually failed. A service with no member on this node renders `n/a here`
   and is not an error; a service that *should* run here but has no running
-  container (most likely a crash loop) renders `✗ … no running container`
-  instead. See [Cluster health checks](#cluster-health-checks) below for the
-  full icon vocabulary and what the section deliberately cannot see.
+  container (most likely a crash loop) renders `✗ <service>: no running
+  container` instead. See [Cluster health checks](#cluster-health-checks)
+  below for the full icon vocabulary and what the section deliberately
+  cannot see.
 
 The panel itself opens no database or broker connection and holds no
 credentials. Its only privilege is the Docker socket: the Docker section
@@ -213,11 +214,14 @@ WireGuard peer reachability is read from `sudo -n wg show all dump`
 TCP probe of the Swarm port (2377) per peer, and the PEERS sub-header shows
 which method was used (`wg`, `tcp`, or `mixed` when peers disagree).
 
-Measured on a production node (`lmzvd06-ccc-01`, 5-node Swarm, 2026-07-31):
-the whole section took 3.6–4.0 s end to end, within the 5 s default budget.
-Individual probe costs: PostgreSQL `pg_autoctl show state` 0.13 s, MongoDB
-`db.hello()` 0.95 s, Kafka `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not
-optimisable), GlusterFS `gluster … --xml` 0.10 s, RustFS `/health` ~0.2 s.
+Measured on production nodes on 2026-07-31: on `lmzvd06-ccc-01` (5-node
+Swarm), the whole section took 3.6–4.0 s end to end, within the 5 s default
+budget, with individual probe costs of PostgreSQL `pg_autoctl show state`
+0.13 s, Kafka `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not
+optimisable), GlusterFS `gluster … --xml` 0.10 s, and RustFS `/health`
+~0.2 s. The `lrz_cc` cluster that node belongs to runs no MongoDB, so that
+figure — `db.hello()` 0.95 s — was measured separately, on
+`lmzvd06-internet-app-1`.
 
 ### Icon vocabulary
 
@@ -229,7 +233,7 @@ measure.
 | ✅ | measured healthy |
 | ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
 | 💀 | measured broken |
-| `·` | not observable — reserved for one specific case, see below |
+| `·` | not observable / not attempted — see below for where it appears |
 | `…` | the check ran out of the shared time budget |
 | `✗` | the check itself failed (a command errored, a connection was refused) |
 | `n/a here` | not applicable — this node runs no member of the service |
@@ -260,7 +264,10 @@ when the check produced no result *and* there were no peer names to check in
 the first place — i.e. neither the `wg`/TCP probe answered nor a Swarm node
 list gave it anything to ask about. Both exist for the same reason — an empty
 list from a check that never ran would otherwise look identical to "checked,
-found nothing," which is a false clean bill of health.
+found nothing," which is a false clean bill of health. Both lines are also
+prefixed with the same neutral dot (`·`) as the MongoDB member case above: a
+block that never ran carries exactly that claim — not observed, nothing
+more said.
 
 ### A service with no running container
 
@@ -269,8 +276,8 @@ on a node that only hosts PostgreSQL, say) is not the same as a service that
 *should* be running here but is not. When the Swarm service spec pins a
 service to this node's hostname (or the service runs in global mode) with at
 least one desired replica, but no matching container is currently running —
-most likely a crash loop — the panel reports `✗ … no running container`
-instead of `n/a here`.
+most likely a crash loop — the panel reports `✗ <service>: no running
+container` (the service title followed by the error) instead of `n/a here`.
 
 This check is deliberately narrow: an **unpinned** replicated service (no
 `node.hostname` placement constraint) is never flagged this way, even while
