@@ -1,3 +1,5 @@
+import subprocess
+
 from terminal_status_panel.collectors import clusters
 
 PG_STATE = """\
@@ -318,3 +320,136 @@ def test_probe_kafka_reports_docker_api_failure_as_error():
     assert service.applicable is True  # Docker check was attempted
     assert service.error is not None  # But it failed
     assert "permission denied" in service.error
+
+
+GLUSTER_PEERS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cliOutput>
+  <opRet>0</opRet>
+  <peerStatus>
+    <peer><uuid>e309</uuid><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+      <connected>1</connected><stateStr>Peer in Cluster</stateStr></peer>
+    <peer><uuid>f72d</uuid><hostname>wg-lmzvd06-ccn-02.srv.mwn.de</hostname>
+      <connected>0</connected><stateStr>Peer in Cluster</stateStr></peer>
+  </peerStatus>
+</cliOutput>
+"""
+
+GLUSTER_VOLUME = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cliOutput>
+  <opRet>0</opRet>
+  <volStatus><volumes><volume>
+    <volName>shared</volName>
+    <nodeCount>4</nodeCount>
+    <node><hostname>wg-lmzvd06-ccc-01.srv.mwn.de</hostname>
+      <path>/data/glusterfs/brick1/shared</path><status>1</status></node>
+    <node><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+      <path>/data/glusterfs/brick1/shared</path><status>0</status></node>
+    <node><hostname>Self-heal Daemon</hostname><path>localhost</path><status>1</status></node>
+    <node><hostname>Self-heal Daemon</hostname>
+      <path>wg-lmzvd06-ccn-01.srv.mwn.de</path><status>1</status></node>
+  </volume></volumes></volStatus>
+</cliOutput>
+"""
+
+
+def test_parse_gluster_excludes_self_heal_daemons_from_the_brick_count():
+    service = clusters.parse_gluster(GLUSTER_PEERS, GLUSTER_VOLUME)
+    bricks = [member for member in service.members if member.role == "brick"]
+    assert len(bricks) == 2, "self-heal daemons must not be counted as bricks"
+
+
+def test_parse_gluster_reports_volume_name_and_is_leaderless():
+    service = clusters.parse_gluster(GLUSTER_PEERS, GLUSTER_VOLUME)
+    assert service.kind == "glusterfs"
+    assert service.name == "shared"
+    assert service.leader is None
+    assert service.reachable is True
+
+
+def test_parse_gluster_marks_a_disconnected_peer_and_an_offline_brick():
+    service = clusters.parse_gluster(GLUSTER_PEERS, GLUSTER_VOLUME)
+    by_key = {(member.role, member.name): member for member in service.members}
+    assert by_key[("peer", "wg-lmzvd06-ccn-01.srv.mwn.de")].healthy is True
+    assert by_key[("peer", "wg-lmzvd06-ccn-02.srv.mwn.de")].healthy is False
+    assert by_key[("brick", "wg-lmzvd06-ccn-01.srv.mwn.de")].healthy is False
+
+
+def test_parse_gluster_has_no_quorum_when_most_peers_are_disconnected():
+    two_down = GLUSTER_PEERS.replace(
+        "<hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>\n      <connected>1</connected>",
+        "<hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>\n      <connected>0</connected>",
+    )
+    assert clusters.parse_gluster(two_down, GLUSTER_VOLUME).quorum_ok is False
+
+
+def test_probe_glusterfs_is_not_applicable_without_passwordless_sudo(monkeypatch):
+    class _Completed:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def refuse(*args, **kwargs):
+        return _Completed(1, stderr="sudo: a password is required")
+
+    monkeypatch.setattr(clusters.subprocess, "run", refuse)
+    service = clusters.probe_glusterfs()
+    assert service.applicable is False
+    assert service.error is None
+
+
+def test_probe_glusterfs_is_not_applicable_when_sudo_binary_is_missing(monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("sudo")
+
+    monkeypatch.setattr(clusters.subprocess, "run", missing)
+    service = clusters.probe_glusterfs()
+    assert service.applicable is False
+    assert service.error is None
+
+
+def test_probe_glusterfs_reports_a_broken_daemon_as_an_error(monkeypatch):
+    class _Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "Connection failed. Please check if gluster daemon is operational."
+
+    def broken(*args, **kwargs):
+        return _Completed()
+
+    monkeypatch.setattr(clusters.subprocess, "run", broken)
+    service = clusters.probe_glusterfs()
+    assert service.applicable is True
+    assert service.error is not None
+    assert "Connection failed" in service.error
+
+
+def test_probe_glusterfs_reports_a_timeout_as_an_error(monkeypatch):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="gluster", timeout=1.0)
+
+    monkeypatch.setattr(clusters.subprocess, "run", timeout)
+    service = clusters.probe_glusterfs()
+    assert service.applicable is True
+    assert service.error is not None
+
+
+def test_probe_glusterfs_calls_sudo_n_with_xml(monkeypatch):
+    calls = []
+
+    class _Completed:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return _Completed(GLUSTER_PEERS if "peer" in command else GLUSTER_VOLUME)
+
+    monkeypatch.setattr(clusters.subprocess, "run", fake_run)
+    service = clusters.probe_glusterfs()
+    assert calls[0][:3] == ["sudo", "-n", "gluster"]
+    assert "--xml" in calls[0]
+    assert service.name == "shared"

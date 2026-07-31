@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+from xml.etree import ElementTree
 
 from ..model import ClusterMember, ClusterService
 
@@ -261,10 +263,114 @@ def probe_kafka(client) -> ClusterService:
         return ClusterService(kind="kafka", error=str(exc))
 
 
+GLUSTER_TIMEOUT = 1.0
+
+
+class _GlusterUnavailable(Exception):
+    """The tool or the privilege is absent — not applicable, not an error."""
+
+
+def _gluster(arguments: list[str]) -> str:
+    """Run ``sudo -n gluster ... --xml`` and return stdout.
+
+    Raises ``_GlusterUnavailable`` when there is no sudo/gluster on this host,
+    or when sudo itself refused (no password configured). Any other failure
+    — a broken daemon, lost quorum, a hang — propagates as a normal
+    exception so the caller reports it as a real error.
+    """
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["sudo", "-n", "gluster", *arguments, "--xml"],
+            capture_output=True,
+            text=True,
+            timeout=GLUSTER_TIMEOUT,
+        )
+    except FileNotFoundError as exc:
+        # No sudo (or no gluster reachable via it) on this host.
+        raise _GlusterUnavailable(str(exc)) from exc
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        if "sudo:" in stderr or "not allowed to execute" in stderr:
+            # sudo itself refused — no passwordless rule for this user/host.
+            raise _GlusterUnavailable(stderr)
+        raise OSError(stderr or completed.stdout.strip()[:200] or "gluster failed")
+    return completed.stdout
+
+
+def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
+    """Parse ``gluster peer status --xml`` and ``gluster volume status --xml``."""
+    members: list[ClusterMember] = []
+
+    peers = ElementTree.fromstring(peer_xml)
+    connected = 0
+    total_peers = 0
+    for peer in peers.iter("peer"):
+        hostname = (peer.findtext("hostname") or "").strip()
+        is_connected = (peer.findtext("connected") or "0").strip() == "1"
+        total_peers += 1
+        connected += int(is_connected)
+        members.append(
+            ClusterMember(
+                name=hostname,
+                role="peer",
+                healthy=is_connected,
+                detail=(peer.findtext("stateStr") or "").strip() or None,
+            )
+        )
+
+    volume = ElementTree.fromstring(volume_xml)
+    volume_name = None
+    for node in volume.iter("volume"):
+        volume_name = (node.findtext("volName") or "").strip() or None
+        break
+    for node in volume.iter("node"):
+        hostname = (node.findtext("hostname") or "").strip()
+        # Self-heal daemons are ordinary <node> entries; counting them as
+        # bricks would double the reported brick count.
+        if hostname == "Self-heal Daemon":
+            continue
+        members.append(
+            ClusterMember(
+                name=hostname,
+                role="brick",
+                healthy=(node.findtext("status") or "0").strip() == "1",
+                detail=(node.findtext("path") or "").strip() or None,
+            )
+        )
+
+    return ClusterService(
+        kind="glusterfs",
+        name=volume_name,
+        reachable=True,
+        leader=None,  # GlusterFS has no leader
+        quorum_ok=total_peers > 0 and (connected + 1) * 2 > total_peers + 1,
+        members=members,
+    )
+
+
+def probe_glusterfs() -> ClusterService:
+    """GlusterFS runs on the host, so this uses sudo -n rather than the Docker API."""
+    try:
+        peer_xml = _gluster(["peer", "status"])
+        volume_xml = _gluster(["volume", "status"])
+    except _GlusterUnavailable:
+        # No sudo, no gluster installed, no passwordless rule: not applicable.
+        return ClusterService(kind="glusterfs", applicable=False)
+    except Exception as exc:
+        # The tool ran and something is actually wrong (daemon down, quorum
+        # lost, volume not started, a hang) — this must not read as "n/a".
+        return ClusterService(kind="glusterfs", error=str(exc))
+    try:
+        return parse_gluster(peer_xml, volume_xml)
+    except Exception as exc:
+        return ClusterService(kind="glusterfs", error=str(exc))
+
+
 _PROBES = {
     "postgres": probe_postgres,
     "mongodb": probe_mongodb,
     "kafka": probe_kafka,
+    "glusterfs": lambda _client: probe_glusterfs(),
 }
 
 
