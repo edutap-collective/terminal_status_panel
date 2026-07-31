@@ -554,6 +554,7 @@ def test_probe_rustfs_marks_a_non_200_endpoint_unhealthy():
     )
     service = clusters.probe_rustfs(_FakeClient([container]))
     assert service.members[0].healthy is False
+    assert service.reachable is False
     assert service.quorum_ok is False
 
 
@@ -572,3 +573,73 @@ def test_probe_rustfs_reports_docker_api_failure_as_error():
     assert service.applicable is True  # Docker check was attempted
     assert service.error is not None  # But it failed
     assert "permission denied" in service.error
+
+
+def test_probe_rustfs_all_endpoints_failing_yields_not_reachable():
+    """All endpoints down or unreachable → reachable=False, quorum_ok=False."""
+    container = _FakeContainer(
+        "rustfs_rustfs.1.abc",
+        exec_result=(1, b"Connection refused"),
+        env=["RUSTFS_VOLUMES=/data"],
+    )
+    service = clusters.probe_rustfs(_FakeClient([container]))
+    assert service.reachable is False
+    assert service.quorum_ok is False
+    assert service.detail == "0/1 live"
+
+
+def test_probe_rustfs_majority_endpoints_healthy_yields_quorum():
+    """2/3 endpoints healthy → reachable=True, quorum_ok=True (majority)."""
+    # Simulate three endpoints: two answer 200, one answers 500.
+    # We'll create a container that tracks each call and returns different
+    # status codes.
+    class _MultiEndpointContainer:
+        def __init__(self):
+            self.name = "rustfs_rustfs.1.abc"
+            self.attrs = {"Config": {"Env": [
+                "RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data https://rustfs-c:9000/data"
+            ]}}
+            self.call_count = 0
+            self.commands = []
+
+        def exec_run(self, command, **kwargs):
+            self.commands.append(command)
+            # Return 200 for the first two calls (endpoints a, b), 500 for the third (endpoint c).
+            if self.call_count < 2:
+                self.call_count += 1
+                return (0, b"200")
+            self.call_count += 1
+            return (0, b"500")
+
+    container = _MultiEndpointContainer()
+    service = clusters.probe_rustfs(_FakeClient([container]))
+    assert service.reachable is True
+    assert service.quorum_ok is True
+    assert service.detail == "2/3 live"
+
+
+def test_probe_rustfs_minority_endpoints_healthy_loses_quorum():
+    """1/3 endpoints healthy → reachable=True, quorum_ok=False (not majority)."""
+    class _MultiEndpointContainer:
+        def __init__(self):
+            self.name = "rustfs_rustfs.1.abc"
+            self.attrs = {"Config": {"Env": [
+                "RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data https://rustfs-c:9000/data"
+            ]}}
+            self.call_count = 0
+            self.commands = []
+
+        def exec_run(self, command, **kwargs):
+            self.commands.append(command)
+            # Return 200 for the first call only (endpoint a), 500 for b and c.
+            if self.call_count == 0:
+                self.call_count += 1
+                return (0, b"200")
+            self.call_count += 1
+            return (0, b"500")
+
+    container = _MultiEndpointContainer()
+    service = clusters.probe_rustfs(_FakeClient([container]))
+    assert service.reachable is True
+    assert service.quorum_ok is False
+    assert service.detail == "1/3 live"

@@ -439,9 +439,11 @@ def probe_rustfs(client) -> ClusterService:
     return ClusterService(
         kind="rustfs",
         name="rustfs",
-        reachable=bool(members),
+        reachable=live > 0,
         leader=None,  # RustFS has no leader we can observe
-        quorum_ok=live == len(members) and live > 0,
+        # /health is a liveness check only; erasure-coding and heal state
+        # require the admin API (which answers 403). Majority quorum.
+        quorum_ok=live * 2 > len(members),
         detail=f"{live}/{len(members)} live",
         members=members,
     )
