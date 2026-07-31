@@ -3248,6 +3248,245 @@ Expected: the section renders, and the elapsed time stays under the configured b
 
 ---
 
+
+---
+
+### Task 16: Make every coverage gap distinguishable from a clean result
+
+**Files:**
+- Modify: `src/terminal_status_panel/model.py`
+- Modify: `src/terminal_status_panel/collectors/clusters.py`
+- Modify: `src/terminal_status_panel/collectors/health.py`
+- Modify: `src/terminal_status_panel/render/health.py`
+- Test: `tests/test_model.py`, `tests/test_collectors_clusters.py`, `tests/test_collectors_health.py`, `tests/test_render_health.py`
+
+**Interfaces:**
+- Consumes: everything built in Tasks 1–13.
+- Produces: `locate_member(client, kind, patterns) -> tuple[container | None, ClusterService | None]` in `clusters.py`, and `HealthInfo.peers_probed: bool`.
+
+This task closes the last two instances of the defect class this plan has been fighting throughout: **a gap in coverage rendering as a clean bill of health.** Both were found the hard way. The first was observed live on `lmzvd06-ccc-01` on 2026-07-31, where RustFS was crash-looping on all five nodes and the health section reported `RustFS: n/a here` — identical to what it shows on a node that legitimately runs no RustFS. The old DOCKER INFOS block showed `💀` correctly, because it reads the Swarm service list rather than local containers.
+
+**Part A — a crash-looping service is not "not applicable".**
+
+A service that keeps dying has no running container, so `find_container` returns `None` and every probe concludes `applicable=False`. Distinguish the two by asking Swarm what it *wants* on this node.
+
+Extract the repeated lookup into one helper — the per-probe scaffolding was already flagged as duplicated at five probes, and this change would otherwise multiply it:
+
+```python
+def _wanted_on_this_node(client, patterns: tuple[str, ...]) -> bool:
+    """True when Swarm has a task desired on this node for a matching service.
+
+    Called only when no local container was found, so its cost is paid on the
+    cheap path. A service whose tasks keep failing still has a desired task
+    here — that is exactly the crash loop we must not report as "n/a".
+    """
+    node_id = ((client.info() or {}).get("Swarm") or {}).get("NodeID")
+    if not node_id:
+        return False
+    for service in client.services.list():
+        name = (getattr(service, "name", "") or "").lower()
+        if not any(pattern.lower() in name for pattern in patterns):
+            continue
+        for task in service.tasks(filters={"desired-state": "running"}):
+            if task.get("NodeID") == node_id:
+                return True
+    return False
+
+
+def locate_member(client, kind: str, patterns: tuple[str, ...]):
+    """Find the local container for *kind*.
+
+    Returns ``(container, None)`` when one is running, otherwise
+    ``(None, verdict)`` where *verdict* already carries the right conclusion:
+    an error when Swarm wants a task here but none runs, ``applicable=False``
+    when this node genuinely runs no member of the service.
+    """
+    try:
+        container = find_container(client, patterns)
+    except Exception as exc:
+        return None, ClusterService(kind=kind, error=str(exc))
+    if container is not None:
+        return container, None
+    try:
+        wanted = _wanted_on_this_node(client, patterns)
+    except Exception:
+        wanted = False  # cannot ask Swarm: fall back to the weaker claim
+    if wanted:
+        return None, ClusterService(kind=kind, error="no running container")
+    return None, ClusterService(kind=kind, applicable=False)
+```
+
+Rewrite the four container-based probes (`probe_postgres`, `probe_mongodb`, `probe_kafka`, `probe_rustfs`) to open with:
+
+```python
+    container, verdict = locate_member(client, "<kind>", <KIND>_PATTERNS)
+    if verdict is not None:
+        return verdict
+```
+
+Their existing exec/parse `try/except` blocks stay exactly as they are. `probe_glusterfs` uses no container and does not change.
+
+**Part B — an unobtainable peer list is not "no peers".**
+
+`collect_peers` returns `[]` both when a host genuinely has no peers and when nothing was available to probe — no WireGuard and no node list. Add the same signal `clusters_probed` already provides for clusters:
+
+- `model.py`: `HealthInfo.peers_probed: bool = False`, placed after `clusters_probed`, with a comment that an empty `peers` list means "none found" only when this is `True`.
+- `collectors/health.py`: `peers_probed = bool(peers) or bool(peer_names)` — we had either an answer or something to ask about. Set it on the returned `HealthInfo`. A truncated peers check counts as probed, exactly as for clusters.
+- `render/health.py`, `_peers_body`: branch on `truncated`, then `peers_probed`, then the empty list — the same order as `_clusters_body`. The unprobed message is `f"{UNKNOWN} not checked (no peer list available)"`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_collectors_clusters.py  (append)
+
+def test_locate_member_returns_the_container_when_one_runs():
+    target = _FakeContainer("PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc")
+    container, verdict = clusters.locate_member(
+        _FakeClient([target]), "postgres", clusters.POSTGRES_PATTERNS
+    )
+    assert container is target
+    assert verdict is None
+
+
+def test_a_crash_looping_service_is_an_error_not_not_applicable():
+    """No container runs, but Swarm still wants a task here."""
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-1"])])
+    container, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert container is None
+    assert verdict.applicable is True
+    assert "no running container" in verdict.error
+
+
+def test_a_service_wanted_on_another_node_is_still_not_applicable():
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-2"])])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+    assert verdict.error is None
+
+
+def test_no_matching_service_at_all_is_not_applicable():
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("something_else", ["node-1"])])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+
+
+def test_a_swarm_query_failure_degrades_to_not_applicable():
+    class _Broken(_SwarmClient):
+        def info(self):
+            raise RuntimeError("swarm unreachable")
+
+    client = _Broken(containers=[], node_id="node-1", services=[])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+    assert verdict.error is None
+
+
+def test_probe_rustfs_reports_a_crash_loop_as_an_error():
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-1"])])
+    service = clusters.probe_rustfs(client)
+    assert service.kind == "rustfs"
+    assert "no running container" in service.error
+```
+
+The tests need a Swarm-aware fake alongside the existing `_FakeClient`:
+
+```python
+class _FakeSwarmService:
+    def __init__(self, name, node_ids):
+        self.name = name
+        self._node_ids = node_ids
+
+    def tasks(self, filters=None):
+        return [{"NodeID": node_id} for node_id in self._node_ids]
+
+
+class _SwarmClient(_FakeClient):
+    def __init__(self, containers, node_id, services):
+        super().__init__(containers)
+        self._node_id = node_id
+        self._services = services
+
+    def info(self):
+        return {"Swarm": {"NodeID": self._node_id}}
+
+    @property
+    def services(self):
+        return self._Coll(self._services)
+```
+
+```python
+# tests/test_model.py  (append)
+
+def test_health_info_defaults_to_unprobed_peers():
+    assert HealthInfo().peers_probed is False
+```
+
+```python
+# tests/test_collectors_health.py  (append)
+
+def test_peers_probed_is_false_without_names_or_answers(monkeypatch):
+    monkeypatch.setattr(health_collector, "collect_clusters", lambda client, kinds: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+    health = health_collector.collect_health(
+        _config(), fqdn="node.example", peer_names=[], client=object()
+    )
+    assert health.peers == []
+    assert health.peers_probed is False
+
+
+def test_peers_probed_is_true_when_names_were_available(monkeypatch):
+    monkeypatch.setattr(health_collector, "collect_clusters", lambda client, kinds: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+    health = health_collector.collect_health(
+        _config(), fqdn="node.example", peer_names=["ccn-01"], client=object()
+    )
+    assert health.peers == []
+    assert health.peers_probed is True
+```
+
+```python
+# tests/test_render_health.py  (append)
+
+def test_unprobed_peers_are_not_rendered_as_no_peers():
+    output = _render(HealthInfo(peers_probed=False))
+    assert "not checked" in output
+    assert "no peers detected" not in output
+
+
+def test_probed_but_empty_peers_say_no_peers():
+    output = _render(HealthInfo(peers_probed=True))
+    assert "no peers detected" in output
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `.venv/bin/python -m pytest tests/test_collectors_clusters.py tests/test_collectors_health.py tests/test_render_health.py tests/test_model.py -v`
+Expected: FAIL — `AttributeError: module ... has no attribute 'locate_member'` and `TypeError: HealthInfo() got an unexpected keyword argument 'peers_probed'`
+
+- [ ] **Step 3: Write the implementation**
+
+Apply Parts A and B exactly as described above.
+
+- [ ] **Step 4: Run the tests, then the full suite**
+
+Run: `.venv/bin/python -m pytest -q`
+Expected: PASS apart from the two pre-existing `test_render_panels.py` failures.
+
+- [ ] **Step 5: Lint and commit**
+
+```bash
+ruff check src tests
+git add src/terminal_status_panel tests
+git commit -m "feat: distinguish a crash loop and an unobtainable peer list from clean results"
+```
+
+
 ## Self-Review
 
 **Spec coverage.** Every section of the design maps to a task: architecture and the budget module → Task 1; data model → Task 2; the five cluster probes → Tasks 3–7; DNS including dnspython → Task 8; peer reachability with the TCP fallback → Task 9; configuration → Task 10; the failure semantics (`truncated` vs `error`) → Task 11 and asserted again in Task 12; rendering → Task 12; section wiring and the `status-health` entry point → Task 13; the documentation correction the spec demands → Task 14; the Ansible role → Task 15.
