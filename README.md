@@ -335,7 +335,9 @@ config), the PEERS block shows `not checked (no peer list available)` when
 the check produced no result *and* there were no peer names to check in
 the first place — i.e. neither the `wg`/TCP probe answered nor a Swarm node
 list gave it anything to ask about — and the DNS block shows `not checked
-(DNS check did not run)` when the check was never registered. All exist for
+(DNS check did not run)` when the section has no collected data at all (the
+DNS check itself always runs, so within a real run this line cannot appear;
+it guards the case where the whole section is missing). All exist for
 the same reason — an empty list from a check that never ran would otherwise
 look identical to "checked, found nothing," which is a false clean bill of
 health. Those lines are also prefixed with the same neutral dot (`·`) as the

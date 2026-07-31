@@ -152,5 +152,9 @@ def collect_health(
         truncated=truncated,
         clusters_probed=clusters_probed,
         peers_probed=peers_probed,
-        dns_probed="dns" in tasks,
+        # Unconditionally True: the DNS check is always registered (resolver
+        # reachability and the own name are always worth asking about). The
+        # flag distinguishes a collected HealthInfo from one nobody collected,
+        # not one run from another — see the field comment on HealthInfo.
+        dns_probed=True,
     )

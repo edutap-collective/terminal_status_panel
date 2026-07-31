@@ -136,6 +136,21 @@ def find_container(index: ContainerIndex, patterns: tuple[str, ...]):
     return matches[0] if matches else None
 
 
+def _append_note(service: ClusterService, note: str) -> None:
+    """Add a parenthetical note to *service*'s detail.
+
+    Merged into a parenthetical that is already there rather than set beside
+    it, so a RustFS line reads ``1/1 live (endpoint list unknown, +1 more
+    container)`` and not as two adjacent brackets.
+    """
+    if not service.detail:
+        service.detail = f"({note})"
+    elif service.detail.endswith(")"):
+        service.detail = f"{service.detail[:-1]}, {note})"
+    else:
+        service.detail = f"{service.detail} ({note})"
+
+
 def _note_extra_containers(service: ClusterService, extras: int) -> None:
     """Make a narrowed view visible, the way ``parse_gluster`` does for volumes.
 
@@ -145,8 +160,7 @@ def _note_extra_containers(service: ClusterService, extras: int) -> None:
     """
     if extras <= 0:
         return
-    note = f"(+{extras} more container{'s' if extras > 1 else ''})"
-    service.detail = f"{service.detail} {note}" if service.detail else note
+    _append_note(service, f"+{extras} more container{'s' if extras > 1 else ''}")
 
 
 def exec_text(container, command: list[str]) -> str:

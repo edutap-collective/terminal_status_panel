@@ -743,6 +743,13 @@ def test_rustfs_endpoints_marks_a_missing_volume_variable_as_a_guess():
     assert guessed is True
 
 
+def test_two_notes_on_one_service_are_merged_into_one_parenthetical():
+    guessed = _FakeContainer("rustfs_rustfs.1.new", exec_result=(0, b"200"), env=[])
+    other = _FakeContainer("rustfs_rustfs.1.old", env=[])
+    service = clusters.probe_rustfs(_index([guessed, other]))
+    assert service.detail == "1/1 live (endpoint list unknown, +1 more container)"
+
+
 def test_probe_rustfs_claims_no_quorum_from_a_guessed_endpoint_list():
     container = _FakeContainer("rustfs_rustfs.1.abc", exec_result=(0, b"200"), env=[])
     service = clusters.probe_rustfs(_index([container]))

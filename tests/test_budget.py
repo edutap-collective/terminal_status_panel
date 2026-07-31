@@ -1,7 +1,26 @@
 import time
 
+import pytest
+
 from terminal_status_panel import budget as budget_module
 from terminal_status_panel.budget import run_with_budget
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_stragglers():
+    """Isolate the module-level straggler list.
+
+    It is process-wide state, so without this the grace-period tests would
+    depend on source order — and the "nothing to wait for" one would pass only
+    because a preceding test happened to drain the list.
+    """
+    def clear():
+        with budget_module._stragglers_lock:
+            budget_module._stragglers.clear()
+
+    clear()
+    yield
+    clear()
 
 
 def test_an_abandoned_check_gets_a_short_grace_at_interpreter_exit():
