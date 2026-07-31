@@ -25,14 +25,8 @@ from rich.text import Text
 
 from ..config import Config
 from ..model import ClusterService, HealthInfo
+from .icons import DEAD, FAILED, OK, TRUNCATED, UNKNOWN, WARN
 from .panels import section
-
-OK = "✅"
-WARN = "⚠️"
-DEAD = "💀"
-UNKNOWN = "·"
-TRUNCATED = "…"
-FAILED = "✗"
 
 _KIND_TITLES = {
     "postgres": "PostgreSQL",

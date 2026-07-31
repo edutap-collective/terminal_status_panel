@@ -19,16 +19,14 @@ from rich.text import Text
 from ..config import Config, Thresholds
 from ..model import ResourceUsage, SwarmInfo, SystemInfo, UpdateInfo
 from .bars import STATUS_COLORS, classify, format_bytes, render_bar
+from .icons import DEAD as _DEAD
+from .icons import OK as _OK
+from .icons import WARN as _WARN
 from .logo import os_logo
 
 # CPU-usage bar coloring (not user-configurable — purely cosmetic thresholds).
 _CPU_WARNING = 70.0
 _CPU_CRITICAL = 90.0
-
-# Emoji status markers — readable regardless of color perception.
-_OK = "✅"
-_WARN = "⚠️"
-_DEAD = "💀"
 
 # Name of the synthetic stack collecting infrastructure admin UIs.
 INFRA_UI_STACK = "infra-uis"
