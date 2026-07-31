@@ -331,6 +331,10 @@ class HealthInfo:
     peers: list[PeerReachability] = field(default_factory=list)
     dns: list[DnsCheck] = field(default_factory=list)
     truncated: list[str] = field(default_factory=list)
+    # An empty ``clusters`` list means "nothing found" only when this is True.
+    # It is False when the check never ran at all -- no Docker client, or every
+    # kind disabled -- which must not render as "all clear".
+    clusters_probed: bool = False
 ```
 
 And extend `PanelData`:
@@ -2518,8 +2522,20 @@ def test_missing_health_renders_a_placeholder_not_a_crash():
     assert "CLUSTER HEALTH" in _render(None)
 
 
+def test_unprobed_clusters_are_not_rendered_as_all_clear():
+    output = _render(HealthInfo(clusters_probed=False))
+    assert "not checked" in output
+    assert "no clustered services found" not in output
+
+
+def test_probed_but_empty_clusters_say_so():
+    output = _render(HealthInfo(clusters_probed=True))
+    assert "no clustered services found" in output
+    assert "not checked" not in output
+
+
 def test_healthy_cluster_shows_leader_and_members():
-    health = HealthInfo(clusters=[
+    health = HealthInfo(clusters_probed=True, clusters=[
         ClusterService(
             kind="postgres", name="PostgreSQL-18", reachable=True,
             leader="pg18-lmzvd06-ccn-02", quorum_ok=True,
@@ -2539,7 +2555,7 @@ def test_healthy_cluster_shows_leader_and_members():
 
 
 def test_not_applicable_service_renders_na_and_no_failure_icon():
-    health = HealthInfo(clusters=[ClusterService(kind="mongodb", applicable=False)])
+    health = HealthInfo(clusters_probed=True, clusters=[ClusterService(kind="mongodb", applicable=False)])
     output = _render(health)
     assert "mongodb" in output.lower()
     assert "n/a" in output
@@ -2547,7 +2563,7 @@ def test_not_applicable_service_renders_na_and_no_failure_icon():
 
 
 def test_unobservable_member_health_renders_a_neutral_dot():
-    health = HealthInfo(clusters=[
+    health = HealthInfo(clusters_probed=True, clusters=[
         ClusterService(
             kind="mongodb", name="lrz_app", reachable=True, quorum_ok=True,
             members=[ClusterMember(name="mongodb-4:27017", role="member", healthy=None)],
@@ -2559,7 +2575,7 @@ def test_unobservable_member_health_renders_a_neutral_dot():
 
 
 def test_member_warning_is_visible():
-    health = HealthInfo(clusters=[
+    health = HealthInfo(clusters_probed=True, clusters=[
         ClusterService(
             kind="postgres", name="PostgreSQL-18", reachable=True,
             members=[ClusterMember(name="pg18-x", role="secondary", healthy=True,
@@ -2570,14 +2586,14 @@ def test_member_warning_is_visible():
 
 
 def test_errored_service_shows_the_failure_marker_and_message():
-    health = HealthInfo(clusters=[ClusterService(kind="kafka", error="connection refused")])
+    health = HealthInfo(clusters_probed=True, clusters=[ClusterService(kind="kafka", error="connection refused")])
     output = _render(health)
     assert "✗" in output
     assert "connection refused" in output
 
 
 def test_truncated_check_renders_ellipsis_not_a_failure():
-    health = HealthInfo(truncated=["clusters"])
+    health = HealthInfo(clusters_probed=True, truncated=["clusters"])
     output = _render(health)
     assert "…" in output
     assert "✗" not in output
@@ -2702,6 +2718,10 @@ def _service_lines(service: ClusterService) -> Text:
 def _clusters_panel(health: HealthInfo) -> Panel:
     if "clusters" in health.truncated:
         body: RenderableType = Text(f"{TRUNCATED} time budget exceeded", style="dim")
+    elif not health.clusters_probed:
+        # Never ran: no Docker client, or every kind disabled. Rendering this as
+        # "nothing found" would report a gap in coverage as a clean bill of health.
+        body = Text(f"{UNKNOWN} not checked (no Docker client)", style="dim")
     elif not health.clusters:
         body = Text("no clustered services found", style="dim")
     else:
