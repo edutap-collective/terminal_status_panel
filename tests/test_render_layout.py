@@ -2,6 +2,7 @@ from rich.console import Console
 
 from terminal_status_panel.config import Config
 from terminal_status_panel.model import (
+    HealthInfo,
     PanelData,
     ResourceUsage,
     SwarmInfo,
@@ -9,6 +10,7 @@ from terminal_status_panel.model import (
     UpdateInfo,
 )
 from terminal_status_panel.render import layout
+from terminal_status_panel.render.layout import SECTIONS, build_layout
 
 
 def _render(data, width=100) -> str:
@@ -41,3 +43,19 @@ def test_build_layout_survives_all_none():
     out = _render(PanelData())
     assert "SYSTEM OVERVIEW" in out
     assert "DOCKER" in out
+
+
+def test_health_is_a_known_section():
+    assert "health" in SECTIONS
+
+
+def test_build_layout_renders_only_the_requested_section():
+    from rich.console import Console
+
+    data = PanelData(health=HealthInfo())
+    console = Console(width=100, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(build_layout(data, Config(), sections=("health",)))
+    output = capture.get()
+    assert "CLUSTER HEALTH" in output
+    assert "DOCKER" not in output

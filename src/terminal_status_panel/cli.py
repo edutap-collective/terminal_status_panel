@@ -1,10 +1,11 @@
 """Command-line entry points: collect data, render the panel, always exit 0.
 
-Three console scripts share this module:
+Four console scripts share this module:
 
-- ``status-full``  — both sections (``server`` + ``docker``).
+- ``status-full``   — all sections (``server`` + ``docker`` + ``health``).
 - ``status-server`` — only the system/server section.
 - ``status-docker`` — only the Docker section.
+- ``status-health`` — only the cluster health section.
 
 Each section collects only the data it needs, so ``status-docker`` never
 touches the system collectors and ``status-server`` never opens the Docker
@@ -15,11 +16,13 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import socket
 import sys
 
 from rich.console import Console
 
 from .collectors.docker import collect_docker
+from .collectors.health import collect_health
 from .collectors.resources import collect_resources
 from .collectors.system import collect_system
 from .collectors.updates import collect_updates
@@ -28,16 +31,61 @@ from .model import PanelData
 from .render.layout import SECTIONS, build_layout
 
 
+def _docker_client(cfg: Config):
+    """A Docker client for the health probes, or None when unavailable."""
+    try:
+        import docker
+
+        return docker.from_env(timeout=cfg.docker_timeout)
+    except Exception:
+        return None
+
+
+def _peer_names(swarm) -> list[str]:
+    return [node.name for node in getattr(swarm, "nodes", []) or []]
+
+
 def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     """Collect only the data required by the requested sections."""
     server = "server" in sections
-    docker = "docker" in sections
+    docker_section = "docker" in sections
+    health = "health" in sections
+
+    swarm = (
+        collect_docker(
+            timeout=cfg.docker_timeout,
+            critical=cfg.critical_services,
+            description_label=cfg.description_label,
+        )
+        if docker_section
+        else None
+    )
+
+    health_info = None
+    if health:
+        client = _docker_client(cfg)
+        peers = _peer_names(swarm)
+        if not peers and client is not None:
+            # The health section must not depend on the docker section being
+            # selected, so fetch the node list on its own when needed.
+            try:
+                peers = [
+                    (node.attrs.get("Description", {}) or {}).get("Hostname", "")
+                    for node in client.nodes.list()
+                ]
+                peers = [name for name in peers if name]
+            except Exception:
+                peers = []
+        health_info = collect_health(
+            cfg, fqdn=socket.getfqdn(), peer_names=peers, client=client
+        )
+
     return PanelData(
         system=collect_system() if server else None,
         resources=collect_resources() if server else None,
         updates=collect_updates(timeout=cfg.docker_timeout) if server else None,
-        swarm=collect_docker(timeout=cfg.docker_timeout, critical=cfg.critical_services,
-                             description_label=cfg.description_label) if docker else None,
+        swarm=swarm,
+        health=health_info,
     )
 
 
@@ -75,7 +123,7 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     parser.add_argument("--config", default=None, help="path to a TOML config file")
     parser.add_argument("--sections", default=None,
-                        help="comma-separated sections to render: server,docker")
+                        help="comma-separated sections to render: server,docker,health")
     return parser.parse_args(argv)
 
 
@@ -104,6 +152,11 @@ def server_main(argv: list[str] | None = None) -> int:
 def docker_main(argv: list[str] | None = None) -> int:
     """Entry point for ``status-docker`` — Docker section only."""
     return main(argv, sections=("docker",), prog="status-docker")
+
+
+def health_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``status-health`` — cluster health section only."""
+    return main(argv, sections=("health",), prog="status-health")
 
 
 if __name__ == "__main__":
