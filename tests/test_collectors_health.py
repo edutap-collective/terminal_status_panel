@@ -210,6 +210,55 @@ def test_the_container_index_is_built_inside_the_budget(monkeypatch):
     assert seen and all(thread is not main_thread for thread in seen)
 
 
+def test_the_peer_list_is_fetched_once_and_inside_the_budget(monkeypatch):
+    """It comes from the Docker daemon, so it belongs on a check thread — and
+    both checks that need it must share the one fetch."""
+    import threading
+
+    main_thread = threading.current_thread()
+    callers = []
+
+    def resolve():
+        callers.append(threading.current_thread())
+        return ["ccn-01"]
+
+    seen = {}
+    monkeypatch.setattr(
+        health_collector, "collect_peers",
+        lambda names, timeout: seen.setdefault("peers", names) and [],
+    )
+    monkeypatch.setattr(
+        health_collector, "collect_dns",
+        lambda **kwargs: seen.setdefault("dns", kwargs["peer_names"]) and [],
+    )
+    health = health_collector.collect_health(
+        _config(enabled=[]), peer_names=[], client=None, resolve_fqdn=_fqdn,
+        resolve_peer_names=resolve,
+    )
+    assert len(callers) == 1
+    assert callers[0] is not main_thread
+    assert seen["peers"] == ["ccn-01"]
+    assert seen["dns"] == ["ccn-01"]
+    # A resolved peer list is something to ask about, so the block counts as
+    # probed even though no peer answered.
+    assert health.peers_probed is True
+
+
+def test_a_known_peer_list_is_not_fetched_again(monkeypatch):
+    """The Docker section already collected the node names; asking the daemon a
+    second time would be a round trip for nothing."""
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+
+    def resolve():
+        raise AssertionError("must not be called when the names are known")
+
+    health_collector.collect_health(
+        _config(enabled=[]), peer_names=["ccn-01"], client=None, resolve_fqdn=_fqdn,
+        resolve_peer_names=resolve,
+    )
+
+
 def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
     from terminal_status_panel.config import DnsExpectation
 

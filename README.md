@@ -269,8 +269,16 @@ paid when a check has already been abandoned.
 The own-hostname lookup the DNS check needs (`socket.getfqdn()`, a forward
 plus a reverse lookup through NSS) happens inside the DNS task for the same
 reason: with a broken resolver it blocks for tens of seconds, and that is the
-very fault this section reports on. Nothing in the section resolves a name,
-opens a socket or talks to Docker before the budget starts.
+very fault this section reports on. The Swarm node list the peer and DNS
+checks need is fetched inside the budget too, once, by whichever of the two
+gets there first — and only when the Docker section did not already collect
+it for free.
+
+Exactly one thing leaves the process before the budget starts: constructing
+the Docker client, which negotiates the API version with the daemon. That
+request is bounded by `docker.timeout` (1.5 s by default), the knob documented
+for it; the larger health timeout is applied to the client afterwards, so it
+bounds only the requests made inside the budget.
 
 ### Icon vocabulary
 

@@ -101,7 +101,7 @@ def test_collect_all_skips_health_when_not_selected(isolated_cli):
 def test_collect_all_calls_health_when_selected(isolated_cli):
     called = []
 
-    def fake(cfg, peer_names, client=None, resolve_fqdn=None):
+    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None):
         called.append((peer_names, resolve_fqdn))
         return None
 
@@ -129,6 +129,61 @@ def test_the_health_client_ignores_the_timeouts_of_disabled_kinds():
     cfg = Config()
     cfg.health.enabled = ["postgres"]
     assert cli._health_socket_timeout(cfg) == 1.5  # postgres, not kafka
+
+
+def test_the_health_client_is_built_at_the_docker_timeout(monkeypatch):
+    """docker.from_env() negotiates the API version with the daemon while it is
+    constructed — on the main thread, before the budget. That request must stay
+    bounded by docker.timeout; only the budgeted probe requests get the larger
+    health timeout."""
+    import sys
+    import types
+
+    built = {}
+
+    class _Api:
+        timeout = None
+
+    class _Client:
+        api = _Api()
+
+    fake_docker = types.ModuleType("docker")
+    fake_docker.from_env = lambda **kwargs: built.update(kwargs) or _Client()
+    monkeypatch.setitem(sys.modules, "docker", fake_docker)
+
+    cfg = Config()
+    client = cli._docker_client(cfg)
+    assert built["timeout"] == cfg.docker_timeout == 1.5
+    assert client.api.timeout == cli._health_socket_timeout(cfg) == 4.0
+
+
+def test_collect_all_never_reaches_the_docker_daemon_before_the_budget(isolated_cli):
+    """The Swarm node list used to be fetched here, on the main thread, over the
+    health client — so a hung daemon delayed the login by the largest per-kind
+    timeout instead of by docker.timeout. It is handed over as a callable and
+    called inside the budget instead."""
+    reached = []
+
+    class _Client:
+        @property
+        def nodes(self):
+            reached.append(True)
+            raise AssertionError("the node list must be fetched inside the budget")
+
+    captured = {}
+
+    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None):
+        captured["resolve_peer_names"] = resolve_peer_names
+        return None
+
+    isolated_cli.setattr(cli, "_docker_client", lambda cfg: _Client())
+    isolated_cli.setattr(cli, "collect_health", fake)
+    cli.collect_all(Config(), sections=("health",))
+
+    assert reached == []
+    # …and it really is the node list that was handed over, not a stub.
+    with pytest.raises(AssertionError):
+        captured["resolve_peer_names"]()
 
 
 def test_collect_all_never_resolves_the_fqdn_itself(isolated_cli):

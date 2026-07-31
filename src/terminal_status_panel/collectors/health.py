@@ -15,6 +15,7 @@ rather than on the login path's main thread.
 from __future__ import annotations
 
 import socket
+import threading
 from collections.abc import Callable
 from functools import partial
 
@@ -35,14 +36,22 @@ def collect_health(
     peer_names: list[str],
     client=None,
     resolve_fqdn: Callable[[], str] | None = None,
+    resolve_peer_names: Callable[[], list[str]] | None = None,
 ) -> HealthInfo:
     """Collect cluster, peer and DNS health under the configured budget.
 
-    The own hostname is resolved by *resolve_fqdn* (``socket.getfqdn`` by
-    default) **inside** the budgeted DNS task, never by the caller: that call
-    performs a forward and a reverse lookup through NSS and blocks for tens of
-    seconds when the resolver is broken — precisely the fault this section
-    exists to diagnose, and the login shell must not wait for it.
+    Two things the checks need are deliberately *not* taken as finished values
+    from the caller, because obtaining them can block:
+
+    - the own hostname, resolved by *resolve_fqdn* (``socket.getfqdn`` by
+      default): a forward and a reverse lookup through NSS, tens of seconds
+      with a broken resolver — precisely the fault this section diagnoses;
+    - the peer list, resolved by *resolve_peer_names* when *peer_names* is
+      empty: a Swarm node list from the Docker daemon.
+
+    Both are called inside the budget, on a check thread. *peer_names* stays a
+    plain list because the caller often already has it for free (the Docker
+    section collected it), and using it then costs nothing.
     """
     health_cfg = cfg.health
     tasks: dict[str, Callable[[], object]] = {}
@@ -60,8 +69,32 @@ def collect_health(
             tasks[key] = partial(probe_cluster, index, kind, timeout)
             timeouts[key] = timeout
 
+    # Resolved at most once, by whichever of the two tasks needs it first.
+    resolved_peers: list[list[str]] = []
+    resolved_peers_lock = threading.Lock()
+
+    def known_peer_names() -> list[str]:
+        """The peer names, fetched at most once and only inside the budget."""
+        if peer_names:
+            return list(peer_names)
+        if resolve_peer_names is None:
+            return []
+        with resolved_peers_lock:
+            if not resolved_peers:
+                try:
+                    resolved_peers.append(list(resolve_peer_names() or []))
+                except Exception:
+                    # No node list is a gap in what we can ask about, not a
+                    # statement about the peers — the checks say so themselves.
+                    resolved_peers.append([])
+        return list(resolved_peers[0])
+
     peers_timeout = health_cfg.timeouts.get("wireguard", 1.0)
-    tasks["peers"] = partial(collect_peers, peer_names, timeout=peers_timeout)
+
+    def peers_task() -> list[PeerReachability]:
+        return collect_peers(known_peer_names(), timeout=peers_timeout)
+
+    tasks["peers"] = peers_task
     timeouts["peers"] = peers_timeout
 
     dns_timeout = health_cfg.timeouts.get("dns", 2.5)
@@ -70,7 +103,7 @@ def collect_health(
         fqdn = (resolve_fqdn or socket.getfqdn)()
         return collect_dns(
             fqdn=fqdn,
-            peer_names=peer_names,
+            peer_names=known_peer_names(),
             expectations=[(e.name, list(e.addresses)) for e in health_cfg.dns_expect],
             timeout=dns_timeout,
         )
@@ -109,8 +142,8 @@ def collect_health(
     ]
 
     # We had either an answer or something to ask about — a peer name to check.
-    # A truncated peers check still had peer_names, so it counts as probed too.
-    peers_probed = bool(peers) or bool(peer_names)
+    # A truncated peers check still had peer names, so it counts as probed too.
+    peers_probed = bool(peers) or bool(peer_names) or bool(resolved_peers and resolved_peers[0])
 
     return HealthInfo(
         clusters=clusters,

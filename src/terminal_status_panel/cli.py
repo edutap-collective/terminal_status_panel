@@ -46,17 +46,45 @@ def _health_socket_timeout(cfg: Config) -> float:
 
 
 def _docker_client(cfg: Config):
-    """A Docker client for the health probes, or None when unavailable."""
+    """A Docker client for the health probes, or None when unavailable.
+
+    Constructed with ``docker.timeout``, not with the larger health timeout:
+    ``docker.from_env()`` negotiates the API version with the daemon on
+    construction, and that request happens here — on the main thread, before
+    the budget. ``docker.timeout`` is the knob documented for exactly that
+    ("keeps a hung/absent daemon from delaying login").
+
+    The larger health timeout is applied afterwards, to the same client, so it
+    bounds only the probe requests that run inside the budget. Set once, before
+    any check thread starts, so the concurrent probes never see it change.
+    """
     try:
         import docker
 
-        return docker.from_env(timeout=_health_socket_timeout(cfg))
+        client = docker.from_env(timeout=cfg.docker_timeout)
+        client.api.timeout = _health_socket_timeout(cfg)
+        return client
     except Exception:
         return None
 
 
 def _peer_names(swarm) -> list[str]:
     return [node.name for node in getattr(swarm, "nodes", []) or []]
+
+
+def _swarm_node_names(client) -> list[str]:
+    """Swarm node hostnames, straight from the Docker API.
+
+    Handed to ``collect_health`` as a callable rather than called here: it
+    talks to the Docker daemon over the health client, whose socket timeout is
+    the largest per-kind health timeout, and unbudgeted main-thread work of
+    that size on a login path is the very thing the budget exists to prevent.
+    """
+    names = [
+        (node.attrs.get("Description", {}) or {}).get("Hostname", "")
+        for node in client.nodes.list()
+    ]
+    return [name for name in names if name]
 
 
 def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
@@ -78,19 +106,17 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     health_info = None
     if health:
         client = _docker_client(cfg)
-        peers = _peer_names(swarm)
-        if not peers and client is not None:
-            # The health section must not depend on the docker section being
-            # selected, so fetch the node list on its own when needed.
-            try:
-                peers = [
-                    (node.attrs.get("Description", {}) or {}).get("Hostname", "")
-                    for node in client.nodes.list()
-                ]
-                peers = [name for name in peers if name]
-            except Exception:
-                peers = []
-        health_info = collect_health(cfg, peer_names=peers, client=client)
+        health_info = collect_health(
+            cfg,
+            # Free: the docker section already collected these. Empty when that
+            # section was not selected, which is when the callable below is
+            # used — inside the budget, never here.
+            peer_names=_peer_names(swarm),
+            client=client,
+            resolve_peer_names=(
+                None if client is None else lambda: _swarm_node_names(client)
+            ),
+        )
 
     return PanelData(
         system=collect_system() if server else None,
