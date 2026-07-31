@@ -626,22 +626,22 @@ def test_probe_rustfs_majority_endpoints_healthy_yields_quorum():
 
 
 class _FakeSwarmService:
-    def __init__(self, name, node_ids):
+    def __init__(self, name, *, replicas=1, hostname=None, global_mode=False):
         self.name = name
-        self._node_ids = node_ids
-
-    def tasks(self, filters=None):
-        return [{"NodeID": node_id} for node_id in self._node_ids]
+        mode = {"Global": {}} if global_mode else {"Replicated": {"Replicas": replicas}}
+        placement = {"Constraints": [f"node.hostname == {hostname}"]} if hostname else {}
+        self.attrs = {"Spec": {"Mode": mode, "TaskTemplate": {"Placement": placement}}}
 
 
 class _SwarmClient(_FakeClient):
-    def __init__(self, containers, node_id, services):
+    def __init__(self, containers, node_id, services, hostname="node-1"):
         super().__init__(containers)
         self._node_id = node_id
         self._services = services
+        self._hostname = hostname
 
     def info(self):
-        return {"Swarm": {"NodeID": self._node_id}}
+        return {"Name": self._hostname, "Swarm": {"NodeID": self._node_id}}
 
     @property
     def services(self):
@@ -658,28 +658,75 @@ def test_locate_member_returns_the_container_when_one_runs():
 
 
 def test_a_crash_looping_service_is_an_error_not_not_applicable():
-    """No container runs, but Swarm still wants a task here."""
-    client = _SwarmClient(containers=[], node_id="node-1",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-1"])])
+    """No container runs, but Swarm still wants a task here — the live RustFS case:
+    a replicated service pinned to this hostname by a placement constraint."""
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
+                                                       hostname="lmzvd06-ccc-01")])
     container, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert container is None
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
 
-def test_a_service_wanted_on_another_node_is_still_not_applicable():
-    client = _SwarmClient(containers=[], node_id="node-1",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-2"])])
+def test_a_service_pinned_to_another_hostname_is_still_not_applicable():
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
+                                                       hostname="lmzvd06-ccn-01")])
     _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 
 
 def test_no_matching_service_at_all_is_not_applicable():
-    client = _SwarmClient(containers=[], node_id="node-1",
-                          services=[_FakeSwarmService("something_else", ["node-1"])])
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[_FakeSwarmService("something_else", replicas=1,
+                                                       hostname="lmzvd06-ccc-01")])
     _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
+
+
+def test_a_global_mode_service_is_wanted_on_every_node():
+    """Global mode has no placement constraint to check — Swarm runs it everywhere."""
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", global_mode=True)])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is True
+    assert "no running container" in verdict.error
+
+
+def test_a_replicated_service_with_zero_replicas_is_not_applicable():
+    """Swarm wants nothing running, even if pinned here."""
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=0,
+                                                       hostname="lmzvd06-ccc-01")])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+
+
+def test_an_unpinned_replicated_service_is_not_applicable():
+    """No placement constraint means it could legitimately be running elsewhere —
+    we cannot claim Swarm wants it *here* without over-claiming. A crash loop of an
+    unpinned service is therefore not flagged by this check (DOCKER INFOS still
+    shows it correctly, via the Swarm service list)."""
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
+                                                       hostname=None)])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+    assert verdict.error is None
+
+
+def test_a_placement_constraint_without_spaces_is_still_recognised():
+    service = _FakeSwarmService("rustfs_rustfs-x", replicas=1)
+    service.attrs["Spec"]["TaskTemplate"]["Placement"] = {
+        "Constraints": ["node.hostname==lmzvd06-ccc-01"]
+    }
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[service])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is True
+    assert "no running container" in verdict.error
 
 
 def test_a_swarm_query_failure_degrades_to_not_applicable():
@@ -694,8 +741,9 @@ def test_a_swarm_query_failure_degrades_to_not_applicable():
 
 
 def test_probe_rustfs_reports_a_crash_loop_as_an_error():
-    client = _SwarmClient(containers=[], node_id="node-1",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-1"])])
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
+                                                       hostname="lmzvd06-ccc-01")])
     service = clusters.probe_rustfs(client)
     assert service.kind == "rustfs"
     assert "no running container" in service.error

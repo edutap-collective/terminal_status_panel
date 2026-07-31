@@ -48,23 +48,55 @@ def exec_text(container, command: list[str]) -> str:
     return text
 
 
+def _pinned_to_hostname(service, hostname: str) -> bool:
+    """True when *service*'s placement constraints pin it to *hostname*.
+
+    Parses ``node.hostname == <name>`` constraints tolerantly (whitespace
+    around ``==`` is optional); any other constraint key is ignored, since we
+    only need to answer "does this run here", not evaluate the full
+    constraint language.
+    """
+    placement = ((service.attrs or {}).get("Spec") or {}).get("TaskTemplate", {}).get(
+        "Placement"
+    ) or {}
+    for constraint in placement.get("Constraints") or []:
+        key, sep, value = str(constraint).partition("==")
+        if not sep or key.strip() != "node.hostname":
+            continue
+        if value.strip() == hostname:
+            return True
+    return False
+
+
 def _wanted_on_this_node(client, patterns: tuple[str, ...]) -> bool:
-    """True when Swarm has a task desired on this node for a matching service.
+    """True when Swarm's service *spec* wants this service running on this node.
 
     Called only when no local container was found, so its cost is paid on the
-    cheap path. A service whose tasks keep failing still has a desired task
-    here — that is exactly the crash loop we must not report as "n/a".
+    cheap path. This reads ``Spec.Mode``/``Spec.TaskTemplate.Placement`` rather
+    than the live task list: during a crash loop, the failed task has already
+    flipped to ``desired: shutdown`` and its replacement may not exist yet, so
+    a task-list snapshot is a coin flip exactly when it matters. The spec is
+    the stable, timing-independent statement of what Swarm wants.
+
+    A replicated service with no placement constraint could legitimately be
+    running on a different node, so this deliberately returns ``False`` for
+    it rather than over-claiming "wanted here" — a crash loop of an unpinned
+    service is therefore not flagged by this check (DOCKER INFOS, which reads
+    the Swarm service list directly, still shows it correctly).
     """
-    node_id = ((client.info() or {}).get("Swarm") or {}).get("NodeID")
-    if not node_id:
+    hostname = (client.info() or {}).get("Name")
+    if not hostname:
         return False
     for service in client.services.list():
         name = (getattr(service, "name", "") or "").lower()
         if not any(pattern.lower() in name for pattern in patterns):
             continue
-        for task in service.tasks(filters={"desired-state": "running"}):
-            if task.get("NodeID") == node_id:
-                return True
+        mode = ((service.attrs or {}).get("Spec") or {}).get("Mode") or {}
+        if "Global" in mode:
+            return True
+        replicas = ((mode.get("Replicated") or {}).get("Replicas")) or 0
+        if replicas >= 1 and _pinned_to_hostname(service, hostname):
+            return True
     return False
 
 
