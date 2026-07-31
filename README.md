@@ -3,7 +3,7 @@
 A small Python package that renders a colorful server status panel on login —
 best run from a `profile.d` snippet so it uses the full terminal width (see
 [Running it at login](#running-it-at-login)). The full-width dashboard is laid
-out in three tiers:
+out in four tiers:
 
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
 - **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
@@ -18,9 +18,25 @@ out in three tiers:
   one row named after the stack, a stack with several shows a header plus one
   sub-row per service (stack prefix and node name stripped). Columns are the
   nodes (alphabetical) with ✅ / 💀 placement, plus a description column.
+- **CLUSTER HEALTH** — the clustered infrastructure services this node
+  participates in (PostgreSQL, MongoDB, Kafka, GlusterFS, RustFS) with
+  leader/member state, WireGuard peer handshake ages (TCP-probe fallback when
+  passwordless sudo is unavailable), and DNS consistency checks. Every check
+  runs concurrently under a shared time budget (default 5 s); a check that
+  runs out renders `…`, deliberately distinct from `✗` for a check that
+  actually failed. A service with no member on this node renders `n/a here`
+  and is not an error; a service that *should* run here but has no running
+  container (most likely a crash loop) renders `✗ … no running container`
+  instead. See [Cluster health checks](#cluster-health-checks) below for the
+  full icon vocabulary and what the section deliberately cannot see.
 
-All Docker data is read from the Docker API only — no database or broker
-protocol is ever spoken to.
+The panel itself opens no database or broker connection and holds no
+credentials. Its only privilege is the Docker socket: the Docker section
+reads the Swarm API, and the health section additionally executes
+**read-only status commands inside the service containers**
+(`pg_autoctl show state`, `db.hello()`, `kafka-metadata-quorum.sh`, a
+`/health` curl). GlusterFS is queried on the host via `sudo -n` and is
+skipped when that is unavailable.
 
 ## Requirements
 
@@ -36,35 +52,40 @@ pip install terminal-status-panel     # from PyPI, once published
 pip install .
 ```
 
-This installs three panel commands (`status-full`, `status-server`,
-`status-docker`) plus an `install-panel` helper to wire it into a login shell.
+This installs four panel commands (`status-full`, `status-server`,
+`status-docker`, `status-health`) plus an `install-panel` helper to wire it
+into a login shell.
 
 ## Commands (sections)
 
-The dashboard is split into two independently runnable sections, each with its
-own entry point — plus the combined command:
+The dashboard is split into three independently runnable sections, each with
+its own entry point — plus the combined command:
 
 | Command | Sections | Use |
 |---------|----------|-----|
-| `status-full` | server + docker | The full panel (default). |
+| `status-full` | server + docker + health | The full panel (default). |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
 | `status-docker` | docker only | The Docker Swarm block. |
+| `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
 
 Each section only collects the data it needs: `status-docker` never touches
-the system collectors, and `status-server` never opens the Docker socket —
-so you can run just what a given host cares about. The combined command also
-accepts `--sections server,docker` to pick explicitly.
+the system collectors, `status-server` never opens the Docker socket, and
+`status-health` never touches the system collectors either (though it does
+open the Docker socket, to `exec` into service containers) — so you can run
+just what a given host cares about. The combined command also accepts
+`--sections server,docker,health` to pick explicitly.
 
-Any of the three works in the profile.d snippet (see *Running it at login*) —
-e.g. call `status-docker` on Docker Swarm nodes and `status-server` on
-plain servers.
+Any of the four works in the profile.d snippet (see *Running it at login*) —
+e.g. call `status-docker` or `status-health` on Docker Swarm nodes and
+`status-server` on plain servers.
 
 ## Usage
 
 ```bash
-status-full   [--sections server,docker] [--width N] [--no-color] [--config PATH]
+status-full   [--sections server,docker,health] [--width N] [--no-color] [--config PATH]
 status-server  [--width N] [--no-color] [--config PATH]
 status-docker  [--width N] [--no-color] [--config PATH]
+status-health  [--width N] [--no-color] [--config PATH]
 ```
 
 The command **always exits 0** so it can never break a login shell. If a
@@ -75,7 +96,7 @@ a placeholder instead of erroring.
 
 | Option        | Default | Description |
 |---------------|---------|-------------|
-| `--sections`  | *(all / per command)* | Comma-separated sections to render: `server`, `docker`. On `status-full` the default is both; the dedicated commands fix their own section. |
+| `--sections`  | *(all / per command)* | Comma-separated sections to render: `server`, `docker`, `health`. On `status-full` the default is all three; the dedicated commands fix their own section. |
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
 | `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
@@ -116,6 +137,10 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `thresholds.swap.warning` | `1` | Swap usage % above which SWAP turns yellow. |
 | `thresholds.filesystem.warning` / `.critical` | `80` / `90` | Filesystem usage % thresholds. |
 | `thresholds.load.warning` / `.critical` | `0.8` / `1.0` | Load-average thresholds as a **per-CPU multiplier** (compared against `load1 / cpu_count`). |
+| `health.budget` | `5.0` | Total wall-clock budget in seconds for all health checks. All checks run concurrently, so this bounds the login delay — it is not the sum of the individual timeouts. |
+| `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Individual timeouts, all below the budget. Kafka is the expensive one (~2.6 s of JVM startup). |
+| `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
+| `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
 
 ### Full example
 
@@ -147,7 +172,128 @@ critical = 90
 [thresholds.load]
 warning = 0.8   # per-CPU multiplier
 critical = 1.0
+
+[health]
+budget = 5.0
+enabled = ["postgres", "mongodb", "kafka", "glusterfs", "rustfs"]
+
+[health.timeout]
+postgres = 1.5
+mongodb = 2.5
+kafka = 4.0
+glusterfs = 1.0
+rustfs = 2.0
+wireguard = 1.0
+dns = 2.5
+
+[[health.dns.expect]]
+name = "login.lmu.de"
+addresses = ["10.9.9.9"]
 ```
+
+## Cluster health checks
+
+`status-health` (and the health block inside `status-full`) probes the
+clustered infrastructure services this node participates in, plus WireGuard
+peer reachability and DNS consistency. Every service probe runs a read-only
+status command inside a locally running container via the Docker API —
+GlusterFS is the one exception, queried on the host via `sudo -n` — so none of
+this needs database or broker credentials:
+
+| Service | Command |
+|---------|---------|
+| PostgreSQL | `pg_autoctl show state` |
+| MongoDB | `db.hello()` via `mongosh` (unauthenticated) |
+| Kafka (KRaft) | `kafka-metadata-quorum.sh describe --status` |
+| GlusterFS | `gluster peer status --xml` / `gluster volume status --xml` via `sudo -n` |
+| RustFS | `curl` against `/health` on each configured endpoint |
+
+WireGuard peer reachability is read from `sudo -n wg show all dump`
+(handshake age per peer); when that is unavailable it falls back to a plain
+TCP probe of the Swarm port (2377) per peer, and the PEERS sub-header shows
+which method was used (`wg`, `tcp`, or `mixed` when peers disagree).
+
+Measured on a production node (`lmzvd06-ccc-01`, 5-node Swarm, 2026-07-31):
+the whole section took 3.6–4.0 s end to end, within the 5 s default budget.
+Individual probe costs: PostgreSQL `pg_autoctl show state` 0.13 s, MongoDB
+`db.hello()` 0.95 s, Kafka `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not
+optimisable), GlusterFS `gluster … --xml` 0.10 s, RustFS `/health` ~0.2 s.
+
+### Icon vocabulary
+
+The section's core idea: it never claims to know something it did not
+measure.
+
+| Icon | Meaning |
+|------|---------|
+| ✅ | measured healthy |
+| ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
+| 💀 | measured broken |
+| `·` | not observable — reserved for one specific case, see below |
+| `…` | the check ran out of the shared time budget |
+| `✗` | the check itself failed (a command errored, a connection was refused) |
+| `n/a here` | not applicable — this node runs no member of the service |
+
+`…` and `✗` mean different things and must not be conflated: a budget
+timeout says nothing about the service's health, only that the panel gave up
+waiting for it; a failed check (`✗`) is a statement about the service, or
+about the tool used to ask it.
+
+The neutral dot (`·`) exists because **MongoDB reports its replica-set
+members but not their state**: `db.hello()` tells the panel who belongs to
+the set, but only the primary and the member it just ran the command against
+have known state — every other member is genuinely unmeasured, and rendering
+an unearned ✅ for it would be worse than saying nothing. Every other check in
+this section (PostgreSQL's `pg_autoctl` rows, Kafka's quorum voters,
+GlusterFS peers/bricks) reports ✅ or 💀 for each member it lists, never `·`,
+because those commands do report per-member state. A *service* whose own
+quorum was never even attempted (e.g. its probe errored before parsing
+anything) shows no icon at all next to its name, just a dim "quorum not
+reported" note — so "not observable" (the dot) and "never asked" never look
+the same.
+
+Two blocks can additionally read `not checked (…)` instead of a false clean
+result: the CLUSTERS block shows `not checked (no Docker client)` when there
+is no Docker socket to probe from (or every cluster kind is disabled in
+config), and the PEERS block shows `not checked (no peer list available)`
+when the check produced no result *and* there were no peer names to check in
+the first place — i.e. neither the `wg`/TCP probe answered nor a Swarm node
+list gave it anything to ask about. Both exist for the same reason — an empty
+list from a check that never ran would otherwise look identical to "checked,
+found nothing," which is a false clean bill of health.
+
+### A service with no running container
+
+`n/a here` (this node legitimately runs no member of the service — no MongoDB
+on a node that only hosts PostgreSQL, say) is not the same as a service that
+*should* be running here but is not. When the Swarm service spec pins a
+service to this node's hostname (or the service runs in global mode) with at
+least one desired replica, but no matching container is currently running —
+most likely a crash loop — the panel reports `✗ … no running container`
+instead of `n/a here`.
+
+This check is deliberately narrow: an **unpinned** replicated service (no
+`node.hostname` placement constraint) is never flagged this way, even while
+it is crash-looping, because it could legitimately be scheduled on a
+different node. The DOCKER INFOS block, which reads the live Swarm service
+list rather than the placement spec, still shows such a service correctly —
+this blind spot is specific to the health section's per-node view.
+
+### What the section cannot see
+
+- **MongoDB quorum** means only "a primary exists". `db.hello()` reports
+  membership and who the primary is, but not per-member replication state;
+  that would need `rs.status()`, which needs credentials this panel
+  deliberately does not hold.
+- **RustFS heal and erasure-coding state** are invisible: `/health` is a
+  liveness check only, and the admin API that reports heal/EC state answers
+  403 without credentials the panel does not have.
+- **An unpinned crash-looping service is not flagged** (see above) — DOCKER
+  INFOS still shows it, just not the health section.
+- **GlusterFS needs passwordless `sudo -n gluster …`** on the host; without it
+  (no sudo rule, no `gluster` binary), the block reports `n/a here` rather
+  than an error — the tool being unreachable says nothing about the volume's
+  actual health.
 
 ## Running it at login
 
@@ -198,9 +344,9 @@ sudo install-panel --scope global
 # Per user, no root needed (managed block in ~/.profile or ~/.zprofile):
 install-panel --scope user
 
-# Pick which panel(s) to show — e.g. only Docker on a Swarm node:
-sudo install-panel --scope global --panel docker
-# …or both sections as separate commands:
+# Pick which panel(s) to show — e.g. Docker + cluster health on a Swarm node:
+sudo install-panel --scope global --panel docker --panel health
+# …or any other combination as separate commands:
 install-panel --scope user --panel server --panel docker
 
 # Preview without writing, then remove again:
@@ -208,12 +354,17 @@ install-panel --scope user --dry-run
 install-panel --scope user --uninstall
 ```
 
+A Swarm node is the natural case for `--panel docker --panel health`
+together: the Docker Swarm block and the clustered-services health block
+answer different questions (what's scheduled vs. what's actually healthy)
+and both only make sense where the Docker socket is available.
+
 Options:
 
 | Option | Values | Default | Meaning |
 |--------|--------|---------|---------|
 | `--scope` | `global` \| `user` | `user` | `/etc/profile.d` (needs root) vs. your own login profile. |
-| `--panel` | `full` \| `server` \| `docker` | `full` | Which command to run; repeatable. |
+| `--panel` | `full` \| `server` \| `docker` \| `health` | `full` | Which command to run; repeatable. |
 | `--shell` | `auto` \| `bash` \| `zsh` | `auto` | Target profile; `zsh` uses `zprofile` (zsh does not read `/etc/profile`). |
 | `--uninstall` | — | — | Remove a previous install. |
 | `--dry-run` | — | — | Show what would change, write nothing. |
