@@ -1810,13 +1810,18 @@ def collect_dns(
         for name, answer in seen.items()
         if name in hosts and hosts[name] != set(answer)
     ]
-    checks.append(
-        DnsCheck(
-            label="/etc/hosts",
-            ok=None if diverging else True,
-            detail=f"diverges: {', '.join(diverging)}" if diverging else "matches",
+    if not seen:
+        # Nothing resolved, so there is nothing to compare against. Reporting
+        # "matches" here would claim agreement with data we never obtained.
+        checks.append(DnsCheck(label="/etc/hosts", ok=None, detail="no data"))
+    else:
+        checks.append(
+            DnsCheck(
+                label="/etc/hosts",
+                ok=None if diverging else True,
+                detail=f"diverges: {', '.join(diverging)}" if diverging else "matches",
+            )
         )
-    )
     return checks
 ```
 
