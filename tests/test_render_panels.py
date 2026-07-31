@@ -280,47 +280,53 @@ def test_single_infra_ui_keeps_its_own_name():
 
 
 def test_infra_ui_services_win_over_infrastructure_stacks():
-    """'portainer' is in both default lists — the UI list decides."""
+    """A stack named after a UI service can still match an infrastructure key
+    by substring — 'kafka-ui' (DEFAULT_INFRA_UI_SERVICES) contains 'kafka'
+    (DEFAULT_INFRASTRUCTURE_STACKS), so is_infra("kafka-ui") is also true. The
+    UI list is applied first and wins: the service is rendered as a sub-row of
+    the 'infra-uis' pseudo stack instead of becoming its own top-level
+    infrastructure stack."""
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus("portainer_portainer", 1, 1, stack="portainer",
-                          description="Docker UI", tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("kafka_kafka", 1, 1, stack="kafka",
+            ServiceStatus("kafka-ui_kafka-ui", 1, 1, stack="kafka-ui",
+                          description="Kafka UI", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("mongodb_mongodb", 1, 1, stack="mongodb",
                           tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     uis_at = _line_index(out, lambda ln: ln.strip().startswith("infra-uis"))
     # Rendered as a sub-row of the pseudo stack, not as a top-level infra row.
-    assert uis_at < _line_index(out, lambda ln: ln.strip().startswith("portainer"))
-    assert _line_index(out, lambda ln: ln.strip().startswith("portainer")) < _line_index(
-        out, lambda ln: ln.strip().startswith("kafka")
+    assert uis_at < _line_index(out, lambda ln: ln.strip().startswith("kafka-ui"))
+    assert _line_index(out, lambda ln: ln.strip().startswith("kafka-ui")) < _line_index(
+        out, lambda ln: ln.strip().startswith("mongodb")
     )
 
 
 def test_ui_sidecar_keeps_its_stack_for_attribution():
-    """A service pulled in only because its STACK name matched a UI key (a
-    sidecar such as 'portainer_agent') keeps 'stack/service' as its label —
-    the UI itself still renders under its plain, unqualified name."""
+    """A service pulled into 'infra-uis' only because its STACK name matched a
+    UI key (a sidecar such as 'kafka-ui_agent', whose stack 'kafka-ui' matches
+    the 'kafka-ui' UI key) keeps 'stack/service' as its label — the UI itself
+    still renders under its plain, unqualified name."""
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus("portainer_portainer", 1, 1, stack="portainer",
-                          description="Docker UI", tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("portainer_agent", 1, 1, stack="portainer",
-                          description="Portainer agent", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("kafka-ui_kafka-ui", 1, 1, stack="kafka-ui",
+                          description="Kafka UI", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("kafka-ui_agent", 1, 1, stack="kafka-ui",
+                          description="Kafka UI sidecar", tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
-    assert "portainer/agent" in out
-    # The UI row itself stays plain, not qualified as 'portainer/portainer'.
+    assert "kafka-ui/agent" in out
+    # The UI row itself stays plain, not qualified as 'kafka-ui/kafka-ui'.
     lines = out.splitlines()
-    portainer_line = next(ln for ln in lines if ln.strip().startswith("portainer") and
-                          "portainer/agent" not in ln)
-    assert "portainer/portainer" not in portainer_line
+    ui_line = next(ln for ln in lines if ln.strip().startswith("kafka-ui") and
+                   "kafka-ui/agent" not in ln)
+    assert "kafka-ui/kafka-ui" not in ui_line
 
 
 def test_no_infra_uis_row_without_matching_services():
