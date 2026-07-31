@@ -14,6 +14,7 @@ MongoDB on lrz_cc and no Kafka on vzd-app are the normal case.
 
 from __future__ import annotations
 
+import json
 import re
 
 from ..model import ClusterMember, ClusterService
@@ -113,8 +114,72 @@ def probe_postgres(client) -> ClusterService:
     return service
 
 
+MONGODB_PATTERNS = ("mongodb",)
+
+# db.hello() is unauthenticated — the Ansible role's own healthcheck already
+# relies on an unauthenticated ping. rs.status() would report per-member state
+# but needs credentials, which are deliberately out of scope.
+MONGO_EVAL = (
+    "const h = db.hello(); "
+    "JSON.stringify({set: h.setName, me: h.me, primary: h.primary, "
+    "isPrimary: h.isWritablePrimary, hosts: h.hosts})"
+)
+MONGO_COMMAND = [
+    "mongosh",
+    "--tls",
+    "--tlsAllowInvalidCertificates",
+    "--quiet",
+    "--eval",
+    MONGO_EVAL,
+]
+
+
+def parse_mongo_hello(output: str) -> ClusterService:
+    """Parse the JSON produced by ``db.hello()``."""
+    line = next((raw for raw in reversed(output.splitlines()) if raw.strip()), "")
+    data = json.loads(line)
+    primary = data.get("primary")
+    me = data.get("me")
+    members = []
+    for host in data.get("hosts") or []:
+        if host == primary:
+            role, healthy = "primary", True
+        elif host == me:
+            # We just executed a command against this member.
+            role, healthy = "secondary", True
+        else:
+            # db.hello() lists membership, not state — claim nothing.
+            role, healthy = "member", None
+        members.append(ClusterMember(name=host, role=role, healthy=healthy))
+    return ClusterService(
+        kind="mongodb",
+        name=data.get("set"),
+        reachable=True,
+        leader=primary,
+        # For MongoDB this means exactly "a primary exists" and nothing more.
+        quorum_ok=bool(primary),
+        members=members,
+    )
+
+
+def probe_mongodb(client) -> ClusterService:
+    """``db.hello()`` through mongosh — no credentials required."""
+    try:
+        container = find_container(client, MONGODB_PATTERNS)
+    except Exception as exc:
+        return ClusterService(kind="mongodb", error=str(exc))
+    if container is None:
+        return ClusterService(kind="mongodb", applicable=False)
+    try:
+        output = exec_text(container, MONGO_COMMAND)
+        return parse_mongo_hello(output)
+    except Exception as exc:
+        return ClusterService(kind="mongodb", error=str(exc))
+
+
 _PROBES = {
     "postgres": probe_postgres,
+    "mongodb": probe_mongodb,
 }
 
 

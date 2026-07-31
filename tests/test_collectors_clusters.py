@@ -158,3 +158,76 @@ def test_collect_clusters_only_probes_the_requested_kinds():
     assert clusters.collect_clusters(_FakeClient([]), kinds=[]) == []
     result = clusters.collect_clusters(_FakeClient([]), kinds=["postgres"])
     assert [s.kind for s in result] == ["postgres"]
+
+
+MONGO_HELLO = (
+    '{"set":"lrz_app","me":"mongodb-lmzvd06-internet-app-1:27017",'
+    '"primary":"mongodb-lmzvd06-internet-app-2:27017","isPrimary":false,'
+    '"hosts":["mongodb-lmzvd06-internet-app-1:27017","mongodb-lmzvd06-internet-app-2:27017",'
+    '"mongodb-lmzvd06-internet-app-3:27017","mongodb-lmzvd06-internet-app-4:27017",'
+    '"mongodb-lmzvd06-internet-app-5:27017"]}\n'
+)
+
+
+def test_parse_mongo_hello_reads_set_name_and_primary():
+    service = clusters.parse_mongo_hello(MONGO_HELLO)
+    assert service.kind == "mongodb"
+    assert service.name == "lrz_app"
+    assert service.reachable is True
+    assert service.leader == "mongodb-lmzvd06-internet-app-2:27017"
+    assert service.quorum_ok is True
+    assert len(service.members) == 5
+
+
+def test_parse_mongo_hello_only_claims_health_where_it_has_evidence():
+    service = clusters.parse_mongo_hello(MONGO_HELLO)
+    by_name = {member.name: member for member in service.members}
+    # We just talked to this one, and the set agrees on the primary.
+    assert by_name["mongodb-lmzvd06-internet-app-1:27017"].healthy is True
+    assert by_name["mongodb-lmzvd06-internet-app-2:27017"].healthy is True
+    assert by_name["mongodb-lmzvd06-internet-app-2:27017"].role == "primary"
+    # db.hello() says nothing about the state of the others.
+    assert by_name["mongodb-lmzvd06-internet-app-4:27017"].healthy is None
+    assert by_name["mongodb-lmzvd06-internet-app-4:27017"].role == "member"
+
+
+def test_parse_mongo_hello_without_a_primary_has_no_quorum():
+    service = clusters.parse_mongo_hello(MONGO_HELLO.replace(
+        '"primary":"mongodb-lmzvd06-internet-app-2:27017",', ""
+    ))
+    assert service.leader is None
+    assert service.quorum_ok is False
+
+
+def test_probe_mongodb_is_not_applicable_without_a_local_container():
+    service = clusters.probe_mongodb(_FakeClient([]))
+    assert service.applicable is False
+
+
+def test_probe_mongodb_runs_mongosh_unauthenticated():
+    container = _FakeContainer(
+        "mongodb_lmzvd06-internet-app-1.1.abc", exec_result=(0, MONGO_HELLO.encode())
+    )
+    service = clusters.probe_mongodb(_FakeClient([container]))
+    command = container.commands[0]
+    assert command[0] == "mongosh"
+    assert "--quiet" in command
+    assert not any("-u" == part or "--username" in part for part in command)
+    assert service.name == "lrz_app"
+
+
+def test_probe_mongodb_reports_docker_api_failure_as_error():
+    """Docker socket failure must be distinct from 'not applicable'."""
+    class _FailingClient:
+        class _FailingColl:
+            def list(self, *a, **k):
+                raise RuntimeError("Docker socket permission denied")
+
+        @property
+        def containers(self):
+            return self._FailingColl()
+
+    service = clusters.probe_mongodb(_FailingClient())
+    assert service.applicable is True  # Docker check was attempted
+    assert service.error is not None  # But it failed
+    assert "permission denied" in service.error
