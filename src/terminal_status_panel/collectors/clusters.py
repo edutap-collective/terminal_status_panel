@@ -319,24 +319,36 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
         )
 
     volume = ElementTree.fromstring(volume_xml)
+    # `gluster volume status --xml` with no volume name given (as we call it)
+    # returns *all* volumes on the host as sibling <volume> elements. We only
+    # report the first one — iterating <node> over the whole document would
+    # silently merge bricks from unrelated volumes into one flat list.
+    volume_elements = volume.findall(".//volume")
     volume_name = None
-    for node in volume.iter("volume"):
-        volume_name = (node.findtext("volName") or "").strip() or None
-        break
-    for node in volume.iter("node"):
-        hostname = (node.findtext("hostname") or "").strip()
-        # Self-heal daemons are ordinary <node> entries; counting them as
-        # bricks would double the reported brick count.
-        if hostname == "Self-heal Daemon":
-            continue
-        members.append(
-            ClusterMember(
-                name=hostname,
-                role="brick",
-                healthy=(node.findtext("status") or "0").strip() == "1",
-                detail=(node.findtext("path") or "").strip() or None,
+    detail = None
+    if volume_elements:
+        first_volume = volume_elements[0]
+        volume_name = (first_volume.findtext("volName") or "").strip() or None
+        for node in first_volume.iter("node"):
+            hostname = (node.findtext("hostname") or "").strip()
+            # Self-heal daemons are ordinary <node> entries; counting them as
+            # bricks would double the reported brick count.
+            if hostname == "Self-heal Daemon":
+                continue
+            members.append(
+                ClusterMember(
+                    name=hostname,
+                    role="brick",
+                    healthy=(node.findtext("status") or "0").strip() == "1",
+                    detail=(node.findtext("path") or "").strip() or None,
+                )
             )
-        )
+        extra_volumes = len(volume_elements) - 1
+        if extra_volumes:
+            # Make the narrowing visible rather than hiding it: today's
+            # cluster only has one volume, but if that ever changes this
+            # must not read as a complete picture.
+            detail = f"{volume_name} (+{extra_volumes} more volumes)"
 
     return ClusterService(
         kind="glusterfs",
@@ -344,6 +356,7 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
         reachable=True,
         leader=None,  # GlusterFS has no leader
         quorum_ok=total_peers > 0 and (connected + 1) * 2 > total_peers + 1,
+        detail=detail,
         members=members,
     )
 

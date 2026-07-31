@@ -382,6 +382,58 @@ def test_parse_gluster_has_no_quorum_when_most_peers_are_disconnected():
     assert clusters.parse_gluster(two_down, GLUSTER_VOLUME).quorum_ok is False
 
 
+# `gluster volume status --xml` with no volume name (as we call it) returns
+# *every* volume on the host as sibling <volume> elements. This fixture adds
+# a second volume ("backup") whose bricks must not leak into the reported
+# members of the first volume ("shared").
+GLUSTER_VOLUME_MULTI = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cliOutput>
+  <opRet>0</opRet>
+  <volStatus><volumes>
+  <volume>
+    <volName>shared</volName>
+    <nodeCount>4</nodeCount>
+    <node><hostname>wg-lmzvd06-ccc-01.srv.mwn.de</hostname>
+      <path>/data/glusterfs/brick1/shared</path><status>1</status></node>
+    <node><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+      <path>/data/glusterfs/brick1/shared</path><status>0</status></node>
+    <node><hostname>Self-heal Daemon</hostname><path>localhost</path><status>1</status></node>
+    <node><hostname>Self-heal Daemon</hostname>
+      <path>wg-lmzvd06-ccn-01.srv.mwn.de</path><status>1</status></node>
+  </volume>
+  <volume>
+    <volName>backup</volName>
+    <nodeCount>2</nodeCount>
+    <node><hostname>wg-lmzvd06-ccc-01.srv.mwn.de</hostname>
+      <path>/data/glusterfs/brick1/backup</path><status>1</status></node>
+    <node><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+      <path>/data/glusterfs/brick1/backup</path><status>1</status></node>
+  </volume>
+  </volumes></volStatus>
+</cliOutput>
+"""
+
+
+def test_parse_gluster_does_not_leak_bricks_from_a_second_volume():
+    service = clusters.parse_gluster(GLUSTER_PEERS, GLUSTER_VOLUME_MULTI)
+    bricks = [member for member in service.members if member.role == "brick"]
+    assert len(bricks) == 2, "only the first volume's bricks may be reported"
+    assert all("backup" not in (member.detail or "") for member in bricks)
+
+
+def test_parse_gluster_notes_additional_volumes_in_detail():
+    service = clusters.parse_gluster(GLUSTER_PEERS, GLUSTER_VOLUME_MULTI)
+    assert service.name == "shared"
+    assert service.detail is not None
+    assert "shared" in service.detail
+    assert "1" in service.detail  # one additional volume beyond "shared"
+
+
+def test_parse_gluster_single_volume_gets_no_extra_volumes_suffix():
+    service = clusters.parse_gluster(GLUSTER_PEERS, GLUSTER_VOLUME)
+    assert service.detail is None
+
+
 def test_probe_glusterfs_is_not_applicable_without_passwordless_sudo(monkeypatch):
     class _Completed:
         def __init__(self, returncode, stdout="", stderr=""):
