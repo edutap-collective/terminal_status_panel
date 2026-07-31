@@ -379,11 +379,80 @@ def probe_glusterfs() -> ClusterService:
         return ClusterService(kind="glusterfs", error=str(exc))
 
 
+RUSTFS_PATTERNS = ("rustfs_rustfs",)
+RUSTFS_FALLBACK_ENDPOINT = "https://localhost:9000"
+
+
+def rustfs_endpoints(container) -> list[str]:
+    """Endpoints to probe, derived from RUSTFS_VOLUMES in the container env.
+
+    Read from the container rather than from configuration so the check stays
+    correct across the move from ``shared`` (a local path) to ``distributed``
+    (a list of URLs) without any change here.
+    """
+    environment = ((getattr(container, "attrs", {}) or {}).get("Config") or {}).get("Env") or []
+    raw = ""
+    for entry in environment:
+        key, _, value = str(entry).partition("=")
+        if key == "RUSTFS_VOLUMES":
+            raw = value
+            break
+    endpoints = []
+    for token in raw.split():
+        if "://" not in token:
+            continue  # a plain path: one local instance
+        scheme, _, rest = token.partition("://")
+        host_port = rest.split("/", 1)[0]
+        endpoints.append(f"{scheme}://{host_port}")
+    return endpoints or [RUSTFS_FALLBACK_ENDPOINT]
+
+
+def probe_rustfs(client) -> ClusterService:
+    """GET /health per endpoint — the only unauthenticated status RustFS offers."""
+    try:
+        container = find_container(client, RUSTFS_PATTERNS)
+    except Exception as exc:
+        return ClusterService(kind="rustfs", error=str(exc))
+    if container is None:
+        return ClusterService(kind="rustfs", applicable=False)
+    members: list[ClusterMember] = []
+    for endpoint in rustfs_endpoints(container):
+        try:
+            # curl from inside the container: the rustfs overlay network
+            # publishes no host ports.
+            status = exec_text(
+                container,
+                [
+                    "curl", "-ks", "-o", "/dev/null", "-m", "2",
+                    "-w", "%{http_code}", f"{endpoint}/health",
+                ],
+            ).strip()
+            healthy = status == "200"
+            detail = f"HTTP {status}"
+        except Exception as exc:
+            healthy = False
+            detail = str(exc)[:60]
+        members.append(
+            ClusterMember(name=endpoint, role="peer", healthy=healthy, detail=detail)
+        )
+    live = sum(1 for member in members if member.healthy)
+    return ClusterService(
+        kind="rustfs",
+        name="rustfs",
+        reachable=bool(members),
+        leader=None,  # RustFS has no leader we can observe
+        quorum_ok=live == len(members) and live > 0,
+        detail=f"{live}/{len(members)} live",
+        members=members,
+    )
+
+
 _PROBES = {
     "postgres": probe_postgres,
     "mongodb": probe_mongodb,
     "kafka": probe_kafka,
     "glusterfs": lambda _client: probe_glusterfs(),
+    "rustfs": probe_rustfs,
 }
 
 

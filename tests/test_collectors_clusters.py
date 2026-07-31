@@ -505,3 +505,70 @@ def test_probe_glusterfs_calls_sudo_n_with_xml(monkeypatch):
     assert calls[0][:3] == ["sudo", "-n", "gluster"]
     assert "--xml" in calls[0]
     assert service.name == "shared"
+
+
+def test_rustfs_endpoints_treats_a_plain_path_as_a_single_local_instance():
+    container = _FakeContainer("rustfs_rustfs.1.abc", env=["RUSTFS_VOLUMES=/data"])
+    assert clusters.rustfs_endpoints(container) == ["https://localhost:9000"]
+
+
+def test_rustfs_endpoints_reads_distributed_urls():
+    container = _FakeContainer(
+        "rustfs_rustfs.1.abc",
+        env=["RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data"],
+    )
+    assert clusters.rustfs_endpoints(container) == [
+        "https://rustfs-a:9000",
+        "https://rustfs-b:9000",
+    ]
+
+
+def test_rustfs_endpoints_falls_back_to_localhost_without_the_variable():
+    container = _FakeContainer("rustfs_rustfs.1.abc", env=[])
+    assert clusters.rustfs_endpoints(container) == ["https://localhost:9000"]
+
+
+def test_probe_rustfs_is_not_applicable_without_a_local_container():
+    service = clusters.probe_rustfs(_FakeClient([]))
+    assert service.applicable is False
+    assert service.error is None
+
+
+def test_probe_rustfs_marks_a_200_endpoint_healthy():
+    container = _FakeContainer(
+        "rustfs_rustfs.1.abc", exec_result=(0, b"200"), env=["RUSTFS_VOLUMES=/data"]
+    )
+    service = clusters.probe_rustfs(_FakeClient([container]))
+    assert service.kind == "rustfs"
+    assert service.reachable is True
+    assert service.leader is None
+    assert len(service.members) == 1
+    assert service.members[0].healthy is True
+    assert service.members[0].role == "peer"
+    assert "/health" in " ".join(container.commands[0])
+
+
+def test_probe_rustfs_marks_a_non_200_endpoint_unhealthy():
+    container = _FakeContainer(
+        "rustfs_rustfs.1.abc", exec_result=(0, b"403"), env=["RUSTFS_VOLUMES=/data"]
+    )
+    service = clusters.probe_rustfs(_FakeClient([container]))
+    assert service.members[0].healthy is False
+    assert service.quorum_ok is False
+
+
+def test_probe_rustfs_reports_docker_api_failure_as_error():
+    """Docker socket failure must be distinct from 'not applicable'."""
+    class _FailingClient:
+        class _FailingColl:
+            def list(self, *a, **k):
+                raise RuntimeError("Docker socket permission denied")
+
+        @property
+        def containers(self):
+            return self._FailingColl()
+
+    service = clusters.probe_rustfs(_FailingClient())
+    assert service.applicable is True  # Docker check was attempted
+    assert service.error is not None  # But it failed
+    assert "permission denied" in service.error
