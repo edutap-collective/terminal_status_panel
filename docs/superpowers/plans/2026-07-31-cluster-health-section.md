@@ -12,7 +12,7 @@
 
 - **Never break the login shell.** `cli.main()` returns 0 unconditionally. Every collector catches all exceptions and returns its dataclass with `error` set.
 - **Timeout ≠ failure.** A check that hit the budget renders `…`; a check that failed renders `✗`. Never conflate them.
-- **Not applicable ≠ error.** A node that runs no member of a service (no Mongo on `lrz_cc`, no Kafka on `vzd-app`), or has no passwordless sudo, sets `applicable=False` and renders "n/a hier". It must never show a red panel.
+- **Not applicable ≠ error.** A node that runs no member of a service (no Mongo on `lrz_cc`, no Kafka on `vzd-app`), or has no passwordless sudo, sets `applicable=False` and renders "n/a here". It must never show a red panel.
 - **Total budget default 5.0 s.** Individual timeouts: postgres 1.5, mongodb 2.5, kafka 4.0, glusterfs 1.0, rustfs 2.0, wireguard 1.0, dns 2.5. All run concurrently, so wall clock is bounded by the total, not the sum.
 - **Threads must be daemon threads.** A non-daemon `ThreadPoolExecutor` thread is joined at interpreter exit and would hang the login shell past the budget. This is the single most important implementation detail in this plan.
 - **Fixtures are real recorded output**, captured from the production clusters on 2026-07-31, never invented examples. They are reproduced verbatim in the tasks below.
@@ -264,7 +264,7 @@ def test_panel_data_carries_health():
 
 
 def test_dns_check_none_means_warning():
-    assert DnsCheck(label="/etc/hosts", ok=None, detail="1 Abweichung").ok is None
+    assert DnsCheck(label="/etc/hosts", ok=None, detail="1 divergence").ok is None
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1529,7 +1529,7 @@ def test_forward_and_reverse_are_consistent(tmp_path):
         fqdn="node1.example", peer_names=[], expectations=[], timeout=1.0,
         resolver=resolver, hosts_path=_hosts(tmp_path, ""),
     )
-    own = [c for c in checks if c.label == "eigener FQDN"][0]
+    own = [c for c in checks if c.label == "own FQDN"][0]
     assert own.ok is True
 
 
@@ -1542,7 +1542,7 @@ def test_reverse_pointing_elsewhere_is_a_failure(tmp_path):
         fqdn="node1.example", peer_names=[], expectations=[], timeout=1.0,
         resolver=resolver, hosts_path=_hosts(tmp_path, ""),
     )
-    own = [c for c in checks if c.label == "eigener FQDN"][0]
+    own = [c for c in checks if c.label == "own FQDN"][0]
     assert own.ok is False
 
 
@@ -1742,7 +1742,7 @@ def collect_dns(
         return answer
 
     # 1. Resolver reachability and latency.
-    servers = ", ".join(getattr(resolver, "nameservers", []) or []) or "unbekannt"
+    servers = ", ".join(getattr(resolver, "nameservers", []) or []) or "unknown"
     started = time.monotonic()
     own_addresses = resolve(fqdn)
     elapsed_ms = (time.monotonic() - started) * 1000
@@ -1750,13 +1750,13 @@ def collect_dns(
         DnsCheck(
             label=f"Resolver {servers}",
             ok=own_addresses is not None,
-            detail=f"{elapsed_ms:.0f} ms" if own_addresses is not None else "keine Antwort",
+            detail=f"{elapsed_ms:.0f} ms" if own_addresses is not None else "no answer",
         )
     )
 
     # 2. Own FQDN forward and reverse.
     if own_addresses is None:
-        checks.append(DnsCheck(label="eigener FQDN", ok=False, detail="A fehlt"))
+        checks.append(DnsCheck(label="own FQDN", ok=False, detail="no A record"))
     else:
         names: list[str] = []
         for address in own_addresses:
@@ -1767,9 +1767,9 @@ def collect_dns(
         consistent = fqdn.rstrip(".") in names
         checks.append(
             DnsCheck(
-                label="eigener FQDN",
+                label="own FQDN",
                 ok=consistent,
-                detail="A+PTR ok" if consistent else f"PTR: {', '.join(names) or 'fehlt'}",
+                detail="A+PTR ok" if consistent else f"PTR: {', '.join(names) or 'missing'}",
             )
         )
 
@@ -1783,7 +1783,7 @@ def collect_dns(
                 detail=(
                     f"{len(peer_names) - len(missing)}/{len(peer_names)}"
                     if not missing
-                    else f"ohne Antwort: {', '.join(missing)}"
+                    else f"no answer: {', '.join(missing)}"
                 ),
             )
         )
@@ -1792,9 +1792,9 @@ def collect_dns(
     for name, expected in expectations:
         answer = resolve(name)
         if answer is None:
-            checks.append(DnsCheck(label=name, ok=False, detail="keine Antwort"))
+            checks.append(DnsCheck(label=name, ok=False, detail="no answer"))
         elif expected and set(answer) != set(expected):
-            checks.append(DnsCheck(label=name, ok=False, detail=f"ist {', '.join(answer)}"))
+            checks.append(DnsCheck(label=name, ok=False, detail=f"got {', '.join(answer)}"))
         else:
             checks.append(DnsCheck(label=name, ok=True, detail=", ".join(answer)))
 
@@ -1809,7 +1809,7 @@ def collect_dns(
         DnsCheck(
             label="/etc/hosts",
             ok=None if diverging else True,
-            detail=f"abweichend: {', '.join(diverging)}" if diverging else "deckungsgleich",
+            detail=f"diverges: {', '.join(diverging)}" if diverging else "matches",
         )
     )
     return checks
@@ -1897,7 +1897,7 @@ def test_handshake_older_than_three_minutes_is_not_ok():
 def test_a_peer_that_never_handshook_is_not_ok():
     peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
     assert peers[2].ok is False
-    assert peers[2].detail == "nie"
+    assert peers[2].detail == "never"
 
 
 def test_collect_peers_falls_back_to_tcp_when_sudo_is_refused(monkeypatch):
@@ -2007,7 +2007,7 @@ def parse_wg_dump(dump: str, now: float, hosts: dict[str, set[str]]) -> list[Pee
         except ValueError:
             last = 0.0
         if last <= 0:
-            ok, detail = False, "nie"
+            ok, detail = False, "never"
         else:
             age = now - last
             ok, detail = age < HANDSHAKE_STALE_SECONDS, _format_age(age)
@@ -2044,7 +2044,7 @@ def _tcp_probe(peer_names: list[str], timeout: float) -> list[PeerReachability]:
             connection.close()
             ok, detail = True, f"tcp/{SWARM_PORT}"
         except Exception:
-            ok, detail = False, f"tcp/{SWARM_PORT} zu"
+            ok, detail = False, f"tcp/{SWARM_PORT} closed"
         peers.append(PeerReachability(name=name, method="tcp", ok=ok, detail=detail))
     return peers
 
@@ -2062,7 +2062,7 @@ def collect_peers(peer_names: list[str], timeout: float) -> list[PeerReachabilit
         return _tcp_probe(peer_names, timeout)
     except Exception:
         return [
-            PeerReachability(name=name, method="tcp", ok=False, detail="Probe fehlgeschlagen")
+            PeerReachability(name=name, method="tcp", ok=False, detail="probe failed")
             for name in peer_names
         ]
 ```
@@ -2592,7 +2592,7 @@ def test_tcp_fallback_is_labelled_as_such():
 
 
 def test_dns_warning_renders_as_warning_not_failure():
-    health = HealthInfo(dns=[DnsCheck(label="/etc/hosts", ok=None, detail="abweichend: a")])
+    health = HealthInfo(dns=[DnsCheck(label="/etc/hosts", ok=None, detail="diverges: a")])
     output = _render(health)
     assert "⚠" in output
     assert "💀" not in output
@@ -2665,7 +2665,7 @@ def _service_lines(service: ClusterService) -> Text:
         title = f"{title} {service.name}"
 
     if not service.applicable:
-        return Text(f"{title}: n/a hier", style="dim")
+        return Text(f"{title}: n/a here", style="dim")
     if service.error:
         return Text(f"{FAILED} {title}: {service.error}", style="red")
 
@@ -2691,9 +2691,9 @@ def _service_lines(service: ClusterService) -> Text:
 
 def _clusters_panel(health: HealthInfo) -> Panel:
     if "clusters" in health.truncated:
-        body: RenderableType = Text(f"{TRUNCATED} Zeitbudget erschöpft", style="dim")
+        body: RenderableType = Text(f"{TRUNCATED} time budget exceeded", style="dim")
     elif not health.clusters:
-        body = Text("keine geclusterten Dienste gefunden", style="dim")
+        body = Text("no clustered services found", style="dim")
     else:
         body = Group(*[_service_lines(service) for service in health.clusters])
     return Panel(body, title="INFRASTRUKTUR-DIENSTE", border_style="blue")
@@ -2701,9 +2701,9 @@ def _clusters_panel(health: HealthInfo) -> Panel:
 
 def _peers_panel(health: HealthInfo) -> Panel:
     if "peers" in health.truncated:
-        body: RenderableType = Text(f"{TRUNCATED} Zeitbudget erschöpft", style="dim")
+        body: RenderableType = Text(f"{TRUNCATED} time budget exceeded", style="dim")
     elif not health.peers:
-        body = Text("keine Peers ermittelbar", style="dim")
+        body = Text("no peers detected", style="dim")
     else:
         table = Table.grid(padding=(0, 2))
         table.add_column()
@@ -2721,9 +2721,9 @@ def _peers_panel(health: HealthInfo) -> Panel:
 
 def _dns_panel(health: HealthInfo) -> Panel:
     if "dns" in health.truncated:
-        body: RenderableType = Text(f"{TRUNCATED} Zeitbudget erschöpft", style="dim")
+        body: RenderableType = Text(f"{TRUNCATED} time budget exceeded", style="dim")
     elif not health.dns:
-        body = Text("keine DNS-Checks", style="dim")
+        body = Text("no DNS checks", style="dim")
     else:
         table = Table.grid(padding=(0, 2))
         table.add_column()
@@ -3031,7 +3031,7 @@ Extend the intro list with:
   peer handshake ages, and DNS consistency checks. Every check runs under a
   shared time budget (default 5 s); a check that runs out renders `…`, which is
   deliberately distinct from `✗` for a check that failed. A service with no
-  member on this node renders `n/a hier` and is not an error.
+  member on this node renders `n/a here` and is not an error.
 ```
 
 - [ ] **Step 3: Document the configuration**
@@ -3217,4 +3217,4 @@ Expected: the section renders, and the elapsed time stays under the configured b
 
 **Two deviations from the design sketch**, both deliberate and both explained at their task: `ClusterMember.healthy` is `bool | None` rather than `bool` (so MongoDB's unobservable members cannot render a false ✅), and `ClusterMember.warning` / `ClusterService.detail` carry short strings instead of a growing set of booleans.
 
-**One risk worth naming.** `find_container` matches on container-name substrings that must track the stack naming the Ansible roles produce. A rename on the Ansible side would silently disable a probe — it would render `n/a hier`, which looks like a legitimate state. Task 15's manual verification step (`status-health` on a real node) is what catches this, and it is the reason that step exists rather than being left to CI.
+**One risk worth naming.** `find_container` matches on container-name substrings that must track the stack naming the Ansible roles produce. A rename on the Ansible side would silently disable a probe — it would render `n/a here`, which looks like a legitimate state. Task 15's manual verification step (`status-health` on a real node) is what catches this, and it is the reason that step exists rather than being left to CI.
