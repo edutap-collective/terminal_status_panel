@@ -30,6 +30,7 @@ def test_collect_health_gathers_all_three_groups(monkeypatch):
     assert health.peers[0].name == "ccn-01"
     assert health.dns[0].label == "Resolver"
     assert health.truncated == []
+    assert health.clusters_probed is True
 
 
 def test_a_check_that_exceeds_the_budget_is_truncated_not_failed(monkeypatch):
@@ -47,6 +48,9 @@ def test_a_check_that_exceeds_the_budget_is_truncated_not_failed(monkeypatch):
     )
     assert "clusters" in health.truncated
     assert health.clusters == []
+    # Truncation is not the same as never having tried: the task was
+    # registered and attempted, it just didn't finish in time.
+    assert health.clusters_probed is True
 
 
 def test_a_raising_check_becomes_an_error_entry_not_a_truncation(monkeypatch):
@@ -74,6 +78,33 @@ def test_no_docker_client_still_yields_network_and_dns(monkeypatch):
     )
     assert health.clusters == []
     assert health.dns[0].label == "Resolver"
+    # No client means the clusters check was never attempted, not that it
+    # ran and found nothing.
+    assert health.clusters_probed is False
+
+
+def test_no_enabled_kinds_means_clusters_never_probed(monkeypatch):
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+    health = health_collector.collect_health(
+        _config(enabled=[]), fqdn="node.example", peer_names=[], client=object()
+    )
+    assert health.clusters == []
+    assert health.clusters_probed is False
+
+
+def test_clusters_probed_and_empty_is_distinct_from_never_probed(monkeypatch):
+    """The pair that makes the distinction real: a real run that legitimately
+    finds nothing must still be marked as probed, unlike the two cases above.
+    """
+    monkeypatch.setattr(health_collector, "collect_clusters", lambda client, kinds: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+    health = health_collector.collect_health(
+        _config(), fqdn="node.example", peer_names=[], client=object()
+    )
+    assert health.clusters == []
+    assert health.clusters_probed is True
 
 
 def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):

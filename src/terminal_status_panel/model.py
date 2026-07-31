@@ -157,6 +157,10 @@ class HealthInfo:
     peers: list[PeerReachability] = field(default_factory=list)
     dns: list[DnsCheck] = field(default_factory=list)
     truncated: list[str] = field(default_factory=list)
+    # False when the clusters check never ran at all (no Docker client, or no
+    # kinds enabled). An empty ``clusters`` list means "nothing found" only
+    # when this is True; otherwise it means "not attempted".
+    clusters_probed: bool = False
 
 
 @dataclass

@@ -23,7 +23,8 @@ def collect_health(
     health_cfg = cfg.health
     tasks = {}
 
-    if client is not None and health_cfg.enabled:
+    clusters_probed = client is not None and bool(health_cfg.enabled)
+    if clusters_probed:
         tasks["clusters"] = lambda: collect_clusters(client, list(health_cfg.enabled))
 
     tasks["peers"] = lambda: collect_peers(
@@ -52,5 +53,9 @@ def collect_health(
             dns.append(DnsCheck(label="DNS", ok=False, detail=message))
 
     return HealthInfo(
-        clusters=clusters, peers=peers, dns=dns, truncated=list(outcome.truncated)
+        clusters=clusters,
+        peers=peers,
+        dns=dns,
+        truncated=list(outcome.truncated),
+        clusters_probed=clusters_probed,
     )
