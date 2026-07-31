@@ -1,11 +1,12 @@
 """Compose sections into the final dashboard layout.
 
-The panel is split into two independently selectable sections:
+The panel is split into three independently selectable sections:
 
 - ``server``  — SYSTEM OVERVIEW + UPDATES (top row) and the SYSTEM STATUS block.
 - ``docker``  — the DOCKER INFOS block.
+- ``health``  — the CLUSTER HEALTH block.
 
-``build_layout`` renders whichever sections are requested (default: both),
+``build_layout`` renders whichever sections are requested (default: all),
 followed by a shared footer, and stretches to the console width.
 """
 
@@ -20,9 +21,10 @@ from rich.text import Text
 
 from ..config import Config
 from ..model import PanelData
+from .health import health_section
 from .panels import services_section, system_overview, system_status, updates_panel
 
-SECTIONS: tuple[str, ...] = ("server", "docker")
+SECTIONS: tuple[str, ...] = ("server", "docker", "health")
 
 
 def _footer() -> Table:
@@ -50,9 +52,15 @@ def docker_section(data: PanelData, cfg: Config) -> RenderableType:
     return services_section(data.swarm, cfg)
 
 
+def health_block(data: PanelData, cfg: Config) -> RenderableType:
+    """The CLUSTER HEALTH block."""
+    return health_section(data.health, cfg)
+
+
 _SECTION_BUILDERS = {
     "server": server_section,
     "docker": docker_section,
+    "health": health_block,
 }
 
 

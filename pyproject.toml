@@ -27,6 +27,7 @@ dependencies = [
     "docker",
     "psutil",
     "distro",
+    "dnspython",  # query resolvers directly: getaddrinfo would hide /etc/hosts divergence
 ]
 
 [project.optional-dependencies]
@@ -49,6 +50,7 @@ typecheck  = [
 status-full = "terminal_status_panel.cli:main"
 status-server = "terminal_status_panel.cli:server_main"
 status-docker = "terminal_status_panel.cli:docker_main"
+status-health = "terminal_status_panel.cli:health_main"
 install-panel = "terminal_status_panel.install:main"
 
 [project.urls]
@@ -96,3 +98,4 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+per-file-ignores = {"tests/test_collectors_clusters.py" = ["E501"]}

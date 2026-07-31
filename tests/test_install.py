@@ -77,3 +77,14 @@ def test_main_user_install(tmp_path, monkeypatch, capsys):
     assert rc_arg == 0
     assert "status-docker" in cli_home_profile.read_text()
     assert "login shells" in capsys.readouterr().out
+
+
+def test_main_user_install_health(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    rc = cli_home_profile = tmp_path / ".profile"
+    rc.write_text("")
+    rc_arg = install.main(["--scope", "user", "--panel", "health"])
+    assert rc_arg == 0
+    assert "status-health" in cli_home_profile.read_text()
+    assert "login shells" in capsys.readouterr().out
