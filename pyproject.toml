@@ -96,3 +96,4 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+per-file-ignores = {"tests/test_collectors_clusters.py" = ["E501"]}
