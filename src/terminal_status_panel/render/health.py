@@ -121,6 +121,10 @@ def _peer_method_label(health: HealthInfo) -> str:
 def _peers_body(health: HealthInfo) -> RenderableType:
     if "peers" in health.truncated:
         return Text(f"{TRUNCATED} time budget exceeded", style="dim")
+    if not health.peers_probed:
+        # Never ran: no peer names and no WireGuard answer. Rendering this as
+        # "no peers" would report a gap in coverage as a clean bill of health.
+        return Text(f"{UNKNOWN} not checked (no peer list available)", style="dim")
     if not health.peers:
         return Text("no peers detected", style="dim")
     table = Table.grid(padding=(0, 2))

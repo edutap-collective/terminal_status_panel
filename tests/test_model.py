@@ -74,3 +74,7 @@ def test_panel_data_carries_health():
 
 def test_dns_check_none_means_warning():
     assert DnsCheck(label="/etc/hosts", ok=None, detail="1 Abweichung").ok is None
+
+
+def test_health_info_defaults_to_unprobed_peers():
+    assert HealthInfo().peers_probed is False

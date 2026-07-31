@@ -48,6 +48,49 @@ def exec_text(container, command: list[str]) -> str:
     return text
 
 
+def _wanted_on_this_node(client, patterns: tuple[str, ...]) -> bool:
+    """True when Swarm has a task desired on this node for a matching service.
+
+    Called only when no local container was found, so its cost is paid on the
+    cheap path. A service whose tasks keep failing still has a desired task
+    here — that is exactly the crash loop we must not report as "n/a".
+    """
+    node_id = ((client.info() or {}).get("Swarm") or {}).get("NodeID")
+    if not node_id:
+        return False
+    for service in client.services.list():
+        name = (getattr(service, "name", "") or "").lower()
+        if not any(pattern.lower() in name for pattern in patterns):
+            continue
+        for task in service.tasks(filters={"desired-state": "running"}):
+            if task.get("NodeID") == node_id:
+                return True
+    return False
+
+
+def locate_member(client, kind: str, patterns: tuple[str, ...]):
+    """Find the local container for *kind*.
+
+    Returns ``(container, None)`` when one is running, otherwise
+    ``(None, verdict)`` where *verdict* already carries the right conclusion:
+    an error when Swarm wants a task here but none runs, ``applicable=False``
+    when this node genuinely runs no member of the service.
+    """
+    try:
+        container = find_container(client, patterns)
+    except Exception as exc:
+        return None, ClusterService(kind=kind, error=str(exc))
+    if container is not None:
+        return container, None
+    try:
+        wanted = _wanted_on_this_node(client, patterns)
+    except Exception:
+        wanted = False  # cannot ask Swarm: fall back to the weaker claim
+    if wanted:
+        return None, ClusterService(kind=kind, error="no running container")
+    return None, ClusterService(kind=kind, applicable=False)
+
+
 def _node_from_member(name: str) -> str | None:
     """``pg18-lmzvd06-ccn-02`` -> ``lmzvd06-ccn-02``."""
     stripped = _PG_NAME_PREFIX.sub("", name)
@@ -100,12 +143,9 @@ def parse_pg_state(output: str) -> ClusterService:
 
 def probe_postgres(client) -> ClusterService:
     """``pg_autoctl show state`` — works from any data node, not only the monitor."""
-    try:
-        container = find_container(client, POSTGRES_PATTERNS)
-    except Exception as exc:
-        return ClusterService(kind="postgres", error=str(exc))
-    if container is None:
-        return ClusterService(kind="postgres", applicable=False)
+    container, verdict = locate_member(client, "postgres", POSTGRES_PATTERNS)
+    if verdict is not None:
+        return verdict
     try:
         output = exec_text(container, ["pg_autoctl", "show", "state"])
     except Exception as exc:
@@ -166,12 +206,9 @@ def parse_mongo_hello(output: str) -> ClusterService:
 
 def probe_mongodb(client) -> ClusterService:
     """``db.hello()`` through mongosh — no credentials required."""
-    try:
-        container = find_container(client, MONGODB_PATTERNS)
-    except Exception as exc:
-        return ClusterService(kind="mongodb", error=str(exc))
-    if container is None:
-        return ClusterService(kind="mongodb", applicable=False)
+    container, verdict = locate_member(client, "mongodb", MONGODB_PATTERNS)
+    if verdict is not None:
+        return verdict
     try:
         output = exec_text(container, MONGO_COMMAND)
         return parse_mongo_hello(output)
@@ -251,12 +288,9 @@ def parse_kafka_quorum(output: str) -> ClusterService:
 
 def probe_kafka(client) -> ClusterService:
     """KRaft controller quorum. Costs ~2.6 s — JVM startup, not optimisable."""
-    try:
-        container = find_container(client, KAFKA_PATTERNS)
-    except Exception as exc:
-        return ClusterService(kind="kafka", error=str(exc))
-    if container is None:
-        return ClusterService(kind="kafka", applicable=False)
+    container, verdict = locate_member(client, "kafka", KAFKA_PATTERNS)
+    if verdict is not None:
+        return verdict
     try:
         return parse_kafka_quorum(exec_text(container, KAFKA_COMMAND))
     except Exception as exc:
@@ -409,12 +443,9 @@ def rustfs_endpoints(container) -> list[str]:
 
 def probe_rustfs(client) -> ClusterService:
     """GET /health per endpoint — the only unauthenticated status RustFS offers."""
-    try:
-        container = find_container(client, RUSTFS_PATTERNS)
-    except Exception as exc:
-        return ClusterService(kind="rustfs", error=str(exc))
-    if container is None:
-        return ClusterService(kind="rustfs", applicable=False)
+    container, verdict = locate_member(client, "rustfs", RUSTFS_PATTERNS)
+    if verdict is not None:
+        return verdict
     members: list[ClusterMember] = []
     for endpoint in rustfs_endpoints(container):
         try:

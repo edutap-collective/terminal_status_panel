@@ -52,10 +52,15 @@ def collect_health(
         elif name == "dns":
             dns.append(DnsCheck(label="DNS", ok=False, detail=message))
 
+    # We had either an answer or something to ask about — a peer name to check.
+    # A truncated peers check still had peer_names, so it counts as probed too.
+    peers_probed = bool(peers) or bool(peer_names)
+
     return HealthInfo(
         clusters=clusters,
         peers=peers,
         dns=dns,
         truncated=list(outcome.truncated),
         clusters_probed=clusters_probed,
+        peers_probed=peers_probed,
     )

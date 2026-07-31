@@ -161,6 +161,9 @@ class HealthInfo:
     # kinds enabled). An empty ``clusters`` list means "nothing found" only
     # when this is True; otherwise it means "not attempted".
     clusters_probed: bool = False
+    # False when there was nothing to probe: no peer names and no WireGuard
+    # answer. An empty ``peers`` list means "no peers" only when this is True.
+    peers_probed: bool = False
 
 
 @dataclass

@@ -30,7 +30,7 @@ def test_unprobed_clusters_are_not_rendered_as_all_clear():
 
 
 def test_probed_but_empty_clusters_say_so():
-    output = _render(HealthInfo(clusters_probed=True))
+    output = _render(HealthInfo(clusters_probed=True, peers_probed=True))
     assert "no clustered services found" in output
     assert "not checked" not in output
 
@@ -106,7 +106,7 @@ def test_truncated_check_renders_ellipsis_not_a_failure():
 
 
 def test_peer_panel_shows_method_and_handshake_age():
-    health = HealthInfo(peers=[
+    health = HealthInfo(peers_probed=True, peers=[
         PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
         PeerReachability(name="ccn-02", method="wireguard", ok=False, detail="6:02"),
     ])
@@ -191,3 +191,14 @@ def test_quorum_true_and_false_are_unchanged():
     assert "✅" in output
     assert "💀" in output
     assert "quorum not reported" not in output
+
+
+def test_unprobed_peers_are_not_rendered_as_no_peers():
+    output = _render(HealthInfo(peers_probed=False))
+    assert "not checked" in output
+    assert "no peers detected" not in output
+
+
+def test_probed_but_empty_peers_say_no_peers():
+    output = _render(HealthInfo(peers_probed=True))
+    assert "no peers detected" in output

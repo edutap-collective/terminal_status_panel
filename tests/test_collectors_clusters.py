@@ -625,6 +625,82 @@ def test_probe_rustfs_majority_endpoints_healthy_yields_quorum():
     assert service.detail == "2/3 live"
 
 
+class _FakeSwarmService:
+    def __init__(self, name, node_ids):
+        self.name = name
+        self._node_ids = node_ids
+
+    def tasks(self, filters=None):
+        return [{"NodeID": node_id} for node_id in self._node_ids]
+
+
+class _SwarmClient(_FakeClient):
+    def __init__(self, containers, node_id, services):
+        super().__init__(containers)
+        self._node_id = node_id
+        self._services = services
+
+    def info(self):
+        return {"Swarm": {"NodeID": self._node_id}}
+
+    @property
+    def services(self):
+        return self._Coll(self._services)
+
+
+def test_locate_member_returns_the_container_when_one_runs():
+    target = _FakeContainer("PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc")
+    container, verdict = clusters.locate_member(
+        _FakeClient([target]), "postgres", clusters.POSTGRES_PATTERNS
+    )
+    assert container is target
+    assert verdict is None
+
+
+def test_a_crash_looping_service_is_an_error_not_not_applicable():
+    """No container runs, but Swarm still wants a task here."""
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-1"])])
+    container, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert container is None
+    assert verdict.applicable is True
+    assert "no running container" in verdict.error
+
+
+def test_a_service_wanted_on_another_node_is_still_not_applicable():
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-2"])])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+    assert verdict.error is None
+
+
+def test_no_matching_service_at_all_is_not_applicable():
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("something_else", ["node-1"])])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+
+
+def test_a_swarm_query_failure_degrades_to_not_applicable():
+    class _Broken(_SwarmClient):
+        def info(self):
+            raise RuntimeError("swarm unreachable")
+
+    client = _Broken(containers=[], node_id="node-1", services=[])
+    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    assert verdict.applicable is False
+    assert verdict.error is None
+
+
+def test_probe_rustfs_reports_a_crash_loop_as_an_error():
+    client = _SwarmClient(containers=[], node_id="node-1",
+                          services=[_FakeSwarmService("rustfs_rustfs-x", ["node-1"])])
+    service = clusters.probe_rustfs(client)
+    assert service.kind == "rustfs"
+    assert "no running container" in service.error
+
+
 def test_probe_rustfs_minority_endpoints_healthy_loses_quorum():
     """1/3 endpoints healthy → reachable=True, quorum_ok=False (not majority)."""
     class _MultiEndpointContainer:
