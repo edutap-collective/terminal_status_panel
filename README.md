@@ -20,28 +20,35 @@ out in four tiers:
   carries a **Working** cell right after the service name: an icon plus the
   row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
   Three rules keep that cell from over-claiming:
-  a service scaled to zero replicas renders `· 0/0`, not `💀` — that is a
-  decision, not an outage; for the five clustered services (PostgreSQL,
-  MongoDB, Kafka, GlusterFS, RustFS) the **icon** comes from that service's
-  own CLUSTER HEALTH verdict while the **count** stays Docker's
-  running/desired tally, so the two are allowed to disagree on purpose — RustFS
-  is the real case, where its own CLUSTER HEALTH block can read `3/5 live` (a
-  minority of members measured unhealthy while the majority quorum still
-  holds) even though every RustFS container is still up as a Docker task, so
-  the row here reads `⚠️ 5/5`; a bare replica count with no cluster context
-  would have shown a clean `✅ 5/5` and missed the degradation entirely. A
-  member that was simply never measured (`healthy is None` — MongoDB reports
-  its replica-set members but not their state) does not raise this warning;
-  not measured is not a failure. And under `status-docker`, which runs without
-  the health section, a clustered service's cell falls back to `·` plus
-  Docker's own count instead of a replica-derived `✅` — "five brokers are
-  running" is not the claim this column makes — and the same fallback applies
-  when the probe found no member of that service on this node, or the kind is
-  not listed in `health.enabled`. Columns are otherwise the nodes
-  (alphabetical) with ✅ / 💀 placement, plus a description column. See
-  [Icon vocabulary](#icon-vocabulary) for what each glyph means — the Working
-  column uses exactly the same six glyphs, no new ones, including `✗` when the
-  underlying cluster probe itself failed.
+
+  - a service scaled to zero replicas renders `· 0/0`, not `💀` — that is a
+    decision, not an outage;
+  - for the four clustered services that actually run as Docker services
+    (PostgreSQL, MongoDB, Kafka, RustFS — GlusterFS is queried on the host via
+    `sudo -n`, not as a container, so it never gets a DOCKER INFOS row) the
+    **icon** comes from that service's own CLUSTER HEALTH verdict while the
+    **count** stays Docker's running/desired tally, so the two are allowed to
+    disagree on purpose;
+  - under `status-docker`, which runs without the health section, a clustered
+    service's cell falls back to `·` plus Docker's own count instead of a
+    replica-derived `✅` — "five brokers are running" is not the claim this
+    column makes — and the same fallback applies when the probe found no
+    member of that service on this node, or the kind is not listed in
+    `health.enabled`.
+
+  RustFS is the worked example for the second rule: its own CLUSTER HEALTH
+  block can read `3/5 live` (a minority of members measured unhealthy while
+  the majority quorum still holds) even though every RustFS container is
+  still up as a Docker task, so the row here reads `⚠️ 5/5` — a bare replica
+  count with no cluster context would have shown a clean `✅ 5/5` and missed
+  the degradation entirely. A member that was simply never measured
+  (`healthy is None` — MongoDB reports its replica-set members but not their
+  state) does not raise this warning; not measured is not a failure.
+
+  Columns are otherwise the nodes (alphabetical) with ✅ / 💀 placement, plus a
+  description column. See [Icon vocabulary](#icon-vocabulary) for what each
+  glyph means — the Working column uses exactly the same six glyphs, no new
+  ones, including `✗` when the underlying cluster probe itself failed.
 - **CLUSTER HEALTH** — the clustered infrastructure services this node
   participates in (PostgreSQL, MongoDB, Kafka, GlusterFS, RustFS) with
   leader/member state, WireGuard peer handshake ages (TCP-probe fallback when
