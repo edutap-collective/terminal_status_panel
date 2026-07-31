@@ -94,13 +94,27 @@ def test_collect_all_skips_health_when_not_selected(isolated_cli):
 def test_collect_all_calls_health_when_selected(isolated_cli):
     called = []
 
-    def fake(cfg, fqdn, peer_names, client=None):
-        called.append((fqdn, peer_names))
+    def fake(cfg, peer_names, client=None, resolve_fqdn=None):
+        called.append((peer_names, resolve_fqdn))
         return None
 
     isolated_cli.setattr(cli, "collect_health", fake)
     cli.collect_all(Config(), sections=("health",))
     assert len(called) == 1
+
+
+def test_collect_all_never_resolves_the_fqdn_itself(isolated_cli):
+    """socket.getfqdn() does a forward *and* a reverse lookup through NSS and
+    blocks for tens of seconds with a broken resolver — the very fault the DNS
+    check diagnoses. It must therefore happen inside the budgeted DNS task, not
+    in the main thread ahead of it."""
+    import socket
+
+    resolved = []
+    isolated_cli.setattr(socket, "getfqdn", lambda *a: resolved.append(True) or "x")
+    isolated_cli.setattr(cli, "collect_health", lambda *a, **k: None)
+    cli.collect_all(Config(), sections=("health",))
+    assert resolved == []
 
 
 def test_main_never_propagates_a_collector_explosion(isolated_cli):

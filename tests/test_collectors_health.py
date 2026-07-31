@@ -4,6 +4,11 @@ from terminal_status_panel.config import Config, HealthConfig
 from terminal_status_panel.model import ClusterService, DnsCheck, PeerReachability
 
 
+def _fqdn() -> str:
+    """Keep the tests off the real resolver."""
+    return "node.example"
+
+
 def _config(**kwargs):
     cfg = Config()
     cfg.health = HealthConfig(**kwargs)
@@ -24,7 +29,7 @@ def test_collect_health_gathers_all_three_groups(monkeypatch):
         lambda **kwargs: [DnsCheck(label="Resolver", ok=True, detail="3 ms")],
     )
     health = health_collector.collect_health(
-        _config(), fqdn="node.example", peer_names=["ccn-01"], client=object()
+        _config(), peer_names=["ccn-01"], client=object(), resolve_fqdn=_fqdn
     )
     assert [service.kind for service in health.clusters] == ["postgres"]
     assert health.peers[0].name == "ccn-01"
@@ -44,7 +49,7 @@ def test_a_check_that_exceeds_the_budget_is_truncated_not_failed(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(budget=0.3), fqdn="node.example", peer_names=[], client=object()
+        _config(budget=0.3), peer_names=[], client=object(), resolve_fqdn=_fqdn
     )
     assert "clusters" in health.truncated
     assert health.clusters == []
@@ -61,7 +66,7 @@ def test_a_raising_check_becomes_an_error_entry_not_a_truncation(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(), fqdn="node.example", peer_names=[], client=object()
+        _config(), peer_names=[], client=object(), resolve_fqdn=_fqdn
     )
     assert health.truncated == []
     assert len(health.clusters) == 1
@@ -74,7 +79,7 @@ def test_no_docker_client_still_yields_network_and_dns(monkeypatch):
         health_collector, "collect_dns", lambda **kwargs: [DnsCheck(label="Resolver", ok=True)]
     )
     health = health_collector.collect_health(
-        _config(), fqdn="node.example", peer_names=[], client=None
+        _config(), peer_names=[], client=None, resolve_fqdn=_fqdn
     )
     assert health.clusters == []
     assert health.dns[0].label == "Resolver"
@@ -87,7 +92,7 @@ def test_no_enabled_kinds_means_clusters_never_probed(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(enabled=[]), fqdn="node.example", peer_names=[], client=object()
+        _config(enabled=[]), peer_names=[], client=object(), resolve_fqdn=_fqdn
     )
     assert health.clusters == []
     assert health.clusters_probed is False
@@ -101,7 +106,7 @@ def test_clusters_probed_and_empty_is_distinct_from_never_probed(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(), fqdn="node.example", peer_names=[], client=object()
+        _config(), peer_names=[], client=object(), resolve_fqdn=_fqdn
     )
     assert health.clusters == []
     assert health.clusters_probed is True
@@ -122,7 +127,7 @@ def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_dns", capture)
     health_collector.collect_health(
         _config(dns_expect=[DnsExpectation(name="login.lmu.de", addresses=["10.9.9.9"])]),
-        fqdn="node.example", peer_names=["ccn-01"], client=object(),
+        peer_names=["ccn-01"], client=object(), resolve_fqdn=_fqdn,
     )
     assert captured["expectations"] == [("login.lmu.de", ["10.9.9.9"])]
     assert captured["peer_names"] == ["ccn-01"]
@@ -133,10 +138,31 @@ def test_peers_probed_is_false_without_names_or_answers(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(), fqdn="node.example", peer_names=[], client=object()
+        _config(), peer_names=[], client=object(), resolve_fqdn=_fqdn
     )
     assert health.peers == []
     assert health.peers_probed is False
+
+
+def test_a_slow_fqdn_lookup_is_truncated_rather_than_delaying_the_login(monkeypatch):
+    """The own-name lookup runs inside the budget, so a broken resolver costs
+    the DNS check its result — not the login shell its prompt."""
+    import time
+
+    monkeypatch.setattr(health_collector, "collect_clusters", lambda client, kinds: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+
+    def slow_fqdn():
+        time.sleep(5)
+        return "node.example"
+
+    started = time.monotonic()
+    health = health_collector.collect_health(
+        _config(budget=0.3), peer_names=[], client=object(), resolve_fqdn=slow_fqdn
+    )
+    assert time.monotonic() - started < 1.5
+    assert "dns" in health.truncated
 
 
 def test_peers_probed_is_true_when_names_were_available(monkeypatch):
@@ -144,7 +170,7 @@ def test_peers_probed_is_true_when_names_were_available(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(), fqdn="node.example", peer_names=["ccn-01"], client=object()
+        _config(), peer_names=["ccn-01"], client=object(), resolve_fqdn=_fqdn
     )
     assert health.peers == []
     assert health.peers_probed is True

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import shutil
-import socket
 import sys
 
 from rich.console import Console
@@ -76,9 +75,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
                 peers = [name for name in peers if name]
             except Exception:
                 peers = []
-        health_info = collect_health(
-            cfg, fqdn=socket.getfqdn(), peer_names=peers, client=client
-        )
+        health_info = collect_health(cfg, peer_names=peers, client=client)
 
     return PanelData(
         system=collect_system() if server else None,
