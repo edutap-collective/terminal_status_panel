@@ -1416,9 +1416,14 @@ def probe_rustfs(client) -> ClusterService:
     return ClusterService(
         kind="rustfs",
         name="rustfs",
-        reachable=bool(members),
+        # members come from the endpoint list, not from probe success, so
+        # reachability has to be derived from how many actually answered.
+        reachable=live > 0,
         leader=None,  # RustFS has no leader we can observe
-        quorum_ok=live == len(members) and live > 0,
+        # /health is a liveness check only; erasure-coding and heal state are
+        # not observable without the admin API. A majority of instances is the
+        # strongest claim the data supports, matching postgres and glusterfs.
+        quorum_ok=live * 2 > len(members),
         detail=f"{live}/{len(members)} live",
         members=members,
     )
