@@ -19,6 +19,7 @@ the blocks inside it, no bordered panels.
 
 from __future__ import annotations
 
+from rich.columns import Columns
 from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
@@ -106,19 +107,28 @@ def _clusters_body(health: HealthInfo) -> RenderableType:
     truncated = _truncated_kinds(health)
     if not health.clusters and not truncated:
         return Text("no clustered services found", style="dim")
-    lines: list[RenderableType] = [
-        _service_lines(service) for service in health.clusters
-    ]
+
+    applicable = [s for s in health.clusters if s.applicable]
+    not_applicable = [s for s in health.clusters if not s.applicable]
+
+    blocks: list[RenderableType] = [_service_lines(service) for service in applicable]
     # Each kind is its own budget task, so one kind running out of time says
-    # nothing about the kinds beside it — and they keep their own lines.
-    lines.extend(
-        Text(
-            f"{TRUNCATED} {_KIND_TITLES.get(kind, kind)}: time budget exceeded",
-            style="dim",
-        )
+    # nothing about the kinds beside it — and they keep their own blocks.
+    blocks.extend(
+        Text(f"{TRUNCATED} {_KIND_TITLES.get(kind, kind)}: time budget exceeded", style="dim")
         for kind in truncated
     )
-    return Group(*lines)
+
+    # Columns flows the blocks into as many columns as the width allows and
+    # falls back to one on a narrow terminal.
+    parts: list[RenderableType] = [Columns(blocks, padding=(0, 8), expand=False)]
+
+    if not_applicable:
+        # A one-line "n/a" does not deserve a column of its own.
+        names = ", ".join(_KIND_TITLES.get(s.kind, s.kind) for s in not_applicable)
+        parts.append(Text(f"n/a here: {names}", style="dim"))
+
+    return Group(*parts)
 
 
 def _peer_method_label(health: HealthInfo) -> str:
