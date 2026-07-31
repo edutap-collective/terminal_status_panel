@@ -137,6 +137,23 @@ def test_probe_postgres_reports_an_exec_failure_as_error():
     assert "connection refused" in service.error
 
 
+def test_probe_postgres_reports_docker_api_failure_as_error():
+    """Docker socket failure must be distinct from 'not applicable'."""
+    class _FailingClient:
+        class _FailingColl:
+            def list(self, *a, **k):
+                raise RuntimeError("Docker socket permission denied")
+
+        @property
+        def containers(self):
+            return self._FailingColl()
+
+    service = clusters.probe_postgres(_FailingClient())
+    assert service.applicable is True  # Docker check was attempted
+    assert service.error is not None  # But it failed
+    assert "permission denied" in service.error
+
+
 def test_collect_clusters_only_probes_the_requested_kinds():
     assert clusters.collect_clusters(_FakeClient([]), kinds=[]) == []
     result = clusters.collect_clusters(_FakeClient([]), kinds=["postgres"])

@@ -28,10 +28,7 @@ _PG_NAME_PREFIX = re.compile(r"^pg\d*-")
 
 def find_container(client, patterns: tuple[str, ...]):
     """First locally running container whose name contains one of *patterns*."""
-    try:
-        containers = client.containers.list()
-    except Exception:
-        return None
+    containers = client.containers.list()
     for container in containers:
         name = (getattr(container, "name", "") or "").lower()
         if any(pattern.lower() in name for pattern in patterns):
@@ -100,7 +97,10 @@ def parse_pg_state(output: str) -> ClusterService:
 
 def probe_postgres(client) -> ClusterService:
     """``pg_autoctl show state`` — works from any data node, not only the monitor."""
-    container = find_container(client, POSTGRES_PATTERNS)
+    try:
+        container = find_container(client, POSTGRES_PATTERNS)
+    except Exception as exc:
+        return ClusterService(kind="postgres", error=str(exc))
     if container is None:
         return ClusterService(kind="postgres", applicable=False)
     try:
