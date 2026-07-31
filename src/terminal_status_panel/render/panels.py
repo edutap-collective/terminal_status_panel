@@ -16,13 +16,15 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+from ..collectors.clusters import kind_for_service
 from ..config import Config, Thresholds
-from ..model import ResourceUsage, SwarmInfo, SystemInfo, UpdateInfo
+from ..model import ClusterService, HealthInfo, ResourceUsage, SwarmInfo, SystemInfo, UpdateInfo
 from .bars import STATUS_COLORS, classify, format_bytes, render_bar
 from .icons import DEAD as _DEAD
 from .icons import OK as _OK
 from .icons import WARN as _WARN
 from .logo import os_logo
+from .verdict import service_verdict
 
 # CPU-usage bar coloring (not user-configurable — purely cosmetic thresholds).
 _CPU_WARNING = 70.0
@@ -415,24 +417,26 @@ def _ui_subrows(ui_services, node_names, ui_keys) -> list[tuple[str, list, str]]
     return rows
 
 
-def _stack_matrix(title: str, entries: list[tuple[str, list]], nodes) -> RenderableType:
+def _stack_matrix(title, entries, nodes, verdict) -> RenderableType:
     short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")          # stack / service name
+    table.add_column(justify="left")        # Working
     for _ in short:
         table.add_column(justify="center")  # per-node status
     table.add_column(style="dim")           # description
 
-    header = [_subhead(title)]
+    header = [_subhead(title), Text("Working", style="cyan")]
     header += [Text(s, style="cyan") for _, s in short]
     header.append(Text("Description", style="cyan"))
     table.add_row(*header)
 
     if not entries:
-        table.add_row(Text("—", style="dim"), *[""] * (len(short) + 1))
+        table.add_row(Text("—", style="dim"), *[""] * (len(short) + 2))
 
     def _row(label, services, desc):
-        cells = [label] + [_node_cell(services, full) for full, _ in short]
+        cells = [label, verdict(services)]
+        cells += [_node_cell(services, full) for full, _ in short]
         cells.append(Text(desc or ""))
         table.add_row(*cells)
 
@@ -445,17 +449,33 @@ def _stack_matrix(title: str, entries: list[tuple[str, list]], nodes) -> Rendera
             _, services, desc = subrows[0]
             _row(Text(stack_name), services, desc)
         else:
-            # Several distinct services: stack header, then one row each.
-            table.add_row(Text(stack_name, style="bold cyan"), *[""] * (len(short) + 1))
+            # Several distinct services: stack header, then one row each. The
+            # header's verdict cell stays empty — the sub-rows below carry
+            # their own, and an aggregate here would only repeat that.
+            table.add_row(Text(stack_name, style="bold cyan"), *[""] * (len(short) + 2))
             for label, services, desc in subrows:
                 _row(Text(f"  {label}"), services, desc)
     return table
 
 
-def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
+def _stack_columns(swarm: SwarmInfo, cfg: Config,
+                   health: HealthInfo | None = None) -> RenderableType:
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
     ui_keys = [k.lower() for k in cfg.infra_ui_services]
     node_names = [n.name for n in swarm.nodes]
+    by_kind: dict[str, ClusterService] = {
+        service.kind: service for service in (health.clusters if health else [])
+    }
+    node_count = len(swarm.nodes)
+
+    def verdict(services):
+        kind = next(
+            (k for k in (kind_for_service(s.name) for s in services) if k), None
+        )
+        return service_verdict(
+            services, kind=kind, cluster=by_kind.get(kind) if kind else None,
+            node_count=node_count,
+        )
 
     def is_infra(name: str) -> bool:
         return any(k in name.lower() for k in infra_keys)
@@ -494,20 +514,21 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config) -> RenderableType:
     # Per-service rows plus a description column make each table wide, so the
     # three categories stack vertically (each full width) instead of side by side.
     return Group(
-        _stack_matrix("Infrastruktur", infra, swarm.nodes),
+        _stack_matrix("Infrastruktur", infra, swarm.nodes, verdict),
         Text(""),
-        _stack_matrix("Service", service, swarm.nodes),
+        _stack_matrix("Service", service, swarm.nodes, verdict),
         Text(""),
-        _stack_matrix("Container (ohne Stack)", container_rows, swarm.nodes),
+        _stack_matrix("Container (ohne Stack)", container_rows, swarm.nodes, verdict),
     )
 
 
-def services_section(swarm: SwarmInfo | None, cfg: Config) -> Group:
+def services_section(swarm: SwarmInfo | None, cfg: Config,
+                     health: HealthInfo | None = None) -> Group:
     if swarm is None or not swarm.reachable:
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
     if not swarm.enabled:
-        body = Group(_subhead("CONTAINER"), _stack_columns(swarm, cfg))
+        body = Group(_subhead("CONTAINER"), _stack_columns(swarm, cfg, health))
         return section("DOCKER INFOS", body)
 
     body = Group(
@@ -515,6 +536,6 @@ def services_section(swarm: SwarmInfo | None, cfg: Config) -> Group:
         _swarm_body(swarm),
         Text(""),
         _subhead("STACKS"),
-        _stack_columns(swarm, cfg),
+        _stack_columns(swarm, cfg, health),
     )
     return section("DOCKER INFOS", body)

@@ -1,4 +1,5 @@
 from rich.console import Console
+from rich.text import Text
 
 from terminal_status_panel.config import Config
 from terminal_status_panel.model import (
@@ -59,3 +60,17 @@ def test_build_layout_renders_only_the_requested_section():
     output = capture.get()
     assert "CLUSTER HEALTH" in output
     assert "DOCKER" not in output
+
+
+def test_docker_section_receives_the_health_data(monkeypatch):
+    """The Kafka verdict lives in the health section; the matrix must see it."""
+    seen = {}
+
+    def fake(swarm, cfg, health=None):
+        seen["health"] = health
+        return Text("")
+
+    monkeypatch.setattr(layout, "services_section", fake)
+    health = HealthInfo(clusters_probed=True)
+    layout.docker_section(PanelData(swarm=SwarmInfo(reachable=True), health=health), Config())
+    assert seen["health"] is health

@@ -48,8 +48,9 @@ def server_section(data: PanelData, cfg: Config) -> RenderableType:
 
 
 def docker_section(data: PanelData, cfg: Config) -> RenderableType:
-    """The DOCKER INFOS block."""
-    return services_section(data.swarm, cfg)
+    """The DOCKER INFOS block. The health data, when the section ran, supplies
+    the cluster verdicts the replica counts cannot give."""
+    return services_section(data.swarm, cfg, data.health)
 
 
 def health_block(data: PanelData, cfg: Config) -> RenderableType:

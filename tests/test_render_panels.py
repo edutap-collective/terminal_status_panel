@@ -2,7 +2,9 @@ from rich.console import Console
 
 from terminal_status_panel.config import Config
 from terminal_status_panel.model import (
+    ClusterService,
     FilesystemUsage,
+    HealthInfo,
     ResourceUsage,
     ServiceStatus,
     ServiceTask,
@@ -11,7 +13,7 @@ from terminal_status_panel.model import (
     SystemInfo,
     UpdateInfo,
 )
-from terminal_status_panel.render import panels
+from terminal_status_panel.render import icons, panels
 
 
 def _text(renderable, width=100) -> str:
@@ -338,3 +340,64 @@ def test_no_infra_uis_row_without_matching_services():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "infra-uis" not in out
+
+
+def test_the_matrix_has_a_working_column():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[
+            ServiceStatus("app_web", 3, 3, stack="app",
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "Working" in out
+    assert f"{icons.OK} 3/3" in out
+
+
+def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
+    """Nine such rows render blank today — the outage is invisible."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("edutap_admin_backend", 0, 3, stack="edutap")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.DEAD} 0/3" in out
+
+
+def test_a_service_scaled_to_zero_is_not_marked_dead():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("app_paused", 0, 0, stack="app")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.UNKNOWN} 0/0" in out
+    assert f"{icons.DEAD} 0/0" not in out
+
+
+def test_the_kafka_row_follows_the_cluster_verdict_not_the_replicas():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
+    )
+    health = HealthInfo(clusters_probed=True,
+                        clusters=[ClusterService(kind="kafka", quorum_ok=False)])
+    out = _text(panels.services_section(swarm, Config(), health), width=170)
+    assert f"{icons.DEAD} 5/5" in out
+
+
+def test_without_health_a_clustered_service_is_not_observable():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.UNKNOWN} 5/5" in out
+    assert f"{icons.OK} 5/5" not in out
