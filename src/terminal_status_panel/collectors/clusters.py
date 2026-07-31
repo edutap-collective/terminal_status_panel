@@ -619,6 +619,28 @@ def probe_glusterfs(timeout: float = GLUSTER_TIMEOUT) -> ClusterService:
 
 
 RUSTFS_PATTERNS = ("rustfs_rustfs",)
+
+# The join key between DOCKER INFOS and CLUSTER HEALTH. Built from the same
+# patterns the probes match containers with, so the identifier lives in exactly
+# one place — a second copy is how the crash-loop detection broke once already.
+# GlusterFS is absent on purpose: it runs on the host, not as a Docker service.
+_KIND_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("postgres", POSTGRES_PATTERNS),
+    ("mongodb", MONGODB_PATTERNS),
+    ("kafka", KAFKA_PATTERNS),
+    ("rustfs", RUSTFS_PATTERNS),
+)
+
+
+def kind_for_service(name: str) -> str | None:
+    """The cluster kind a Docker service name belongs to, or None."""
+    lowered = (name or "").lower()
+    for kind, patterns in _KIND_PATTERNS:
+        if any(pattern.lower() in lowered for pattern in patterns):
+            return kind
+    return None
+
+
 RUSTFS_FALLBACK_ENDPOINT = "https://localhost:9000"
 
 
