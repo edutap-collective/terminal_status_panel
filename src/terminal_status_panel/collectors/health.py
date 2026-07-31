@@ -48,7 +48,9 @@ def collect_health(
     tasks: dict[str, Callable[[], object]] = {}
     timeouts: dict[str, float] = {}
 
-    kinds = list(health_cfg.enabled)
+    # One task per kind, so a kind repeated in the config must not become two
+    # tasks under one name (and then one result reported twice).
+    kinds = list(dict.fromkeys(health_cfg.enabled))
     clusters_probed = client is not None and bool(kinds)
     if clusters_probed:
         index = ContainerIndex(client)
