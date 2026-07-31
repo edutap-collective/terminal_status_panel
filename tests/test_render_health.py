@@ -137,3 +137,57 @@ def test_narrow_width_still_renders():
         dns=[DnsCheck(label="Resolver", ok=True, detail="3 ms")],
     )
     assert "CLUSTER HEALTH" in _render(health, width=60)
+
+
+# -- Fix 1: the peers title reflects every peer's method, not just the first --
+
+def test_mixed_peer_methods_render_as_mixed():
+    health = HealthInfo(peers=[
+        PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
+        PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
+    ])
+    assert "mixed" in _render(health)
+
+
+def test_all_wireguard_peers_still_render_wg():
+    health = HealthInfo(peers=[
+        PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
+        PeerReachability(name="ccn-02", method="wireguard", ok=True, detail="1:02"),
+    ])
+    output = _render(health)
+    assert "wg" in output.lower()
+    assert "mixed" not in output
+
+
+def test_all_tcp_peers_still_render_tcp():
+    health = HealthInfo(peers=[
+        PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377"),
+        PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
+    ])
+    output = _render(health)
+    assert "tcp" in output.lower()
+    assert "mixed" not in output
+
+
+# -- Fix 2: an unreported service-level quorum is distinct from "not observable" --
+
+def test_unreported_quorum_says_so_and_has_no_neutral_dot_in_the_header():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        ClusterService(kind="rustfs", name="rustfs-vol", reachable=True, quorum_ok=None,
+                       detail="2/2 nodes online"),
+    ])
+    output = _render(health)
+    assert "quorum not reported" in output
+    header_line = next(line for line in output.splitlines() if "rustfs-vol" in line)
+    assert "·" not in header_line
+
+
+def test_quorum_true_and_false_are_unchanged():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        ClusterService(kind="postgres", name="ok-cluster", reachable=True, quorum_ok=True),
+        ClusterService(kind="postgres", name="bad-cluster", reachable=True, quorum_ok=False),
+    ])
+    output = _render(health)
+    assert "✅" in output
+    assert "💀" in output
+    assert "quorum not reported" not in output
