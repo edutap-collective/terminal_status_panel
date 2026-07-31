@@ -1,6 +1,40 @@
 import time
 
+from terminal_status_panel import budget as budget_module
 from terminal_status_panel.budget import run_with_budget
+
+
+def test_an_abandoned_check_gets_a_short_grace_at_interpreter_exit():
+    """A thread frozen inside subprocess.run at exit leaves its child running
+    as an orphan. The grace lets it finish — or kill its child — first."""
+    finished = []
+
+    def slow():
+        time.sleep(0.15)
+        finished.append(True)
+
+    run_with_budget({"slow": slow}, budget=0.01)
+    assert finished == []  # abandoned, as the budget requires
+    budget_module._join_stragglers()  # what the atexit hook calls
+    assert finished == [True]
+
+
+def test_the_exit_grace_is_bounded():
+    """It is paid by a login shell, so it must never become a wait."""
+    def endless():
+        time.sleep(5)
+
+    run_with_budget({"endless": endless}, budget=0.01)
+    started = time.monotonic()
+    budget_module._join_stragglers()
+    assert time.monotonic() - started < budget_module.EXIT_GRACE_SECONDS + 0.2
+
+
+def test_a_completed_run_leaves_nothing_to_wait_for():
+    run_with_budget({"fast": lambda: 1}, budget=1.0)
+    started = time.monotonic()
+    budget_module._join_stragglers()
+    assert time.monotonic() - started < 0.05
 
 
 def test_fast_tasks_all_complete():

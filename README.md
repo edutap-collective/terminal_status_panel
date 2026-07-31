@@ -259,6 +259,13 @@ work at that moment depends on what it runs:
   enabled `health.timeout.*`. `docker.timeout` continues to bound the DOCKER
   INFOS section exactly as before.
 
+An abandoned check keeps running in a daemon thread, and one that is inside a
+child process (`sudo -n wg`, `sudo -n gluster`) when the panel exits would
+leave that child orphaned. Such a thread is therefore given a short, bounded
+grace period (0.25 s) at exit to finish or to kill its own child — bounded
+because the delay would otherwise be paid by the login shell, and only ever
+paid when a check has already been abandoned.
+
 The own-hostname lookup the DNS check needs (`socket.getfqdn()`, a forward
 plus a reverse lookup through NSS) happens inside the DNS task for the same
 reason: with a broken resolver it blocks for tens of seconds, and that is the

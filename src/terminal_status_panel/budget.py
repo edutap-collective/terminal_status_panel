@@ -7,15 +7,47 @@ Deliberately hand-rolled daemon threads rather than ``ThreadPoolExecutor``:
 the executor's workers are non-daemon and get joined by an ``atexit`` hook, so
 a check that outlives the budget would still hold up interpreter exit — which
 is exactly the failure this budget is meant to prevent.
+
+A thread that is still inside ``subprocess.run`` when the interpreter exits is
+frozen before its ``timeout`` can kill the child, and the child — ``sudo -n wg``
+or ``sudo -n gluster`` — is reparented to init and keeps running. Harmless in
+itself (both are read-only status commands), but this is a login path, so
+``EXIT_GRACE_SECONDS`` buys such a thread a short, bounded moment at exit to
+finish or to kill its own child. It is a mitigation, not a guarantee: a child
+that outlives the grace is still orphaned. Making that impossible would mean
+owning the ``Popen`` here and killing its process group, which buys little for
+two short read-only commands and would move process handling out of the
+collectors that know what they spawned.
 """
 
 from __future__ import annotations
 
+import atexit
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+# Bounded on purpose: this delay is paid by a login shell, and only when a
+# check was already abandoned.
+EXIT_GRACE_SECONDS = 0.25
+
+_stragglers: list[threading.Thread] = []
+_stragglers_lock = threading.Lock()
+
+
+def _join_stragglers() -> None:
+    """Give abandoned check threads one short, shared grace period at exit."""
+    with _stragglers_lock:
+        threads = [thread for thread in _stragglers if thread.is_alive()]
+        _stragglers.clear()
+    deadline = time.monotonic() + EXIT_GRACE_SECONDS
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+
+atexit.register(_join_stragglers)
 
 
 @dataclass
@@ -84,6 +116,11 @@ def run_with_budget(
         thread.join(max(0.0, deadlines[name] - time.monotonic()))
         if thread.is_alive():
             expired.add(name)
+
+    abandoned = [thread for _, thread in threads if thread.is_alive()]
+    if abandoned:
+        with _stragglers_lock:
+            _stragglers.extend(abandoned)
 
     with lock:
         truncated = [
