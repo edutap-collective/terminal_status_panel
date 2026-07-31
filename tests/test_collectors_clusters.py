@@ -162,6 +162,13 @@ def test_collect_clusters_only_probes_the_requested_kinds():
     assert [s.kind for s in result] == ["postgres"]
 
 
+def test_collect_clusters_reports_unknown_kinds_as_error():
+    result = clusters.collect_clusters(_FakeClient([]), kinds=["nosuchthing"])
+    assert len(result) == 1
+    assert result[0].kind == "nosuchthing"
+    assert result[0].error == "unknown kind"
+
+
 MONGO_HELLO = (
     '{"set":"lrz_app","me":"mongodb-lmzvd06-internet-app-1:27017",'
     '"primary":"mongodb-lmzvd06-internet-app-2:27017","isPrimary":false,'

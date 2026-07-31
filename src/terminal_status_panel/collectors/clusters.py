@@ -464,6 +464,7 @@ def collect_clusters(client, kinds: list[str]) -> list[ClusterService]:
     for kind in kinds:
         probe = _PROBES.get(kind)
         if probe is None:
+            services.append(ClusterService(kind=kind, error="unknown kind"))
             continue
         try:
             services.append(probe(client))
