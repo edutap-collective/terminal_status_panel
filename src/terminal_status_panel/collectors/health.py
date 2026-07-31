@@ -81,4 +81,5 @@ def collect_health(
         truncated=list(outcome.truncated),
         clusters_probed=clusters_probed,
         peers_probed=peers_probed,
+        dns_probed="dns" in tasks,
     )

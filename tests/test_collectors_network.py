@@ -31,6 +31,17 @@ def test_parse_wg_dump_falls_back_to_the_tunnel_ip_when_unknown():
     assert peers[2].name == "10.9.0.3"
 
 
+def test_a_peer_without_allowed_ips_is_still_identifiable():
+    """An empty (or "(none)") allowed-ips column would otherwise render as a
+    bare "✅ " with nothing to identify the peer."""
+    for allowed_ips in ("", "(none)"):
+        row = ["wg0", "AbCdEfGh0123456=", "(none)", "(none)", allowed_ips,
+               "1000", "1", "2", "off"]
+        peer = network.parse_wg_dump("\t".join(row), now=1000.0, hosts=HOSTS)[0]
+        assert peer.name.strip(), f"blank peer name for allowed-ips {allowed_ips!r}"
+        assert "AbCdEfGh" in peer.name
+
+
 def test_recent_handshake_is_healthy():
     peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
     assert peers[0].ok is True

@@ -141,6 +141,10 @@ def _peers_body(health: HealthInfo) -> RenderableType:
 def _dns_body(health: HealthInfo) -> RenderableType:
     if "dns" in health.truncated:
         return Text(f"{TRUNCATED} time budget exceeded", style="dim")
+    if not health.dns_probed:
+        # Never ran. "no DNS checks" is a statement about configuration and
+        # must not stand in for a state it cannot distinguish from that.
+        return Text(f"{UNKNOWN} not checked (DNS check did not run)", style="dim")
     if not health.dns:
         return Text("no DNS checks", style="dim")
     table = Table.grid(padding=(0, 2))

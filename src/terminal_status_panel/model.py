@@ -164,6 +164,10 @@ class HealthInfo:
     # False when there was nothing to probe: no peer names and no WireGuard
     # answer. An empty ``peers`` list means "no peers" only when this is True.
     peers_probed: bool = False
+    # False when the DNS check was never registered at all. Symmetry with the
+    # two flags above: an empty ``dns`` list means "nothing configured to
+    # check" only when this is True, never "never ran".
+    dns_probed: bool = False
 
 
 @dataclass

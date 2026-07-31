@@ -30,9 +30,24 @@ def test_unprobed_clusters_are_not_rendered_as_all_clear():
 
 
 def test_probed_but_empty_clusters_say_so():
-    output = _render(HealthInfo(clusters_probed=True, peers_probed=True))
+    output = _render(
+        HealthInfo(clusters_probed=True, peers_probed=True, dns_probed=True)
+    )
     assert "no clustered services found" in output
     assert "not checked" not in output
+
+
+def test_unprobed_dns_is_not_rendered_as_no_dns_checks():
+    output = _render(HealthInfo(clusters_probed=True, peers_probed=True))
+    assert "not checked" in output
+    assert "no DNS checks" not in output
+
+
+def test_probed_but_empty_dns_says_so():
+    output = _render(
+        HealthInfo(clusters_probed=True, peers_probed=True, dns_probed=True)
+    )
+    assert "no DNS checks" in output
 
 
 def test_healthy_cluster_shows_leader_and_members():
@@ -124,7 +139,10 @@ def test_tcp_fallback_is_labelled_as_such():
 
 
 def test_dns_warning_renders_as_warning_not_failure():
-    health = HealthInfo(dns=[DnsCheck(label="/etc/hosts", ok=None, detail="diverges: a")])
+    health = HealthInfo(
+        dns_probed=True,
+        dns=[DnsCheck(label="/etc/hosts", ok=None, detail="diverges: a")],
+    )
     output = _render(health)
     assert "⚠" in output
     assert "💀" not in output

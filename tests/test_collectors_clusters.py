@@ -114,6 +114,26 @@ def test_parse_pg_state_reports_no_quorum_when_most_members_are_down():
     assert service.quorum_ok is False
 
 
+def test_unparsed_pg_output_claims_nothing_instead_of_a_broken_quorum():
+    """Exit code 0 but nothing recognisable: nothing was measured, so the
+    panel must not render 💀 ("measured broken") for it."""
+    service = clusters.parse_pg_state("")
+    assert service.quorum_ok is None
+    assert service.reachable is False
+    assert service.members == []
+
+
+def test_a_second_matching_container_is_made_visible():
+    """A pg16 -> pg18 migration puts two clusters on one node; showing only
+    one without a hint would be a silently narrowed view."""
+    other = _FakeContainer("PostgreSQL-16_pg-lmzvd06-ccc-01.1.old")
+    first = _FakeContainer(
+        "PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc", exec_result=(0, PG_STATE.encode())
+    )
+    service = clusters.probe_postgres(_FakeClient([first, other]))
+    assert "+1 more container" in (service.detail or "")
+
+
 def test_probe_postgres_is_not_applicable_without_a_local_container():
     service = clusters.probe_postgres(_FakeClient([]))
     assert service.applicable is False
@@ -208,6 +228,12 @@ def test_parse_mongo_hello_without_a_primary_has_no_quorum():
     assert service.quorum_ok is False
 
 
+def test_unrecognised_mongo_answer_claims_nothing_instead_of_a_broken_quorum():
+    service = clusters.parse_mongo_hello("{}")
+    assert service.quorum_ok is None
+    assert service.reachable is False
+
+
 def test_probe_mongodb_is_not_applicable_without_a_local_container():
     service = clusters.probe_mongodb(_FakeClient([]))
     assert service.applicable is False
@@ -293,6 +319,16 @@ def test_parse_kafka_quorum_marks_observers():
     service = clusters.parse_kafka_quorum(with_observer)
     by_name = {member.name: member for member in service.members}
     assert by_name["kafka-obs"].role == "observer"
+
+
+def test_unparsed_kafka_output_claims_nothing_instead_of_a_broken_quorum():
+    """An upgrade that changes the output format must not raise a red quorum
+    alarm for a healthy cluster at every login."""
+    for banner in ("", "unexpected banner", "Error: no such file"):
+        service = clusters.parse_kafka_quorum(banner)
+        assert service.quorum_ok is None, banner
+        assert service.reachable is False, banner
+        assert service.detail is None, banner
 
 
 def test_probe_kafka_uses_the_absolute_tool_path_and_the_mounted_client_properties():
@@ -441,6 +477,15 @@ def test_parse_gluster_single_volume_gets_no_extra_volumes_suffix():
     assert service.detail is None
 
 
+def test_unparsed_gluster_output_claims_nothing_instead_of_a_broken_quorum():
+    """No peers and no volumes parsed: nothing was measured. A single-node
+    volume (which reports zero *other* peers) lands here too — honest, since
+    peer status alone cannot establish quorum for it."""
+    service = clusters.parse_gluster("<x/>", "<x/>")
+    assert service.quorum_ok is None
+    assert service.reachable is False
+
+
 def test_probe_glusterfs_is_not_applicable_without_passwordless_sudo(monkeypatch):
     class _Completed:
         def __init__(self, returncode, stdout="", stderr=""):
@@ -516,7 +561,10 @@ def test_probe_glusterfs_calls_sudo_n_with_xml(monkeypatch):
 
 def test_rustfs_endpoints_treats_a_plain_path_as_a_single_local_instance():
     container = _FakeContainer("rustfs_rustfs.1.abc", env=["RUSTFS_VOLUMES=/data"])
-    assert clusters.rustfs_endpoints(container) == ["https://localhost:9000"]
+    endpoints, guessed = clusters.rustfs_endpoints(container)
+    assert endpoints == ["https://localhost:9000"]
+    # RUSTFS_VOLUMES was read and says "one local instance" — not a guess.
+    assert guessed is False
 
 
 def test_rustfs_endpoints_reads_distributed_urls():
@@ -524,15 +572,25 @@ def test_rustfs_endpoints_reads_distributed_urls():
         "rustfs_rustfs.1.abc",
         env=["RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data"],
     )
-    assert clusters.rustfs_endpoints(container) == [
-        "https://rustfs-a:9000",
-        "https://rustfs-b:9000",
-    ]
+    endpoints, guessed = clusters.rustfs_endpoints(container)
+    assert endpoints == ["https://rustfs-a:9000", "https://rustfs-b:9000"]
+    assert guessed is False
 
 
-def test_rustfs_endpoints_falls_back_to_localhost_without_the_variable():
+def test_rustfs_endpoints_marks_a_missing_volume_variable_as_a_guess():
+    """RUSTFS_VOLUMES unreadable or renamed: the localhost endpoint is an
+    assumption. A five-node cluster must not render as "1/1 live"."""
     container = _FakeContainer("rustfs_rustfs.1.abc", env=[])
-    assert clusters.rustfs_endpoints(container) == ["https://localhost:9000"]
+    endpoints, guessed = clusters.rustfs_endpoints(container)
+    assert endpoints == ["https://localhost:9000"]
+    assert guessed is True
+
+
+def test_probe_rustfs_claims_no_quorum_from_a_guessed_endpoint_list():
+    container = _FakeContainer("rustfs_rustfs.1.abc", exec_result=(0, b"200"), env=[])
+    service = clusters.probe_rustfs(_FakeClient([container]))
+    assert service.quorum_ok is None
+    assert "endpoint list unknown" in (service.detail or "")
 
 
 def test_probe_rustfs_is_not_applicable_without_a_local_container():
@@ -650,7 +708,7 @@ class _SwarmClient(_FakeClient):
 
 def test_locate_member_returns_the_container_when_one_runs():
     target = _FakeContainer("PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc")
-    container, verdict = clusters.locate_member(
+    container, verdict, _ = clusters.locate_member(
         _FakeClient([target]), "postgres", clusters.POSTGRES_PATTERNS
     )
     assert container is target
@@ -663,7 +721,7 @@ def test_a_crash_looping_service_is_an_error_not_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname="lmzvd06-ccc-01")])
-    container, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    container, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert container is None
     assert verdict.applicable is True
     assert "no running container" in verdict.error
@@ -673,7 +731,7 @@ def test_a_service_pinned_to_another_hostname_is_still_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname="lmzvd06-ccn-01")])
-    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 
@@ -682,7 +740,7 @@ def test_no_matching_service_at_all_is_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("something_else", replicas=1,
                                                        hostname="lmzvd06-ccc-01")])
-    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
 
 
@@ -690,7 +748,7 @@ def test_a_global_mode_service_is_wanted_on_every_node():
     """Global mode has no placement constraint to check — Swarm runs it everywhere."""
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", global_mode=True)])
-    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
@@ -700,7 +758,7 @@ def test_a_replicated_service_with_zero_replicas_is_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=0,
                                                        hostname="lmzvd06-ccc-01")])
-    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
 
 
@@ -712,7 +770,7 @@ def test_an_unpinned_replicated_service_is_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname=None)])
-    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 
@@ -724,7 +782,7 @@ def test_a_placement_constraint_without_spaces_is_still_recognised():
     }
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[service])
-    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
@@ -735,7 +793,7 @@ def test_a_swarm_query_failure_degrades_to_not_applicable():
             raise RuntimeError("swarm unreachable")
 
     client = _Broken(containers=[], node_id="node-1", services=[])
-    _, verdict = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 

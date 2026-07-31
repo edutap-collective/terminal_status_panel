@@ -28,6 +28,16 @@ def _format_age(seconds: float) -> str:
     return f"{minutes}:{remainder:02d}"
 
 
+def _key_label(public_key: str) -> str:
+    """Identify a peer that has no allowed-ips to name it by.
+
+    A peer with an empty (or ``(none)``) allowed-ips column would otherwise
+    render as a bare "✅ " with nothing to say which peer it is.
+    """
+    key = public_key.strip()
+    return f"peer {key[:8]}" if key and key != "(none)" else "unknown peer"
+
+
 def parse_wg_dump(dump: str, now: float, hosts: dict[str, set[str]]) -> list[PeerReachability]:
     """Parse ``wg show all dump``.
 
@@ -45,8 +55,11 @@ def parse_wg_dump(dump: str, now: float, hosts: dict[str, set[str]]) -> list[Pee
         fields = line.split("\t")
         if len(fields) != WG_PEER_FIELDS:
             continue
-        allowed_ips, handshake = fields[4], fields[5]
-        tunnel_ip = allowed_ips.split("/", 1)[0].split(",")[0].strip()
+        public_key, allowed_ips, handshake = fields[1], fields[4], fields[5]
+        if allowed_ips.strip() in ("", "(none)"):
+            tunnel_ip = ""
+        else:
+            tunnel_ip = allowed_ips.split("/", 1)[0].split(",")[0].strip()
         try:
             last = float(handshake)
         except ValueError:
@@ -58,7 +71,7 @@ def parse_wg_dump(dump: str, now: float, hosts: dict[str, set[str]]) -> list[Pee
             ok, detail = age < HANDSHAKE_STALE_SECONDS, _format_age(age)
         peers.append(
             PeerReachability(
-                name=address_to_name.get(tunnel_ip, tunnel_ip),
+                name=address_to_name.get(tunnel_ip) or tunnel_ip or _key_label(public_key),
                 method="wireguard",
                 ok=ok,
                 detail=detail,

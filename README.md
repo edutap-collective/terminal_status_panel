@@ -251,23 +251,43 @@ an unearned ✅ for it would be worse than saying nothing. Every other check in
 this section (PostgreSQL's `pg_autoctl` rows, Kafka's quorum voters,
 GlusterFS peers/bricks) reports ✅ or 💀 for each member it lists, never `·`,
 because those commands do report per-member state. A *service* whose own
-quorum was never even attempted (e.g. its probe errored before parsing
-anything) shows no icon at all next to its name, just a dim "quorum not
-reported" note — so "not observable" (the dot) and "never asked" never look
-the same.
+quorum was never established shows no icon at all next to its name, just a
+dim "quorum not reported" note — so "not observable" (the dot) and "never
+asked" never look the same. That note appears whenever the panel has no basis
+for a quorum verdict:
 
-Two blocks can additionally read `not checked (…)` instead of a false clean
-result: the CLUSTERS block shows `not checked (no Docker client)` when there
-is no Docker socket to probe from (or every cluster kind is disabled in
-config), and the PEERS block shows `not checked (no peer list available)`
-when the check produced no result *and* there were no peer names to check in
+- the probe errored before parsing anything;
+- the command succeeded but its output was not recognisable (an empty
+  `pg_autoctl` table, a Kafka status in an unexpected format after an
+  upgrade, a GlusterFS answer with neither peers nor volumes) — an
+  unrecognised answer is *not* a measurement, and rendering 💀 for one would
+  raise a red alarm for a perfectly healthy cluster;
+- `gluster peer status` reports zero other peers, i.e. a single-node volume,
+  which peer status alone cannot establish a quorum for;
+- RustFS's `RUSTFS_VOLUMES` could not be read, so the endpoint list is a
+  guess — the line then also reads `(endpoint list unknown)` next to the
+  live count, because "1/1 live" against a guessed endpoint says nothing
+  about a five-node cluster.
+
+All three blocks can additionally read `not checked (…)` instead of a false
+clean result: the CLUSTERS block shows `not checked (no Docker client)` when
+there is no Docker socket to probe from (or every cluster kind is disabled in
+config), the PEERS block shows `not checked (no peer list available)` when
+the check produced no result *and* there were no peer names to check in
 the first place — i.e. neither the `wg`/TCP probe answered nor a Swarm node
-list gave it anything to ask about. Both exist for the same reason — an empty
-list from a check that never ran would otherwise look identical to "checked,
-found nothing," which is a false clean bill of health. Both lines are also
-prefixed with the same neutral dot (`·`) as the MongoDB member case above: a
-block that never ran carries exactly that claim — not observed, nothing
-more said.
+list gave it anything to ask about — and the DNS block shows `not checked
+(DNS check did not run)` when the check was never registered. All exist for
+the same reason — an empty list from a check that never ran would otherwise
+look identical to "checked, found nothing," which is a false clean bill of
+health. Those lines are also prefixed with the same neutral dot (`·`) as the
+MongoDB member case above: a block that never ran carries exactly that claim
+— not observed, nothing more said.
+
+Where a probe deliberately narrows what it looks at, it says so in the same
+place: `(+N more volumes)` when a GlusterFS host serves more than the one
+volume reported, and `(+N more containers)` when a node runs more than one
+container of the same kind (a `pg16` → `pg18` migration, say) and only the
+first was probed.
 
 ### A service with no running container
 

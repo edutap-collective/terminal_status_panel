@@ -29,14 +29,33 @@ POSTGRES_PATTERNS = ("_pg-",)
 _PG_NAME_PREFIX = re.compile(r"^pg\d*-")
 
 
-def find_container(client, patterns: tuple[str, ...]):
-    """First locally running container whose name contains one of *patterns*."""
-    containers = client.containers.list()
-    for container in containers:
+def find_containers(client, patterns: tuple[str, ...]) -> list:
+    """Every locally running container whose name contains one of *patterns*."""
+    matches = []
+    for container in client.containers.list():
         name = (getattr(container, "name", "") or "").lower()
         if any(pattern.lower() in name for pattern in patterns):
-            return container
-    return None
+            matches.append(container)
+    return matches
+
+
+def find_container(client, patterns: tuple[str, ...]):
+    """First locally running container whose name contains one of *patterns*."""
+    matches = find_containers(client, patterns)
+    return matches[0] if matches else None
+
+
+def _note_extra_containers(service: ClusterService, extras: int) -> None:
+    """Make a narrowed view visible, the way ``parse_gluster`` does for volumes.
+
+    A node hosting two clusters of the same kind — a pg16 → pg18 migration is
+    the case ``_PG_NAME_PREFIX`` anticipates — would otherwise show one of them
+    with nothing to say the other exists.
+    """
+    if extras <= 0:
+        return
+    note = f"(+{extras} more container{'s' if extras > 1 else ''})"
+    service.detail = f"{service.detail} {note}" if service.detail else note
 
 
 def exec_text(container, command: list[str]) -> str:
@@ -103,24 +122,26 @@ def _wanted_on_this_node(client, patterns: tuple[str, ...]) -> bool:
 def locate_member(client, kind: str, patterns: tuple[str, ...]):
     """Find the local container for *kind*.
 
-    Returns ``(container, None)`` when one is running, otherwise
-    ``(None, verdict)`` where *verdict* already carries the right conclusion:
-    an error when Swarm wants a task here but none runs, ``applicable=False``
-    when this node genuinely runs no member of the service.
+    Returns ``(container, None, extras)`` when one is running, otherwise
+    ``(None, verdict, 0)`` where *verdict* already carries the right
+    conclusion: an error when Swarm wants a task here but none runs,
+    ``applicable=False`` when this node genuinely runs no member of the
+    service. *extras* counts the further matching containers that this probe
+    will not look at, so the caller can make that narrowing visible.
     """
     try:
-        container = find_container(client, patterns)
+        matches = find_containers(client, patterns)
     except Exception as exc:
-        return None, ClusterService(kind=kind, error=str(exc))
-    if container is not None:
-        return container, None
+        return None, ClusterService(kind=kind, error=str(exc)), 0
+    if matches:
+        return matches[0], None, len(matches) - 1
     try:
         wanted = _wanted_on_this_node(client, patterns)
     except Exception:
         wanted = False  # cannot ask Swarm: fall back to the weaker claim
     if wanted:
-        return None, ClusterService(kind=kind, error="no running container")
-    return None, ClusterService(kind=kind, applicable=False)
+        return None, ClusterService(kind=kind, error="no running container"), 0
+    return None, ClusterService(kind=kind, applicable=False), 0
 
 
 def _node_from_member(name: str) -> str | None:
@@ -158,6 +179,12 @@ def parse_pg_state(output: str) -> ClusterService:
             )
         )
 
+    if not members:
+        # The command succeeded but nothing recognisable came back — a changed
+        # output format, an empty table. Nothing was *measured*, so quorum stays
+        # unreported: a 💀 here would be a definite verdict from missing data.
+        return ClusterService(kind="postgres", reachable=False, quorum_ok=None)
+
     leader = next((m.name for m in members if m.role == "primary"), None)
     for member in members:
         if member.role == "secondary" and primary_lsn and member.detail != primary_lsn:
@@ -166,16 +193,16 @@ def parse_pg_state(output: str) -> ClusterService:
     healthy_count = sum(1 for m in members if m.healthy)
     return ClusterService(
         kind="postgres",
-        reachable=bool(members),
+        reachable=True,
         leader=leader,
-        quorum_ok=bool(members) and healthy_count * 2 > len(members),
+        quorum_ok=healthy_count * 2 > len(members),
         members=members,
     )
 
 
 def probe_postgres(client) -> ClusterService:
     """``pg_autoctl show state`` — works from any data node, not only the monitor."""
-    container, verdict = locate_member(client, "postgres", POSTGRES_PATTERNS)
+    container, verdict, extras = locate_member(client, "postgres", POSTGRES_PATTERNS)
     if verdict is not None:
         return verdict
     try:
@@ -185,6 +212,7 @@ def probe_postgres(client) -> ClusterService:
     service = parse_pg_state(output)
     stack = (getattr(container, "name", "") or "").split("_", 1)[0]
     service.name = stack or None
+    _note_extra_containers(service, extras)
     return service
 
 
@@ -214,8 +242,13 @@ def parse_mongo_hello(output: str) -> ClusterService:
     data = json.loads(line)
     primary = data.get("primary")
     me = data.get("me")
+    hosts = data.get("hosts") or []
+    if not hosts and not primary and not data.get("set"):
+        # Valid JSON, but nothing we recognise as a replica set: no membership,
+        # no primary, no set name. Nothing measured, so nothing claimed.
+        return ClusterService(kind="mongodb", reachable=False, quorum_ok=None)
     members = []
-    for host in data.get("hosts") or []:
+    for host in hosts:
         if host == primary:
             role, healthy = "primary", True
         elif host == me:
@@ -238,14 +271,15 @@ def parse_mongo_hello(output: str) -> ClusterService:
 
 def probe_mongodb(client) -> ClusterService:
     """``db.hello()`` through mongosh — no credentials required."""
-    container, verdict = locate_member(client, "mongodb", MONGODB_PATTERNS)
+    container, verdict, extras = locate_member(client, "mongodb", MONGODB_PATTERNS)
     if verdict is not None:
         return verdict
     try:
-        output = exec_text(container, MONGO_COMMAND)
-        return parse_mongo_hello(output)
+        service = parse_mongo_hello(exec_text(container, MONGO_COMMAND))
     except Exception as exc:
         return ClusterService(kind="mongodb", error=str(exc))
+    _note_extra_containers(service, extras)
+    return service
 
 
 KAFKA_PATTERNS = ("kafka_kafka-",)
@@ -272,6 +306,14 @@ def _kafka_endpoint_host(entry: dict) -> str:
     return without_scheme.rsplit(":", 1)[0]
 
 
+# At least one of these must appear for the output to be the status report we
+# think it is. Any "Key: value" line would otherwise pass for one — including
+# an error banner, or whatever a future Kafka version prints instead.
+_KAFKA_STATUS_KEYS = frozenset(
+    {"ClusterId", "LeaderId", "LeaderEpoch", "HighWatermark", "CurrentVoters"}
+)
+
+
 def parse_kafka_quorum(output: str) -> ClusterService:
     """Parse ``kafka-metadata-quorum.sh describe --status`` (KRaft)."""
     fields: dict[str, str] = {}
@@ -280,6 +322,11 @@ def parse_kafka_quorum(output: str) -> ClusterService:
             continue
         key, _, value = line.partition(":")
         fields[key.strip()] = value.strip()
+
+    if not fields.keys() & _KAFKA_STATUS_KEYS:
+        # Unrecognised output: an upgrade that changes the format must not
+        # raise a red quorum alarm for a healthy cluster at every login.
+        return ClusterService(kind="kafka", reachable=False, quorum_ok=None)
 
     def _json_list(key: str) -> list[dict]:
         try:
@@ -308,7 +355,7 @@ def parse_kafka_quorum(output: str) -> ClusterService:
     return ClusterService(
         kind="kafka",
         name=fields.get("ClusterId"),
-        reachable=bool(fields),
+        reachable=True,
         leader=leader,
         # Only "a leader exists": the status output does not say which follower
         # is behind, so anything stronger would need an invented lag threshold.
@@ -320,13 +367,15 @@ def parse_kafka_quorum(output: str) -> ClusterService:
 
 def probe_kafka(client) -> ClusterService:
     """KRaft controller quorum. Costs ~2.6 s — JVM startup, not optimisable."""
-    container, verdict = locate_member(client, "kafka", KAFKA_PATTERNS)
+    container, verdict, extras = locate_member(client, "kafka", KAFKA_PATTERNS)
     if verdict is not None:
         return verdict
     try:
-        return parse_kafka_quorum(exec_text(container, KAFKA_COMMAND))
+        service = parse_kafka_quorum(exec_text(container, KAFKA_COMMAND))
     except Exception as exc:
         return ClusterService(kind="kafka", error=str(exc))
+    _note_extra_containers(service, extras)
+    return service
 
 
 GLUSTER_TIMEOUT = 1.0
@@ -419,9 +468,16 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
     return ClusterService(
         kind="glusterfs",
         name=volume_name,
-        reachable=True,
+        # Nothing parsed at all (no peers, no volumes) means we did not reach a
+        # working glusterd, whatever the exit code said.
+        reachable=total_peers > 0 or bool(volume_elements),
         leader=None,  # GlusterFS has no leader
-        quorum_ok=total_peers > 0 and (connected + 1) * 2 > total_peers + 1,
+        # `peer status` lists the *other* peers, so zero of them means either an
+        # unparsed answer or a single-node volume. Neither supports a quorum
+        # claim, so the panel reports none rather than inventing a 💀.
+        quorum_ok=(
+            (connected + 1) * 2 > total_peers + 1 if total_peers > 0 else None
+        ),
         detail=detail,
         members=members,
     )
@@ -449,20 +505,28 @@ RUSTFS_PATTERNS = ("rustfs_rustfs",)
 RUSTFS_FALLBACK_ENDPOINT = "https://localhost:9000"
 
 
-def rustfs_endpoints(container) -> list[str]:
+def rustfs_endpoints(container) -> tuple[list[str], bool]:
     """Endpoints to probe, derived from RUSTFS_VOLUMES in the container env.
 
     Read from the container rather than from configuration so the check stays
     correct across the move from ``shared`` (a local path) to ``distributed``
     (a list of URLs) without any change here.
+
+    Returns ``(endpoints, guessed)``. *guessed* is True when RUSTFS_VOLUMES was
+    absent or unreadable and the localhost endpoint is therefore an assumption,
+    not a reading — a five-node cluster must never render as "1/1 live" just
+    because the variable was renamed. A plain path in RUSTFS_VOLUMES is not a
+    guess: it says, readably, that this is a single local instance.
     """
     environment = ((getattr(container, "attrs", {}) or {}).get("Config") or {}).get("Env") or []
-    raw = ""
+    raw = None
     for entry in environment:
         key, _, value = str(entry).partition("=")
         if key == "RUSTFS_VOLUMES":
             raw = value
             break
+    if raw is None:
+        return [RUSTFS_FALLBACK_ENDPOINT], True
     endpoints = []
     for token in raw.split():
         if "://" not in token:
@@ -470,16 +534,17 @@ def rustfs_endpoints(container) -> list[str]:
         scheme, _, rest = token.partition("://")
         host_port = rest.split("/", 1)[0]
         endpoints.append(f"{scheme}://{host_port}")
-    return endpoints or [RUSTFS_FALLBACK_ENDPOINT]
+    return endpoints or [RUSTFS_FALLBACK_ENDPOINT], False
 
 
 def probe_rustfs(client) -> ClusterService:
     """GET /health per endpoint — the only unauthenticated status RustFS offers."""
-    container, verdict = locate_member(client, "rustfs", RUSTFS_PATTERNS)
+    container, verdict, extras = locate_member(client, "rustfs", RUSTFS_PATTERNS)
     if verdict is not None:
         return verdict
+    endpoints, guessed = rustfs_endpoints(container)
     members: list[ClusterMember] = []
-    for endpoint in rustfs_endpoints(container):
+    for endpoint in endpoints:
         try:
             # curl from inside the container: the rustfs overlay network
             # publishes no host ports.
@@ -499,17 +564,24 @@ def probe_rustfs(client) -> ClusterService:
             ClusterMember(name=endpoint, role="peer", healthy=healthy, detail=detail)
         )
     live = sum(1 for member in members if member.healthy)
-    return ClusterService(
+    detail = f"{live}/{len(members)} live"
+    if guessed:
+        detail += " (endpoint list unknown)"
+    service = ClusterService(
         kind="rustfs",
         name="rustfs",
         reachable=live > 0,
         leader=None,  # RustFS has no leader we can observe
         # /health is a liveness check only; erasure-coding and heal state
-        # require the admin API (which answers 403). Majority quorum.
-        quorum_ok=live * 2 > len(members),
-        detail=f"{live}/{len(members)} live",
+        # require the admin API (which answers 403). Majority quorum — but a
+        # guessed endpoint list supports no quorum claim at all, and neither
+        # does an empty one.
+        quorum_ok=None if guessed or not members else live * 2 > len(members),
+        detail=detail,
         members=members,
     )
+    _note_extra_containers(service, extras)
+    return service
 
 
 _PROBES = {
