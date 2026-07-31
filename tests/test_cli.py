@@ -4,7 +4,29 @@ from terminal_status_panel import cli
 from terminal_status_panel.config import Config
 
 
-def test_main_exits_zero_and_prints(capsys):
+@pytest.fixture
+def isolated_cli(monkeypatch):
+    """Keep the CLI tests off the real Docker socket and the real system.
+
+    ``collect_all`` builds a Docker client for the health section, and the
+    health section itself runs ``sudo -n wg``, ``sudo -n gluster`` and real DNS
+    lookups. Without this, a unit test would talk to whatever daemon, sudo rule
+    and resolver happen to exist on the machine — invisible on a developer's
+    macOS box, up to a full health budget per test on a Debian CI runner.
+
+    ``collect_updates`` shells out to apt-check for the same reason. The purely
+    local collectors (system, resources) are left alone: they read /proc and
+    psutil, so they are fast and cannot reach off the machine.
+
+    A test that wants a specific ``collect_health`` simply overrides it again.
+    """
+    monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
+    monkeypatch.setattr(cli, "collect_health", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "collect_updates", lambda timeout=None: None)
+    return monkeypatch
+
+
+def test_main_exits_zero_and_prints(isolated_cli, capsys):
     rc = cli.main(["--width", "100"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -13,17 +35,17 @@ def test_main_exits_zero_and_prints(capsys):
     assert "DOCKER" in out
 
 
-def test_main_never_raises_even_if_collection_breaks(monkeypatch, capsys):
+def test_main_never_raises_even_if_collection_breaks(isolated_cli, capsys):
     def boom(*a, **k):
         raise RuntimeError("kaboom")
 
     # Break one collector entirely; main must still exit 0.
-    monkeypatch.setattr(cli, "collect_resources", boom)
+    isolated_cli.setattr(cli, "collect_resources", boom)
     rc = cli.main([])
     assert rc == 0
 
 
-def test_width_flag_overrides(capsys):
+def test_width_flag_overrides(isolated_cli, capsys):
     rc = cli.main(["--width", "40"])
     assert rc == 0
     # Narrow width still produces output without crashing.
@@ -65,22 +87,7 @@ def test_sections_flag_selects(capsys):
     assert "SYSTEM OVERVIEW" not in out
 
 
-@pytest.fixture
-def isolated_cli(monkeypatch):
-    """Keep the CLI tests off the real Docker socket and the real system.
-
-    ``collect_all`` builds a Docker client for the health section; without this
-    the unit tests would talk to whatever daemon happens to run on the machine.
-    """
-    monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
-    monkeypatch.setattr(cli, "collect_system", lambda: None)
-    monkeypatch.setattr(cli, "collect_resources", lambda: None)
-    monkeypatch.setattr(cli, "collect_updates", lambda timeout=None: None)
-    return monkeypatch
-
-
 def test_health_main_returns_zero(isolated_cli):
-    isolated_cli.setattr(cli, "collect_health", lambda *a, **k: None)
     assert cli.health_main([]) == 0
 
 

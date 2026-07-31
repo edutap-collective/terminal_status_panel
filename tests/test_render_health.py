@@ -147,7 +147,7 @@ def test_peer_panel_shows_method_and_handshake_age():
 
 
 def test_tcp_fallback_is_labelled_as_such():
-    health = HealthInfo(peers=[
+    health = HealthInfo(peers_probed=True, peers=[
         PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377")
     ])
     assert "tcp" in _render(health).lower()
@@ -165,6 +165,7 @@ def test_dns_warning_renders_as_warning_not_failure():
 
 def test_narrow_width_still_renders():
     health = HealthInfo(
+        clusters_probed=True, peers_probed=True, dns_probed=True,
         clusters=[ClusterService(kind="postgres", name="PostgreSQL-18", reachable=True)],
         peers=[PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31")],
         dns=[DnsCheck(label="Resolver", ok=True, detail="3 ms")],
@@ -175,7 +176,7 @@ def test_narrow_width_still_renders():
 # -- Fix 1: the peers title reflects every peer's method, not just the first --
 
 def test_mixed_peer_methods_render_as_mixed():
-    health = HealthInfo(peers=[
+    health = HealthInfo(peers_probed=True, peers=[
         PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
         PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
     ])
@@ -183,7 +184,7 @@ def test_mixed_peer_methods_render_as_mixed():
 
 
 def test_all_wireguard_peers_still_render_wg():
-    health = HealthInfo(peers=[
+    health = HealthInfo(peers_probed=True, peers=[
         PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
         PeerReachability(name="ccn-02", method="wireguard", ok=True, detail="1:02"),
     ])
@@ -193,7 +194,7 @@ def test_all_wireguard_peers_still_render_wg():
 
 
 def test_all_tcp_peers_still_render_tcp():
-    health = HealthInfo(peers=[
+    health = HealthInfo(peers_probed=True, peers=[
         PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377"),
         PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
     ])
