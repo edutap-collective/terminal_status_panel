@@ -2809,39 +2809,55 @@ def test_build_layout_renders_only_the_requested_section():
 
 ```python
 # tests/test_cli.py  (append)
+import pytest
+
 from terminal_status_panel import cli
 from terminal_status_panel.config import Config
 
 
-def test_health_main_returns_zero(monkeypatch):
-    monkeypatch.setattr(cli, "collect_health", lambda *a, **k: None)
+@pytest.fixture
+def isolated_cli(monkeypatch):
+    """Keep the CLI tests off the real Docker socket and the real system.
+
+    ``collect_all`` builds a Docker client for the health section; without this
+    the unit tests would talk to whatever daemon happens to run on the machine.
+    """
+    monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
+    monkeypatch.setattr(cli, "collect_system", lambda: None)
+    monkeypatch.setattr(cli, "collect_resources", lambda: None)
+    monkeypatch.setattr(cli, "collect_updates", lambda timeout=None: None)
+    return monkeypatch
+
+
+def test_health_main_returns_zero(isolated_cli):
+    isolated_cli.setattr(cli, "collect_health", lambda *a, **k: None)
     assert cli.health_main([]) == 0
 
 
-def test_collect_all_skips_health_when_not_selected(monkeypatch):
+def test_collect_all_skips_health_when_not_selected(isolated_cli):
     called = []
-    monkeypatch.setattr(cli, "collect_health", lambda *a, **k: called.append(True))
+    isolated_cli.setattr(cli, "collect_health", lambda *a, **k: called.append(True))
     cli.collect_all(Config(), sections=("server",))
     assert called == []
 
 
-def test_collect_all_calls_health_when_selected(monkeypatch):
+def test_collect_all_calls_health_when_selected(isolated_cli):
     called = []
 
     def fake(cfg, fqdn, peer_names, client=None):
         called.append((fqdn, peer_names))
         return None
 
-    monkeypatch.setattr(cli, "collect_health", fake)
+    isolated_cli.setattr(cli, "collect_health", fake)
     cli.collect_all(Config(), sections=("health",))
     assert len(called) == 1
 
 
-def test_main_never_propagates_a_collector_explosion(monkeypatch):
+def test_main_never_propagates_a_collector_explosion(isolated_cli):
     def boom(*a, **k):
         raise RuntimeError("kaputt")
 
-    monkeypatch.setattr(cli, "collect_health", boom)
+    isolated_cli.setattr(cli, "collect_health", boom)
     assert cli.main(["--sections", "health"]) == 0
 ```
 
