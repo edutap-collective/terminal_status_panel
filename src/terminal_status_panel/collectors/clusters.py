@@ -177,9 +177,94 @@ def probe_mongodb(client) -> ClusterService:
         return ClusterService(kind="mongodb", error=str(exc))
 
 
+KAFKA_PATTERNS = ("kafka_kafka-",)
+
+# The Kafka tools are NOT on $PATH in the image — the absolute path is required.
+# /client.properties is mounted by the kafka Ansible role explicitly for
+# "manuelle Abfragen per docker exec" and uses the broker certificate.
+KAFKA_COMMAND = [
+    "/opt/kafka/bin/kafka-metadata-quorum.sh",
+    "--bootstrap-server",
+    "localhost:9092",
+    "--command-config",
+    "/client.properties",
+    "describe",
+    "--status",
+]
+
+
+def _kafka_endpoint_host(entry: dict) -> str:
+    """``CONTROLLER://kafka-lmzvd06-ccn-01:9093`` -> ``kafka-lmzvd06-ccn-01``."""
+    endpoints = entry.get("endpoints") or []
+    raw = endpoints[0] if endpoints else str(entry.get("id", "?"))
+    without_scheme = raw.split("://", 1)[-1]
+    return without_scheme.rsplit(":", 1)[0]
+
+
+def parse_kafka_quorum(output: str) -> ClusterService:
+    """Parse ``kafka-metadata-quorum.sh describe --status`` (KRaft)."""
+    fields: dict[str, str] = {}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip()
+
+    def _json_list(key: str) -> list[dict]:
+        try:
+            return json.loads(fields.get(key, "[]"))
+        except (ValueError, TypeError):
+            return []
+
+    leader_id = fields.get("LeaderId")
+    members: list[ClusterMember] = []
+    leader: str | None = None
+    for entry in _json_list("CurrentVoters"):
+        host = _kafka_endpoint_host(entry)
+        is_leader = leader_id is not None and str(entry.get("id")) == leader_id
+        if is_leader:
+            leader = host
+        members.append(
+            ClusterMember(name=host, role="leader" if is_leader else "voter", healthy=True)
+        )
+    for entry in _json_list("CurrentObservers"):
+        members.append(
+            ClusterMember(name=_kafka_endpoint_host(entry), role="observer", healthy=True)
+        )
+
+    lag = fields.get("MaxFollowerLag", "?")
+    lag_ms = fields.get("MaxFollowerLagTimeMs", "?")
+    return ClusterService(
+        kind="kafka",
+        name=fields.get("ClusterId"),
+        reachable=bool(fields),
+        leader=leader,
+        # Only "a leader exists": the status output does not say which follower
+        # is behind, so anything stronger would need an invented lag threshold.
+        quorum_ok=leader is not None,
+        detail=f"Lag {lag} / {lag_ms} ms",
+        members=members,
+    )
+
+
+def probe_kafka(client) -> ClusterService:
+    """KRaft controller quorum. Costs ~2.6 s — JVM startup, not optimisable."""
+    try:
+        container = find_container(client, KAFKA_PATTERNS)
+    except Exception as exc:
+        return ClusterService(kind="kafka", error=str(exc))
+    if container is None:
+        return ClusterService(kind="kafka", applicable=False)
+    try:
+        return parse_kafka_quorum(exec_text(container, KAFKA_COMMAND))
+    except Exception as exc:
+        return ClusterService(kind="kafka", error=str(exc))
+
+
 _PROBES = {
     "postgres": probe_postgres,
     "mongodb": probe_mongodb,
+    "kafka": probe_kafka,
 }
 
 

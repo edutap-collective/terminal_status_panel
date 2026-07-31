@@ -232,3 +232,89 @@ def test_probe_mongodb_reports_docker_api_failure_as_error():
     assert service.applicable is True  # Docker check was attempted
     assert service.error is not None  # But it failed
     assert "permission denied" in service.error
+
+
+KAFKA_QUORUM = """\
+ClusterId:              Jucv8gBrQg-WOxKNTIAPVw
+LeaderId:               1
+LeaderEpoch:            2
+HighWatermark:          173016
+MaxFollowerLag:         0
+MaxFollowerLagTimeMs:   296
+CurrentVoters:          [{"id": 0, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccc-01:9093"]}, {"id": 1, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-01:9093"]}, {"id": 2, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-02:9093"]}, {"id": 3, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-03:9093"]}, {"id": 4, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-04:9093"]}]
+CurrentObservers:       []
+"""
+
+
+def test_parse_kafka_quorum_maps_the_leader_id_to_its_endpoint_host():
+    service = clusters.parse_kafka_quorum(KAFKA_QUORUM)
+    assert service.kind == "kafka"
+    assert service.reachable is True
+    assert service.leader == "kafka-lmzvd06-ccn-01"
+    assert service.quorum_ok is True
+    assert service.name == "Jucv8gBrQg-WOxKNTIAPVw"
+
+
+def test_parse_kafka_quorum_lists_voters_with_the_leader_marked():
+    service = clusters.parse_kafka_quorum(KAFKA_QUORUM)
+    assert len(service.members) == 5
+    by_name = {member.name: member for member in service.members}
+    assert by_name["kafka-lmzvd06-ccn-01"].role == "leader"
+    assert by_name["kafka-lmzvd06-ccc-01"].role == "voter"
+    assert by_name["kafka-lmzvd06-ccc-01"].healthy is True
+
+
+def test_parse_kafka_quorum_carries_follower_lag_as_service_detail():
+    service = clusters.parse_kafka_quorum(KAFKA_QUORUM)
+    assert "0" in service.detail
+    assert "296" in service.detail
+
+
+def test_parse_kafka_quorum_without_a_leader_has_no_quorum():
+    service = clusters.parse_kafka_quorum(KAFKA_QUORUM.replace("LeaderId:               1", ""))
+    assert service.leader is None
+    assert service.quorum_ok is False
+
+
+def test_parse_kafka_quorum_marks_observers():
+    with_observer = KAFKA_QUORUM.replace(
+        "CurrentObservers:       []",
+        'CurrentObservers:       [{"id": 9, "endpoints": ["CONTROLLER://kafka-obs:9093"]}]',
+    )
+    service = clusters.parse_kafka_quorum(with_observer)
+    by_name = {member.name: member for member in service.members}
+    assert by_name["kafka-obs"].role == "observer"
+
+
+def test_probe_kafka_uses_the_absolute_tool_path_and_the_mounted_client_properties():
+    container = _FakeContainer(
+        "kafka_kafka-lmzvd06-ccc-01.1.abc", exec_result=(0, KAFKA_QUORUM.encode())
+    )
+    service = clusters.probe_kafka(_FakeClient([container]))
+    command = container.commands[0]
+    assert command[0] == "/opt/kafka/bin/kafka-metadata-quorum.sh"
+    assert "/client.properties" in command
+    assert service.leader == "kafka-lmzvd06-ccn-01"
+
+
+def test_probe_kafka_is_not_applicable_without_a_local_broker():
+    service = clusters.probe_kafka(_FakeClient([]))
+    assert service.applicable is False
+    assert service.error is None
+
+
+def test_probe_kafka_reports_docker_api_failure_as_error():
+    """Docker socket failure must be distinct from 'not applicable'."""
+    class _FailingClient:
+        class _FailingColl:
+            def list(self, *a, **k):
+                raise RuntimeError("Docker socket permission denied")
+
+        @property
+        def containers(self):
+            return self._FailingColl()
+
+    service = clusters.probe_kafka(_FailingClient())
+    assert service.applicable is True  # Docker check was attempted
+    assert service.error is not None  # But it failed
+    assert "permission denied" in service.error
