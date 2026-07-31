@@ -2798,6 +2798,15 @@ git commit -m "feat: render the CLUSTER HEALTH section"
 
 ---
 
+**Amendments applied during execution** (see git history for the code):
+
+- The sub-blocks use `panels.py`'s `Rule`/`_subhead` idiom, not bordered `Panel`s — the rest of the dashboard has one visual language and a login banner should keep it.
+- The peers title derives its `wg`/`tcp` label from *every* peer, rendering `mixed` when they differ, instead of trusting `peers[0]`.
+- `quorum_ok is None` renders no header icon plus a dim `quorum not reported`, so `·` stays reserved for member-level "not observable".
+- The empty-peers default was the literal `"wg"` where the model uses `"wireguard"`, which mislabelled an empty panel as `tcp`. Fixed.
+
+---
+
 ### Task 13: Wire the section into layout, CLI and packaging
 
 **Files:**
