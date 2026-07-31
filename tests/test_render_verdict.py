@@ -1,6 +1,6 @@
 import pytest
 
-from terminal_status_panel.model import ClusterService, ServiceStatus
+from terminal_status_panel.model import ClusterMember, ClusterService, ServiceStatus
 from terminal_status_panel.render import icons
 from terminal_status_panel.render.verdict import service_verdict
 
@@ -76,3 +76,59 @@ def test_not_applicable_here_says_nothing_about_the_service():
 
 def test_an_empty_row_renders_nothing_rather_than_a_verdict():
     assert _cell([]) == ""
+
+
+def test_a_minority_of_dead_members_warns_even_though_quorum_holds():
+    """RustFS genuinely reports quorum_ok=True at 3/5 live: the quorum rule is
+    a majority. Rendering that as plain OK is the "1 of 5 looks like 5 of 5"
+    failure the three-level scheme exists to prevent."""
+    degraded_majority = ClusterService(
+        kind="rustfs",
+        quorum_ok=True,
+        members=[
+            ClusterMember(name="node1", healthy=True),
+            ClusterMember(name="node2", healthy=True),
+            ClusterMember(name="node3", healthy=True),
+            ClusterMember(name="node4", healthy=False),
+            ClusterMember(name="node5", healthy=False),
+        ],
+    )
+    assert (
+        _cell([_svc(5, 5)], kind="rustfs", cluster=degraded_majority)
+        == f"{icons.WARN} 5/5"
+    )
+
+
+def test_unobserved_members_do_not_warn():
+    """MongoDB reports replica-set membership but not member state. An
+    unmeasured member (healthy=None) must not be treated as degraded — that
+    would be the same over-claim in the opposite direction."""
+    unmeasured = ClusterService(
+        kind="mongodb",
+        quorum_ok=True,
+        members=[
+            ClusterMember(name="node1", healthy=None),
+            ClusterMember(name="node2", healthy=None),
+            ClusterMember(name="node3", healthy=True),
+        ],
+    )
+    assert _cell([_svc(3, 3)], kind="mongodb", cluster=unmeasured) == f"{icons.OK} 3/3"
+
+
+def test_all_members_healthy_shows_ok():
+    """Guard against the warn branch firing too eagerly."""
+    all_healthy = ClusterService(
+        kind="rustfs",
+        quorum_ok=True,
+        members=[
+            ClusterMember(name="node1", healthy=True),
+            ClusterMember(name="node2", healthy=True),
+        ],
+    )
+    assert _cell([_svc(2, 2)], kind="rustfs", cluster=all_healthy) == f"{icons.OK} 2/2"
+
+
+def test_no_member_data_shows_ok():
+    """Quorum holds and there is no member list at all: nothing to warn about."""
+    no_members = ClusterService(kind="rustfs", quorum_ok=True, members=[])
+    assert _cell([_svc(3, 5)], kind="rustfs", cluster=no_members) == f"{icons.OK} 3/5"

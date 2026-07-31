@@ -54,7 +54,17 @@ def _cluster_icon(cluster: ClusterService) -> str:
         return icons.UNKNOWN
     if cluster.quorum_ok is None:
         return icons.UNKNOWN
-    return icons.OK if cluster.quorum_ok else icons.DEAD
+    if not cluster.quorum_ok:
+        return icons.DEAD
+    # Quorum holds, but that alone can hide a minority of dead members — e.g.
+    # RustFS genuinely reports quorum_ok=True at 3/5 live, since the quorum
+    # rule is a majority. Only a member *measured* unhealthy counts here:
+    # ``healthy is None`` means not observable (MongoDB reports membership but
+    # not member state), and treating an unmeasured member as degraded would
+    # be the same over-claim in the opposite direction.
+    if any(member.healthy is False for member in cluster.members):
+        return icons.WARN
+    return icons.OK
 
 
 def service_verdict(
