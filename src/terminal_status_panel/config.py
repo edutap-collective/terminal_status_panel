@@ -57,8 +57,19 @@ DEFAULT_INFRA_UI_SERVICES = [
 
 DEFAULT_HEALTH_KINDS = ("postgres", "mongodb", "kafka", "glusterfs", "rustfs")
 
-# Individual timeouts, all below the total budget so one slow check cannot
-# starve the others. Kafka is the expensive one: ~2.6s of JVM startup.
+# One timeout per check. Every check — each cluster kind, the WireGuard peers,
+# DNS — runs as its own task under the shared budget, and its timeout is the
+# deadline for that task: a check that overruns is reported as out of budget
+# while the others keep their results. The checks run concurrently, so these
+# values are deadlines, not a sum, and none of them may exceed the budget.
+#
+# glusterfs and rustfs additionally enforce their value on the child process
+# they spawn (subprocess timeout, curl -m). The three docker-exec probes
+# cannot: docker-py bounds an exec by the client's socket timeout, not per
+# call — so the health client is built with a socket timeout no smaller than
+# the largest enabled value here (see cli._health_socket_timeout), leaving the
+# task deadline as the bound that decides. Kafka is the expensive one: ~2.6 s
+# of JVM startup, which is why its value is the largest.
 DEFAULT_HEALTH_TIMEOUTS = {
     "postgres": 1.5,
     "mongodb": 2.5,

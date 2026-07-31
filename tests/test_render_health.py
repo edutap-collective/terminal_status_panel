@@ -114,10 +114,25 @@ def test_errored_service_shows_the_failure_marker_and_message():
 
 
 def test_truncated_check_renders_ellipsis_not_a_failure():
-    health = HealthInfo(clusters_probed=True, truncated=["clusters"])
+    health = HealthInfo(clusters_probed=True, truncated=["postgres"])
     output = _render(health)
     assert "…" in output
     assert "✗" not in output
+
+
+def test_a_truncated_kind_is_named_and_does_not_hide_the_others():
+    """One budget task per kind: a hung RustFS must not take the PostgreSQL
+    result that finished long ago down with it."""
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[ClusterService(kind="postgres", name="pg18", quorum_ok=False)],
+        truncated=["rustfs"],
+    )
+    output = _render(health)
+    assert "pg18" in output
+    assert "💀" in output  # the PostgreSQL quorum loss is still reported
+    assert "RustFS: time budget exceeded" in output
+    assert "no clustered services found" not in output
 
 
 def test_peer_panel_shows_method_and_handshake_age():

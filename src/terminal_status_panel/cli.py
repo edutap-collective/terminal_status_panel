@@ -30,12 +30,27 @@ from .model import PanelData
 from .render.layout import SECTIONS, build_layout
 
 
+def _health_socket_timeout(cfg: Config) -> float:
+    """Socket timeout for the health section's Docker client.
+
+    docker-py has no per-call timeout: the client's socket timeout bounds every
+    ``exec``. With the package default ``docker.timeout = 1.5`` the Kafka probe
+    (~2.6 s of JVM startup) could therefore never succeed, whatever
+    ``health.timeout.kafka`` said. The health client uses the largest enabled
+    per-kind timeout instead when that is larger, so the per-kind budget
+    deadline — the knob documented for this purpose — is what actually decides.
+    ``docker.timeout`` keeps bounding the DOCKER INFOS section unchanged.
+    """
+    per_kind = [cfg.health.timeouts.get(kind, 0.0) for kind in cfg.health.enabled]
+    return max([cfg.docker_timeout, *per_kind])
+
+
 def _docker_client(cfg: Config):
     """A Docker client for the health probes, or None when unavailable."""
     try:
         import docker
 
-        return docker.from_env(timeout=cfg.docker_timeout)
+        return docker.from_env(timeout=_health_socket_timeout(cfg))
     except Exception:
         return None
 

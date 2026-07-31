@@ -95,16 +95,36 @@ def _service_lines(service: ClusterService) -> Text:
     return text
 
 
+# Task names in ``HealthInfo.truncated`` that are not cluster kinds.
+_NON_CLUSTER_TASKS = ("peers", "dns")
+
+
+def _truncated_kinds(health: HealthInfo) -> list[str]:
+    """The cluster kinds that ran out of time, in the order they were reported."""
+    return [name for name in health.truncated if name not in _NON_CLUSTER_TASKS]
+
+
 def _clusters_body(health: HealthInfo) -> RenderableType:
-    if "clusters" in health.truncated:
-        return Text(f"{TRUNCATED} time budget exceeded", style="dim")
     if not health.clusters_probed:
         # Never ran: no Docker client, or every kind disabled. Rendering this as
         # "nothing found" would report a gap in coverage as a clean bill of health.
         return Text(f"{UNKNOWN} not checked (no Docker client)", style="dim")
-    if not health.clusters:
+    truncated = _truncated_kinds(health)
+    if not health.clusters and not truncated:
         return Text("no clustered services found", style="dim")
-    return Group(*[_service_lines(service) for service in health.clusters])
+    lines: list[RenderableType] = [
+        _service_lines(service) for service in health.clusters
+    ]
+    # Each kind is its own budget task, so one kind running out of time says
+    # nothing about the kinds beside it — and they keep their own lines.
+    lines.extend(
+        Text(
+            f"{TRUNCATED} {_KIND_TITLES.get(kind, kind)}: time budget exceeded",
+            style="dim",
+        )
+        for kind in truncated
+    )
+    return Group(*lines)
 
 
 def _peer_method_label(health: HealthInfo) -> str:

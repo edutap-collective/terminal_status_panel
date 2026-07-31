@@ -32,8 +32,22 @@ class BudgetResult:
     failed: dict[str, str] = field(default_factory=dict)
 
 
-def run_with_budget(tasks: dict[str, Callable[[], Any]], budget: float) -> BudgetResult:
-    """Run every callable in *tasks* concurrently, waiting at most *budget* seconds."""
+def run_with_budget(
+    tasks: dict[str, Callable[[], Any]],
+    budget: float,
+    timeouts: dict[str, float] | None = None,
+) -> BudgetResult:
+    """Run every callable in *tasks* concurrently under one wall-clock budget.
+
+    *timeouts* optionally gives a task its own, shorter deadline. A task that
+    has not finished by then is reported as truncated even though budget is
+    left — that is what makes a per-check timeout mean anything: the checks that
+    did finish are reported while the slow one is named as unfinished, instead
+    of one hung probe deciding the outcome for all of them.
+
+    A late answer from an expired task is discarded rather than reported, so the
+    same run always produces the same verdict for it.
+    """
     results: dict[str, Any] = {}
     failed: dict[str, str] = {}
     lock = threading.Lock()
@@ -56,12 +70,29 @@ def run_with_budget(tasks: dict[str, Callable[[], Any]], budget: float) -> Budge
         thread.start()
         threads.append((name, thread))
 
-    deadline = time.monotonic() + budget
-    for _, thread in threads:
-        thread.join(max(0.0, deadline - time.monotonic()))
+    started = time.monotonic()
+    budget_deadline = started + budget
+    deadlines = {
+        name: min(budget_deadline, started + (timeouts or {}).get(name, budget))
+        for name, _ in threads
+    }
+
+    # Join in deadline order, so every task is waited for exactly as long as it
+    # is entitled to and no task's overrun eats another's waiting time.
+    expired: set[str] = set()
+    for name, thread in sorted(threads, key=lambda item: deadlines[item[0]]):
+        thread.join(max(0.0, deadlines[name] - time.monotonic()))
+        if thread.is_alive():
+            expired.add(name)
 
     with lock:
         truncated = [
-            name for name, _ in threads if name not in results and name not in failed
+            name
+            for name, _ in threads
+            if name in expired or (name not in results and name not in failed)
         ]
-        return BudgetResult(results=dict(results), truncated=truncated, failed=dict(failed))
+        return BudgetResult(
+            results={k: v for k, v in results.items() if k not in expired},
+            truncated=truncated,
+            failed={k: v for k, v in failed.items() if k not in expired},
+        )

@@ -103,6 +103,27 @@ def test_collect_all_calls_health_when_selected(isolated_cli):
     assert len(called) == 1
 
 
+def test_the_health_client_socket_outlives_the_slowest_enabled_probe():
+    """docker-py bounds an exec by the client's socket timeout. With
+    docker.timeout = 1.5 the Kafka probe (~2.6 s of JVM startup) could never
+    have succeeded, whatever health.timeout.kafka said."""
+    cfg = Config()
+    assert cfg.docker_timeout == 1.5
+    assert cli._health_socket_timeout(cfg) == cfg.health.timeouts["kafka"] == 4.0
+
+
+def test_the_health_client_never_drops_below_the_docker_timeout():
+    cfg = Config()
+    cfg.docker_timeout = 9.0
+    assert cli._health_socket_timeout(cfg) == 9.0
+
+
+def test_the_health_client_ignores_the_timeouts_of_disabled_kinds():
+    cfg = Config()
+    cfg.health.enabled = ["postgres"]
+    assert cli._health_socket_timeout(cfg) == 1.5  # postgres, not kafka
+
+
 def test_collect_all_never_resolves_the_fqdn_itself(isolated_cli):
     """socket.getfqdn() does a forward *and* a reverse lookup through NSS and
     blocks for tens of seconds with a broken resolver — the very fault the DNS

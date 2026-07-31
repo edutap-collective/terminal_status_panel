@@ -1,6 +1,7 @@
 import subprocess
 
 from terminal_status_panel.collectors import clusters
+from terminal_status_panel.model import ClusterService
 
 PG_STATE = """\
                Name |  Node |                Host:Port |       TLI: LSN |   Connection |      Reported State |      Assigned State
@@ -41,19 +42,103 @@ class _FakeClient:
         return self._Coll(self._containers)
 
 
+def _index(containers):
+    """The shared container index the probes take, over a fake client."""
+    return clusters.ContainerIndex(_FakeClient(containers))
+
+
+class _CountingClient:
+    """Records how the index queries the daemon."""
+
+    def __init__(self, containers=(), fail=None):
+        self._containers = list(containers)
+        self._fail = fail
+        self.list_calls = []
+
+    class _Coll:
+        def __init__(self, owner):
+            self._owner = owner
+
+        def list(self, *args, **kwargs):
+            self._owner.list_calls.append(kwargs)
+            if self._owner._fail is not None:
+                raise self._owner._fail
+            return self._owner._containers
+
+    @property
+    def containers(self):
+        return self._Coll(self)
+
+
+def test_the_index_lists_containers_once_and_without_inspecting_them():
+    """docker-py's default list() inspects every running container: five probes
+    on a 40-container host meant ~205 Docker round trips at every login."""
+    client = _CountingClient([_FakeContainer("PostgreSQL-18_pg-a.1.x")])
+    index = clusters.ContainerIndex(client)
+    for _ in range(5):
+        index.containers()
+    assert len(client.list_calls) == 1
+    assert client.list_calls[0]["sparse"] is True
+    # No inspect means no NotFound when a container vanishes mid-listing —
+    # which used to render as "✗ PostgreSQL: 404 Client Error".
+    assert client.list_calls[0]["ignore_removed"] is True
+
+
+def test_the_index_serves_concurrent_probes_from_one_fetch():
+    import threading
+
+    client = _CountingClient([_FakeContainer("PostgreSQL-18_pg-a.1.x")])
+    index = clusters.ContainerIndex(client)
+    barrier = threading.Barrier(4)
+
+    def ask():
+        barrier.wait()
+        index.containers()
+
+    threads = [threading.Thread(target=ask) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert len(client.list_calls) == 1
+
+
+def test_the_index_reports_the_same_failure_to_every_probe():
+    client = _CountingClient(fail=RuntimeError("Docker socket permission denied"))
+    index = clusters.ContainerIndex(client)
+    for _ in range(3):
+        try:
+            index.containers()
+        except RuntimeError as exc:
+            assert "permission denied" in str(exc)
+        else:
+            raise AssertionError("expected the fetch error to be re-raised")
+    assert len(client.list_calls) == 1
+
+
+def test_a_sparsely_listed_container_is_still_matched_by_name():
+    """A sparse listing carries "Names", and docker-py's .name is then None."""
+    class _SparseContainer:
+        name = None
+        attrs = {"Names": ["/PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc"]}
+
+    index = clusters.ContainerIndex(_CountingClient([_SparseContainer()]))
+    assert clusters.find_container(index, ("_pg-",)) is not None
+
+
 def test_find_container_matches_substring_case_insensitively():
     target = _FakeContainer("PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc")
-    client = _FakeClient([_FakeContainer("traefik_traefik.1.x"), target])
+    client = _index([_FakeContainer("traefik_traefik.1.x"), target])
     assert clusters.find_container(client, ("_pg-",)) is target
 
 
 def test_find_container_returns_none_when_nothing_matches():
-    client = _FakeClient([_FakeContainer("traefik_traefik.1.x")])
+    client = _index([_FakeContainer("traefik_traefik.1.x")])
     assert clusters.find_container(client, ("_pg-",)) is None
 
 
 def test_kafka_pattern_does_not_match_the_kafbat_ui():
-    client = _FakeClient([_FakeContainer("kafbat-ui_kafbat-ui.1.x")])
+    client = _index([_FakeContainer("kafbat-ui_kafbat-ui.1.x")])
     assert clusters.find_container(client, ("kafka_kafka-",)) is None
 
 
@@ -130,12 +215,12 @@ def test_a_second_matching_container_is_made_visible():
     first = _FakeContainer(
         "PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc", exec_result=(0, PG_STATE.encode())
     )
-    service = clusters.probe_postgres(_FakeClient([first, other]))
+    service = clusters.probe_postgres(_index([first, other]))
     assert "+1 more container" in (service.detail or "")
 
 
 def test_probe_postgres_is_not_applicable_without_a_local_container():
-    service = clusters.probe_postgres(_FakeClient([]))
+    service = clusters.probe_postgres(_index([]))
     assert service.applicable is False
     assert service.error is None
 
@@ -144,7 +229,7 @@ def test_probe_postgres_runs_pg_autoctl_and_parses_it():
     container = _FakeContainer(
         "PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc", exec_result=(0, PG_STATE.encode())
     )
-    service = clusters.probe_postgres(_FakeClient([container]))
+    service = clusters.probe_postgres(_index([container]))
     assert container.commands == [["pg_autoctl", "show", "state"]]
     assert service.leader == "pg18-lmzvd06-ccn-02"
 
@@ -153,7 +238,7 @@ def test_probe_postgres_reports_an_exec_failure_as_error():
     container = _FakeContainer(
         "PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc", exec_result=(1, b"connection refused")
     )
-    service = clusters.probe_postgres(_FakeClient([container]))
+    service = clusters.probe_postgres(_index([container]))
     assert service.applicable is True
     assert service.reachable is False
     assert "connection refused" in service.error
@@ -170,23 +255,32 @@ def test_probe_postgres_reports_docker_api_failure_as_error():
         def containers(self):
             return self._FailingColl()
 
-    service = clusters.probe_postgres(_FailingClient())
+    service = clusters.probe_postgres(clusters.ContainerIndex(_FailingClient()))
     assert service.applicable is True  # Docker check was attempted
     assert service.error is not None  # But it failed
     assert "permission denied" in service.error
 
 
-def test_collect_clusters_only_probes_the_requested_kinds():
-    assert clusters.collect_clusters(_FakeClient([]), kinds=[]) == []
-    result = clusters.collect_clusters(_FakeClient([]), kinds=["postgres"])
-    assert [s.kind for s in result] == ["postgres"]
+def test_probe_cluster_dispatches_on_the_kind():
+    service = clusters.probe_cluster(_index([]), "postgres", timeout=1.0)
+    assert service.kind == "postgres"
+    assert service.applicable is False
 
 
-def test_collect_clusters_reports_unknown_kinds_as_error():
-    result = clusters.collect_clusters(_FakeClient([]), kinds=["nosuchthing"])
-    assert len(result) == 1
-    assert result[0].kind == "nosuchthing"
-    assert result[0].error == "unknown kind"
+def test_probe_cluster_reports_an_unknown_kind_as_error():
+    service = clusters.probe_cluster(_index([]), "nosuchthing", timeout=1.0)
+    assert service.kind == "nosuchthing"
+    assert service.error == "unknown kind"
+
+
+def test_probe_cluster_never_raises():
+    class _Exploding:
+        def containers(self):
+            raise MemoryError("kaputt")
+
+    service = clusters.probe_cluster(_Exploding(), "postgres", timeout=1.0)
+    assert service.kind == "postgres"
+    assert "kaputt" in service.error
 
 
 MONGO_HELLO = (
@@ -235,7 +329,7 @@ def test_unrecognised_mongo_answer_claims_nothing_instead_of_a_broken_quorum():
 
 
 def test_probe_mongodb_is_not_applicable_without_a_local_container():
-    service = clusters.probe_mongodb(_FakeClient([]))
+    service = clusters.probe_mongodb(_index([]))
     assert service.applicable is False
     assert service.error is None
 
@@ -244,7 +338,7 @@ def test_probe_mongodb_runs_mongosh_unauthenticated():
     container = _FakeContainer(
         "mongodb_lmzvd06-internet-app-1.1.abc", exec_result=(0, MONGO_HELLO.encode())
     )
-    service = clusters.probe_mongodb(_FakeClient([container]))
+    service = clusters.probe_mongodb(_index([container]))
     command = container.commands[0]
     assert command[0] == "mongosh"
     assert "--quiet" in command
@@ -263,7 +357,7 @@ def test_probe_mongodb_reports_docker_api_failure_as_error():
         def containers(self):
             return self._FailingColl()
 
-    service = clusters.probe_mongodb(_FailingClient())
+    service = clusters.probe_mongodb(clusters.ContainerIndex(_FailingClient()))
     assert service.applicable is True  # Docker check was attempted
     assert service.error is not None  # But it failed
     assert "permission denied" in service.error
@@ -335,7 +429,7 @@ def test_probe_kafka_uses_the_absolute_tool_path_and_the_mounted_client_properti
     container = _FakeContainer(
         "kafka_kafka-lmzvd06-ccc-01.1.abc", exec_result=(0, KAFKA_QUORUM.encode())
     )
-    service = clusters.probe_kafka(_FakeClient([container]))
+    service = clusters.probe_kafka(_index([container]))
     command = container.commands[0]
     assert command[0] == "/opt/kafka/bin/kafka-metadata-quorum.sh"
     assert "/client.properties" in command
@@ -343,7 +437,7 @@ def test_probe_kafka_uses_the_absolute_tool_path_and_the_mounted_client_properti
 
 
 def test_probe_kafka_is_not_applicable_without_a_local_broker():
-    service = clusters.probe_kafka(_FakeClient([]))
+    service = clusters.probe_kafka(_index([]))
     assert service.applicable is False
     assert service.error is None
 
@@ -359,7 +453,7 @@ def test_probe_kafka_reports_docker_api_failure_as_error():
         def containers(self):
             return self._FailingColl()
 
-    service = clusters.probe_kafka(_FailingClient())
+    service = clusters.probe_kafka(clusters.ContainerIndex(_FailingClient()))
     assert service.applicable is True  # Docker check was attempted
     assert service.error is not None  # But it failed
     assert "permission denied" in service.error
@@ -559,6 +653,54 @@ def test_probe_glusterfs_calls_sudo_n_with_xml(monkeypatch):
     assert service.name == "shared"
 
 
+def test_probe_glusterfs_uses_the_timeout_it_was_given(monkeypatch):
+    """health.timeout.glusterfs must reach the child process, not be ignored in
+    favour of a module constant."""
+    seen = []
+
+    class _Completed:
+        returncode = 0
+        stderr = ""
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(command, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return _Completed(GLUSTER_PEERS if "peer" in command else GLUSTER_VOLUME)
+
+    monkeypatch.setattr(clusters.subprocess, "run", fake_run)
+    clusters.probe_glusterfs(timeout=3.0)
+    # Two calls share the probe's timeout, so the configured value bounds the
+    # probe rather than each half of it.
+    assert seen == [1.5, 1.5]
+
+
+def test_probe_cluster_hands_glusterfs_its_configured_timeout(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        clusters, "probe_glusterfs",
+        lambda timeout: seen.append(timeout) or ClusterService(kind="glusterfs"),
+    )
+    clusters.probe_cluster(_index([]), "glusterfs", timeout=0.7)
+    assert seen == [0.7]
+
+
+def test_probe_rustfs_splits_its_timeout_across_the_endpoints():
+    """Five endpoints behind a blackhole must cost the RustFS timeout once,
+    not once per endpoint."""
+    container = _FakeContainer(
+        "rustfs_rustfs.1.abc",
+        exec_result=(0, b"200"),
+        env=[
+            "RUSTFS_VOLUMES=https://a:9000/data https://b:9000/data https://c:9000/data"
+        ],
+    )
+    clusters.probe_rustfs(_index([container]), timeout=3.0)
+    for command in container.commands:
+        assert command[command.index("-m") + 1] == "1.0"
+
+
 def test_rustfs_endpoints_treats_a_plain_path_as_a_single_local_instance():
     container = _FakeContainer("rustfs_rustfs.1.abc", env=["RUSTFS_VOLUMES=/data"])
     endpoints, guessed = clusters.rustfs_endpoints(container)
@@ -588,13 +730,13 @@ def test_rustfs_endpoints_marks_a_missing_volume_variable_as_a_guess():
 
 def test_probe_rustfs_claims_no_quorum_from_a_guessed_endpoint_list():
     container = _FakeContainer("rustfs_rustfs.1.abc", exec_result=(0, b"200"), env=[])
-    service = clusters.probe_rustfs(_FakeClient([container]))
+    service = clusters.probe_rustfs(_index([container]))
     assert service.quorum_ok is None
     assert "endpoint list unknown" in (service.detail or "")
 
 
 def test_probe_rustfs_is_not_applicable_without_a_local_container():
-    service = clusters.probe_rustfs(_FakeClient([]))
+    service = clusters.probe_rustfs(_index([]))
     assert service.applicable is False
     assert service.error is None
 
@@ -603,7 +745,7 @@ def test_probe_rustfs_marks_a_200_endpoint_healthy():
     container = _FakeContainer(
         "rustfs_rustfs.1.abc", exec_result=(0, b"200"), env=["RUSTFS_VOLUMES=/data"]
     )
-    service = clusters.probe_rustfs(_FakeClient([container]))
+    service = clusters.probe_rustfs(_index([container]))
     assert service.kind == "rustfs"
     assert service.reachable is True
     assert service.leader is None
@@ -617,7 +759,7 @@ def test_probe_rustfs_marks_a_non_200_endpoint_unhealthy():
     container = _FakeContainer(
         "rustfs_rustfs.1.abc", exec_result=(0, b"403"), env=["RUSTFS_VOLUMES=/data"]
     )
-    service = clusters.probe_rustfs(_FakeClient([container]))
+    service = clusters.probe_rustfs(_index([container]))
     assert service.members[0].healthy is False
     assert service.reachable is False
     assert service.quorum_ok is False
@@ -634,7 +776,7 @@ def test_probe_rustfs_reports_docker_api_failure_as_error():
         def containers(self):
             return self._FailingColl()
 
-    service = clusters.probe_rustfs(_FailingClient())
+    service = clusters.probe_rustfs(clusters.ContainerIndex(_FailingClient()))
     assert service.applicable is True  # Docker check was attempted
     assert service.error is not None  # But it failed
     assert "permission denied" in service.error
@@ -647,7 +789,7 @@ def test_probe_rustfs_all_endpoints_failing_yields_not_reachable():
         exec_result=(1, b"Connection refused"),
         env=["RUSTFS_VOLUMES=/data"],
     )
-    service = clusters.probe_rustfs(_FakeClient([container]))
+    service = clusters.probe_rustfs(_index([container]))
     assert service.reachable is False
     assert service.quorum_ok is False
     assert service.detail == "0/1 live"
@@ -677,7 +819,7 @@ def test_probe_rustfs_majority_endpoints_healthy_yields_quorum():
             return (0, b"500")
 
     container = _MultiEndpointContainer()
-    service = clusters.probe_rustfs(_FakeClient([container]))
+    service = clusters.probe_rustfs(_index([container]))
     assert service.reachable is True
     assert service.quorum_ok is True
     assert service.detail == "2/3 live"
@@ -709,7 +851,7 @@ class _SwarmClient(_FakeClient):
 def test_locate_member_returns_the_container_when_one_runs():
     target = _FakeContainer("PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc")
     container, verdict, _ = clusters.locate_member(
-        _FakeClient([target]), "postgres", clusters.POSTGRES_PATTERNS
+        _index([target]), "postgres", clusters.POSTGRES_PATTERNS
     )
     assert container is target
     assert verdict is None
@@ -721,7 +863,7 @@ def test_a_crash_looping_service_is_an_error_not_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname="lmzvd06-ccc-01")])
-    container, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    container, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert container is None
     assert verdict.applicable is True
     assert "no running container" in verdict.error
@@ -731,7 +873,7 @@ def test_a_service_pinned_to_another_hostname_is_still_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname="lmzvd06-ccn-01")])
-    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 
@@ -740,7 +882,7 @@ def test_no_matching_service_at_all_is_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("something_else", replicas=1,
                                                        hostname="lmzvd06-ccc-01")])
-    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
 
 
@@ -748,7 +890,7 @@ def test_a_global_mode_service_is_wanted_on_every_node():
     """Global mode has no placement constraint to check — Swarm runs it everywhere."""
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", global_mode=True)])
-    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
@@ -758,7 +900,7 @@ def test_a_replicated_service_with_zero_replicas_is_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=0,
                                                        hostname="lmzvd06-ccc-01")])
-    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
 
 
@@ -770,7 +912,7 @@ def test_an_unpinned_replicated_service_is_not_applicable():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname=None)])
-    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 
@@ -782,7 +924,7 @@ def test_a_placement_constraint_without_spaces_is_still_recognised():
     }
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[service])
-    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
@@ -793,7 +935,7 @@ def test_a_swarm_query_failure_degrades_to_not_applicable():
             raise RuntimeError("swarm unreachable")
 
     client = _Broken(containers=[], node_id="node-1", services=[])
-    _, verdict, _ = clusters.locate_member(client, "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 
@@ -802,7 +944,7 @@ def test_probe_rustfs_reports_a_crash_loop_as_an_error():
     client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname="lmzvd06-ccc-01")])
-    service = clusters.probe_rustfs(client)
+    service = clusters.probe_rustfs(clusters.ContainerIndex(client))
     assert service.kind == "rustfs"
     assert "no running container" in service.error
 
@@ -828,7 +970,7 @@ def test_probe_rustfs_minority_endpoints_healthy_loses_quorum():
             return (0, b"500")
 
     container = _MultiEndpointContainer()
-    service = clusters.probe_rustfs(_FakeClient([container]))
+    service = clusters.probe_rustfs(_index([container]))
     assert service.reachable is True
     assert service.quorum_ok is False
     assert service.detail == "1/3 live"

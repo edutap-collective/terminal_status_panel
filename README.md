@@ -138,8 +138,8 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `thresholds.swap.warning` | `1` | Swap usage % above which SWAP turns yellow. |
 | `thresholds.filesystem.warning` / `.critical` | `80` / `90` | Filesystem usage % thresholds. |
 | `thresholds.load.warning` / `.critical` | `0.8` / `1.0` | Load-average thresholds as a **per-CPU multiplier** (compared against `load1 / cpu_count`). |
-| `health.budget` | `5.0` | Total wall-clock budget in seconds for all health checks. All checks run concurrently, so this bounds the login delay — it is not the sum of the individual timeouts. |
-| `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Individual timeouts, all below the budget. Kafka is the expensive one (~2.6 s of JVM startup). |
+| `health.budget` | `5.0` | Total wall-clock budget in seconds for all health checks. Every check runs concurrently as its own task, so this bounds the login delay — it is not the sum of the individual timeouts. |
+| `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
 | `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
 
@@ -214,6 +214,14 @@ WireGuard peer reachability is read from `sudo -n wg show all dump`
 TCP probe of the Swarm port (2377) per peer, and the PEERS sub-header shows
 which method was used (`wg`, `tcp`, or `mixed` when peers disagree).
 
+The five kinds share **one** listing of the local containers, fetched once per
+run without inspecting each container. Asking per probe cost roughly
+`kinds × (1 + containers)` Docker round trips at every login — around 205 on a
+host with 40 containers — and the per-container inspect could raise a `404`
+for a container that stopped mid-listing, which the panel would have shown as
+a failed check. Only RustFS needs a container's full attributes (for
+`RUSTFS_VOLUMES`), and it inspects only the one container it matched.
+
 Measured on production nodes on 2026-07-31: on `lmzvd06-ccc-01` (5-node
 Swarm), the whole section took 3.6–4.0 s end to end, within the 5 s default
 budget, with individual probe costs of PostgreSQL `pg_autoctl show state`
@@ -222,6 +230,40 @@ optimisable), GlusterFS `gluster … --xml` 0.10 s, and RustFS `/health`
 ~0.2 s. The `lrz_cc` cluster that node belongs to runs no MongoDB, so that
 figure — `db.hello()` 0.95 s — was measured separately, on
 `lmzvd06-internet-app-1`.
+
+### How the timeouts are enforced
+
+Every check is its own task: each enabled cluster kind, the peer check and
+the DNS check. They all start together and are waited for concurrently, each
+until the earlier of its own `health.timeout.<name>` and the shared
+`health.budget`. A check that misses its deadline is reported as
+`… <name>: time budget exceeded` **for that check alone** — the kinds beside
+it keep their results, so a hung RustFS can no longer hide a PostgreSQL
+quorum loss that was measured two seconds earlier.
+
+The deadline is what the panel *waits* for; whether the check itself stops
+work at that moment depends on what it runs:
+
+- **GlusterFS** and **RustFS** pass their value down to the child process
+  they spawn (`subprocess` timeout, `curl -m`), so the work really stops.
+  RustFS shares its value across its endpoints, so five endpoints behind a
+  blackhole cost the RustFS timeout once, not five times.
+- **PostgreSQL, MongoDB and Kafka** run through `docker exec`, and docker-py
+  bounds an exec by the *client's socket timeout* rather than per call. Their
+  timeout is therefore enforced as the task deadline: the panel stops waiting
+  and reports the check as out of budget, while the exec itself finishes in a
+  daemon thread whose result is discarded. So that the socket timeout never
+  expires *first* — which is what made the default `docker.timeout = 1.5`
+  unable to accommodate the ~2.6 s Kafka probe at all — the health section's
+  Docker client is built with a socket timeout no smaller than the largest
+  enabled `health.timeout.*`. `docker.timeout` continues to bound the DOCKER
+  INFOS section exactly as before.
+
+The own-hostname lookup the DNS check needs (`socket.getfqdn()`, a forward
+plus a reverse lookup through NSS) happens inside the DNS task for the same
+reason: with a broken resolver it blocks for tens of seconds, and that is the
+very fault this section reports on. Nothing in the section resolves a name,
+opens a socket or talks to Docker before the budget starts.
 
 ### Icon vocabulary
 

@@ -10,6 +10,10 @@ DOCKER INFOS section.
 
 A node that runs no member of a service is *not applicable*, not broken: no
 MongoDB on lrz_cc and no Kafka on vzd-app are the normal case.
+
+The probes run concurrently, one budget task each, and share a single
+``ContainerIndex`` so the Docker daemon is asked for its container list once
+per run rather than once per probe.
 """
 
 from __future__ import annotations
@@ -17,6 +21,9 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
+from collections.abc import Callable
+from typing import Any
 from xml.etree import ElementTree
 
 from ..model import ClusterMember, ClusterService
@@ -29,19 +36,103 @@ POSTGRES_PATTERNS = ("_pg-",)
 _PG_NAME_PREFIX = re.compile(r"^pg\d*-")
 
 
-def find_containers(client, patterns: tuple[str, ...]) -> list:
+class ContainerIndex:
+    """One shared, lazily fetched view of the local Docker state.
+
+    docker-py's ``ContainerCollection.list()`` defaults to ``sparse=False`` and
+    then issues one ``GET /containers/{id}/json`` per running container. Asking
+    once per probe cost roughly ``kinds × (1 + containers)`` round trips at every
+    login — about 205 on a host with 40 containers and five kinds enabled. This
+    fetches the list once, sparsely, and hands the same list to every probe;
+    only a probe that needs the full attributes (RustFS, for ``Config.Env``)
+    pays for an inspect, and only for the one container it matched.
+
+    ``sparse=True`` also removes a false verdict: with the inspecting variant, a
+    container that disappears between the listing and its inspect makes
+    ``list()`` raise ``NotFound``, which ``locate_member`` would have rendered
+    as "✗ PostgreSQL: 404 Client Error" — a red claim produced by a race.
+
+    Thread-safe because the probes run concurrently: the first probe to need a
+    piece of state pays for it under that state's lock and the others reuse the
+    answer instead of starting four more requests. The instance is created
+    inside ``collect_health``, so the fetch happens inside the time budget and
+    never on the login path's main thread.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self._cache: dict[str, tuple[Any, Exception | None]] = {}
+        self._locks: dict[str, threading.Lock] = {
+            key: threading.Lock() for key in ("containers", "services", "info")
+        }
+
+    def _cached(self, key: str, fetch: Callable[[], Any]) -> Any:
+        with self._locks[key]:
+            if key not in self._cache:
+                try:
+                    self._cache[key] = (fetch(), None)
+                except Exception as exc:  # remembered, so every probe sees it
+                    self._cache[key] = (None, exc)
+            value, error = self._cache[key]
+        if error is not None:
+            raise error
+        return value
+
+    def containers(self) -> list:
+        """Every running container, without a per-container inspect."""
+        return self._cached(
+            "containers",
+            # ignore_removed has no effect while sparse is True (there is no
+            # inspect to race with); it is passed so the guarantee survives if
+            # sparse ever has to be turned off.
+            lambda: self._client.containers.list(sparse=True, ignore_removed=True),
+        )
+
+    def services(self) -> list:
+        """The Swarm service list, fetched at most once per run."""
+        return self._cached("services", lambda: self._client.services.list())
+
+    def info(self) -> dict:
+        """``docker info``, fetched at most once per run."""
+        return self._cached("info", lambda: self._client.info() or {})
+
+
+def container_names(container) -> list[str]:
+    """Every name *container* is known by.
+
+    A sparse list entry carries the list response's ``Names`` array, and
+    docker-py's ``Container.name`` (which reads ``Name``) is then ``None`` — so
+    both spellings have to be looked at.
+    """
+    names = []
+    own_name = getattr(container, "name", None)
+    if own_name:
+        names.append(str(own_name).lstrip("/"))
+    attributes = getattr(container, "attrs", None) or {}
+    for raw in attributes.get("Names") or []:
+        names.append(str(raw).lstrip("/"))
+    return names
+
+
+def container_name(container) -> str:
+    """The container's primary name, or an empty string when it has none."""
+    names = container_names(container)
+    return names[0] if names else ""
+
+
+def find_containers(index: ContainerIndex, patterns: tuple[str, ...]) -> list:
     """Every locally running container whose name contains one of *patterns*."""
     matches = []
-    for container in client.containers.list():
-        name = (getattr(container, "name", "") or "").lower()
-        if any(pattern.lower() in name for pattern in patterns):
+    for container in index.containers():
+        names = [name.lower() for name in container_names(container)]
+        if any(pattern.lower() in name for pattern in patterns for name in names):
             matches.append(container)
     return matches
 
 
-def find_container(client, patterns: tuple[str, ...]):
+def find_container(index: ContainerIndex, patterns: tuple[str, ...]):
     """First locally running container whose name contains one of *patterns*."""
-    matches = find_containers(client, patterns)
+    matches = find_containers(index, patterns)
     return matches[0] if matches else None
 
 
@@ -87,11 +178,15 @@ def _pinned_to_hostname(service, hostname: str) -> bool:
     return False
 
 
-def _wanted_on_this_node(client, patterns: tuple[str, ...]) -> bool:
+def _wanted_on_this_node(index: ContainerIndex, patterns: tuple[str, ...]) -> bool:
     """True when Swarm's service *spec* wants this service running on this node.
 
-    Called only when no local container was found, so its cost is paid on the
-    cheap path. This reads ``Spec.Mode``/``Spec.TaskTemplate.Placement`` rather
+    Called only when no local container was found — which on a typical app
+    server is the *common* case for all five kinds, not a rare one, so the
+    ``docker info`` and service-list answers it needs are fetched once per run
+    by the shared index rather than once per probe.
+
+    This reads ``Spec.Mode``/``Spec.TaskTemplate.Placement`` rather
     than the live task list: during a crash loop, the failed task has already
     flipped to ``desired: shutdown`` and its replacement may not exist yet, so
     a task-list snapshot is a coin flip exactly when it matters. The spec is
@@ -103,10 +198,10 @@ def _wanted_on_this_node(client, patterns: tuple[str, ...]) -> bool:
     service is therefore not flagged by this check (DOCKER INFOS, which reads
     the Swarm service list directly, still shows it correctly).
     """
-    hostname = (client.info() or {}).get("Name")
+    hostname = (index.info() or {}).get("Name")
     if not hostname:
         return False
-    for service in client.services.list():
+    for service in index.services():
         name = (getattr(service, "name", "") or "").lower()
         if not any(pattern.lower() in name for pattern in patterns):
             continue
@@ -119,7 +214,7 @@ def _wanted_on_this_node(client, patterns: tuple[str, ...]) -> bool:
     return False
 
 
-def locate_member(client, kind: str, patterns: tuple[str, ...]):
+def locate_member(index: ContainerIndex, kind: str, patterns: tuple[str, ...]):
     """Find the local container for *kind*.
 
     Returns ``(container, None, extras)`` when one is running, otherwise
@@ -130,13 +225,13 @@ def locate_member(client, kind: str, patterns: tuple[str, ...]):
     will not look at, so the caller can make that narrowing visible.
     """
     try:
-        matches = find_containers(client, patterns)
+        matches = find_containers(index, patterns)
     except Exception as exc:
         return None, ClusterService(kind=kind, error=str(exc)), 0
     if matches:
         return matches[0], None, len(matches) - 1
     try:
-        wanted = _wanted_on_this_node(client, patterns)
+        wanted = _wanted_on_this_node(index, patterns)
     except Exception:
         wanted = False  # cannot ask Swarm: fall back to the weaker claim
     if wanted:
@@ -200,9 +295,9 @@ def parse_pg_state(output: str) -> ClusterService:
     )
 
 
-def probe_postgres(client) -> ClusterService:
+def probe_postgres(index: ContainerIndex) -> ClusterService:
     """``pg_autoctl show state`` — works from any data node, not only the monitor."""
-    container, verdict, extras = locate_member(client, "postgres", POSTGRES_PATTERNS)
+    container, verdict, extras = locate_member(index, "postgres", POSTGRES_PATTERNS)
     if verdict is not None:
         return verdict
     try:
@@ -210,7 +305,7 @@ def probe_postgres(client) -> ClusterService:
     except Exception as exc:
         return ClusterService(kind="postgres", error=str(exc))
     service = parse_pg_state(output)
-    stack = (getattr(container, "name", "") or "").split("_", 1)[0]
+    stack = container_name(container).split("_", 1)[0]
     service.name = stack or None
     _note_extra_containers(service, extras)
     return service
@@ -269,9 +364,9 @@ def parse_mongo_hello(output: str) -> ClusterService:
     )
 
 
-def probe_mongodb(client) -> ClusterService:
+def probe_mongodb(index: ContainerIndex) -> ClusterService:
     """``db.hello()`` through mongosh — no credentials required."""
-    container, verdict, extras = locate_member(client, "mongodb", MONGODB_PATTERNS)
+    container, verdict, extras = locate_member(index, "mongodb", MONGODB_PATTERNS)
     if verdict is not None:
         return verdict
     try:
@@ -365,9 +460,9 @@ def parse_kafka_quorum(output: str) -> ClusterService:
     )
 
 
-def probe_kafka(client) -> ClusterService:
+def probe_kafka(index: ContainerIndex) -> ClusterService:
     """KRaft controller quorum. Costs ~2.6 s — JVM startup, not optimisable."""
-    container, verdict, extras = locate_member(client, "kafka", KAFKA_PATTERNS)
+    container, verdict, extras = locate_member(index, "kafka", KAFKA_PATTERNS)
     if verdict is not None:
         return verdict
     try:
@@ -378,6 +473,8 @@ def probe_kafka(client) -> ClusterService:
     return service
 
 
+# Fallback for a caller that names no timeout; the configured value
+# (health.timeout.glusterfs) is what production actually uses.
 GLUSTER_TIMEOUT = 1.0
 
 
@@ -385,7 +482,7 @@ class _GlusterUnavailable(Exception):
     """The tool or the privilege is absent — not applicable, not an error."""
 
 
-def _gluster(arguments: list[str]) -> str:
+def _gluster(arguments: list[str], timeout: float) -> str:
     """Run ``sudo -n gluster ... --xml`` and return stdout.
 
     Raises ``_GlusterUnavailable`` when there is no sudo/gluster on this host,
@@ -398,7 +495,7 @@ def _gluster(arguments: list[str]) -> str:
             ["sudo", "-n", "gluster", *arguments, "--xml"],
             capture_output=True,
             text=True,
-            timeout=GLUSTER_TIMEOUT,
+            timeout=timeout,
         )
     except FileNotFoundError as exc:
         # No sudo (or no gluster reachable via it) on this host.
@@ -483,11 +580,17 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
     )
 
 
-def probe_glusterfs() -> ClusterService:
-    """GlusterFS runs on the host, so this uses sudo -n rather than the Docker API."""
+def probe_glusterfs(timeout: float = GLUSTER_TIMEOUT) -> ClusterService:
+    """GlusterFS runs on the host, so this uses sudo -n rather than the Docker API.
+
+    *timeout* is the budget for the whole probe and is split between the two
+    calls it makes, so the configured ``health.timeout.glusterfs`` bounds the
+    probe rather than one of its halves.
+    """
+    per_call = max(0.1, timeout / 2)
     try:
-        peer_xml = _gluster(["peer", "status"])
-        volume_xml = _gluster(["volume", "status"])
+        peer_xml = _gluster(["peer", "status"], timeout=per_call)
+        volume_xml = _gluster(["volume", "status"], timeout=per_call)
     except _GlusterUnavailable:
         # No sudo, no gluster installed, no passwordless rule: not applicable.
         return ClusterService(kind="glusterfs", applicable=False)
@@ -537,12 +640,40 @@ def rustfs_endpoints(container) -> tuple[list[str], bool]:
     return endpoints or [RUSTFS_FALLBACK_ENDPOINT], False
 
 
-def probe_rustfs(client) -> ClusterService:
-    """GET /health per endpoint — the only unauthenticated status RustFS offers."""
-    container, verdict, extras = locate_member(client, "rustfs", RUSTFS_PATTERNS)
+def _load_full_attributes(container) -> None:
+    """Inspect *container* if the shared listing did not carry its attributes.
+
+    The listing is sparse (see ``ContainerIndex``), so ``Config.Env`` is absent.
+    RustFS is the only probe that needs it, and it needs it for exactly one
+    container — so this is the one inspect call the run pays for. A failure is
+    swallowed: the endpoint list then reads as guessed, which is the honest
+    outcome for "we could not read RUSTFS_VOLUMES".
+    """
+    attributes = getattr(container, "attrs", None) or {}
+    if "Config" in attributes:
+        return
+    reload_attributes = getattr(container, "reload", None)
+    if reload_attributes is None:
+        return
+    try:
+        reload_attributes()
+    except Exception:
+        pass
+
+
+def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
+    """GET /health per endpoint — the only unauthenticated status RustFS offers.
+
+    The endpoints are probed one ``docker exec`` at a time, so *timeout* is
+    shared out between them: five endpoints behind a blackhole must cost the
+    configured budget for RustFS, not five times a per-endpoint constant.
+    """
+    container, verdict, extras = locate_member(index, "rustfs", RUSTFS_PATTERNS)
     if verdict is not None:
         return verdict
+    _load_full_attributes(container)
     endpoints, guessed = rustfs_endpoints(container)
+    per_endpoint = max(0.5, timeout / max(1, len(endpoints)))
     members: list[ClusterMember] = []
     for endpoint in endpoints:
         try:
@@ -551,7 +682,7 @@ def probe_rustfs(client) -> ClusterService:
             status = exec_text(
                 container,
                 [
-                    "curl", "-ks", "-o", "/dev/null", "-m", "2",
+                    "curl", "-ks", "-o", "/dev/null", "-m", f"{per_endpoint:.1f}",
                     "-w", "%{http_code}", f"{endpoint}/health",
                 ],
             ).strip()
@@ -584,25 +715,35 @@ def probe_rustfs(client) -> ClusterService:
     return service
 
 
-_PROBES = {
-    "postgres": probe_postgres,
-    "mongodb": probe_mongodb,
-    "kafka": probe_kafka,
-    "glusterfs": lambda _client: probe_glusterfs(),
+_PROBES: dict[str, Callable[[ContainerIndex, float], ClusterService]] = {
+    # The three docker-exec probes cannot enforce a timeout themselves:
+    # docker-py bounds an exec by the client's socket timeout, not per call.
+    # Their configured timeout is enforced by the budget thread that runs them
+    # (``budget.run_with_budget``), and the health client's socket timeout is
+    # built so that it never expires first (``cli._health_socket_timeout``).
+    "postgres": lambda index, _timeout: probe_postgres(index),
+    "mongodb": lambda index, _timeout: probe_mongodb(index),
+    "kafka": lambda index, _timeout: probe_kafka(index),
+    # These two spawn their own child process / curl and enforce it directly.
+    "glusterfs": lambda _index, timeout: probe_glusterfs(timeout),
     "rustfs": probe_rustfs,
 }
 
+DEFAULT_KIND_TIMEOUT = 2.0
 
-def collect_clusters(client, kinds: list[str]) -> list[ClusterService]:
-    """Probe each requested kind. Never raises."""
-    services: list[ClusterService] = []
-    for kind in kinds:
-        probe = _PROBES.get(kind)
-        if probe is None:
-            services.append(ClusterService(kind=kind, error="unknown kind"))
-            continue
-        try:
-            services.append(probe(client))
-        except Exception as exc:
-            services.append(ClusterService(kind=kind, error=f"{type(exc).__name__}: {exc}"))
-    return services
+
+def probe_cluster(
+    index: ContainerIndex, kind: str, timeout: float = DEFAULT_KIND_TIMEOUT
+) -> ClusterService:
+    """Probe one kind under its own *timeout*. Never raises.
+
+    One kind per call because each kind is registered as its own budget task:
+    a hung RustFS must not take a finished PostgreSQL result down with it.
+    """
+    probe = _PROBES.get(kind)
+    if probe is None:
+        return ClusterService(kind=kind, error="unknown kind")
+    try:
+        return probe(index, timeout)
+    except Exception as exc:
+        return ClusterService(kind=kind, error=f"{type(exc).__name__}: {exc}")
