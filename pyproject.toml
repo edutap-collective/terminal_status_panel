@@ -27,6 +27,7 @@ dependencies = [
     "docker",
     "psutil",
     "distro",
+    "dnspython",  # query resolvers directly: getaddrinfo would hide /etc/hosts divergence
 ]
 
 [project.optional-dependencies]
