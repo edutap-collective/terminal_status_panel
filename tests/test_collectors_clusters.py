@@ -686,9 +686,11 @@ def test_probe_cluster_hands_glusterfs_its_configured_timeout(monkeypatch):
     assert seen == [0.7]
 
 
+def _curl_timeouts(container) -> list[float]:
+    return [float(cmd[cmd.index("-m") + 1]) for cmd in container.commands]
+
+
 def test_probe_rustfs_splits_its_timeout_across_the_endpoints():
-    """Five endpoints behind a blackhole must cost the RustFS timeout once,
-    not once per endpoint."""
     container = _FakeContainer(
         "rustfs_rustfs.1.abc",
         exec_result=(0, b"200"),
@@ -697,8 +699,21 @@ def test_probe_rustfs_splits_its_timeout_across_the_endpoints():
         ],
     )
     clusters.probe_rustfs(_index([container]), timeout=3.0)
-    for command in container.commands:
-        assert command[command.index("-m") + 1] == "1.0"
+    assert _curl_timeouts(container) == [1.0, 1.0, 1.0]
+
+
+def test_probe_rustfs_stays_inside_its_timeout_on_a_five_node_cluster():
+    """The production shape, and the one a per-endpoint floor used to inflate:
+    5 × 0.5 s of curl against a 2.0 s deadline lost the whole result even when
+    four endpoints had answered."""
+    volumes = " ".join(f"https://rustfs-{n}:9000/data" for n in range(5))
+    container = _FakeContainer(
+        "rustfs_rustfs.1.abc", exec_result=(0, b"200"), env=[f"RUSTFS_VOLUMES={volumes}"]
+    )
+    clusters.probe_rustfs(_index([container]), timeout=2.0)
+    timeouts = _curl_timeouts(container)
+    assert len(timeouts) == 5
+    assert sum(timeouts) <= 2.0
 
 
 def test_rustfs_endpoints_treats_a_plain_path_as_a_single_local_instance():

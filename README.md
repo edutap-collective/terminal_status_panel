@@ -223,7 +223,7 @@ a failed check. Only RustFS needs a container's full attributes (for
 `RUSTFS_VOLUMES`), and it inspects only the one container it matched.
 
 Measured on production nodes on 2026-07-31: on `lmzvd06-ccc-01` (5-node
-Swarm), the whole section took 3.6–4.0 s end to end, within the 5 s default
+Swarm), the whole section takes **3.25 s** end to end, within the 5 s default
 budget, with individual probe costs of PostgreSQL `pg_autoctl show state`
 0.13 s, Kafka `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not
 optimisable), GlusterFS `gluster … --xml` 0.10 s, and RustFS `/health`
@@ -246,8 +246,10 @@ work at that moment depends on what it runs:
 
 - **GlusterFS** and **RustFS** pass their value down to the child process
   they spawn (`subprocess` timeout, `curl -m`), so the work really stops.
-  RustFS shares its value across its endpoints, so five endpoints behind a
-  blackhole cost the RustFS timeout once, not five times.
+  RustFS divides its value between its endpoints, so five endpoints behind a
+  blackhole cost the RustFS timeout once, not five times. (Below ~0.1 s per
+  endpoint — more than 20 endpoints at the default — the share stops shrinking
+  and the task deadline takes over instead.)
 - **PostgreSQL, MongoDB and Kafka** run through `docker exec`, and docker-py
   bounds an exec by the *client's socket timeout* rather than per call. Their
   timeout is therefore enforced as the task deadline: the panel stops waiting

@@ -661,19 +661,26 @@ def _load_full_attributes(container) -> None:
         pass
 
 
+# Below this, curl has no room to connect at all, so a share smaller than this
+# is not worth issuing. Reached only above ~20 endpoints at the default 2.0 s
+# timeout; past that point the probe can overrun and its budget task deadline
+# takes over, which is the honest bound rather than a silently ignored one.
+MIN_ENDPOINT_TIMEOUT = 0.1
+
+
 def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
     """GET /health per endpoint — the only unauthenticated status RustFS offers.
 
     The endpoints are probed one ``docker exec`` at a time, so *timeout* is
-    shared out between them: five endpoints behind a blackhole must cost the
-    configured budget for RustFS, not five times a per-endpoint constant.
+    divided between them: five endpoints behind a blackhole must cost the
+    configured budget for RustFS once, not five times a per-endpoint constant.
     """
     container, verdict, extras = locate_member(index, "rustfs", RUSTFS_PATTERNS)
     if verdict is not None:
         return verdict
     _load_full_attributes(container)
     endpoints, guessed = rustfs_endpoints(container)
-    per_endpoint = max(0.5, timeout / max(1, len(endpoints)))
+    per_endpoint = max(MIN_ENDPOINT_TIMEOUT, timeout / max(1, len(endpoints)))
     members: list[ClusterMember] = []
     for endpoint in endpoints:
         try:
