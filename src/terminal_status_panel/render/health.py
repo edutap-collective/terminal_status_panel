@@ -1,0 +1,141 @@
+"""Render the CLUSTER HEALTH section.
+
+Icon vocabulary, extending the panel's existing scheme:
+
+  ✅ measured healthy      ⚠️ warning        💀 measured broken
+  ·  not observable        … out of budget   n/a not applicable
+  ✗  check failed
+
+The neutral dot matters: MongoDB reports its set members but not their state,
+and a panel that renders an unmeasured ✅ is worse than one that says nothing.
+"""
+
+from __future__ import annotations
+
+from rich.console import Group, RenderableType
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+from ..config import Config
+from ..model import ClusterService, HealthInfo
+from .panels import section
+
+OK = "✅"
+WARN = "⚠️"
+DEAD = "💀"
+UNKNOWN = "·"
+TRUNCATED = "…"
+FAILED = "✗"
+
+_KIND_TITLES = {
+    "postgres": "PostgreSQL",
+    "mongodb": "MongoDB",
+    "kafka": "Kafka (KRaft)",
+    "glusterfs": "GlusterFS",
+    "rustfs": "RustFS",
+}
+
+
+def _tri_state(value: bool | None) -> str:
+    if value is None:
+        return UNKNOWN
+    return OK if value else DEAD
+
+
+def _service_lines(service: ClusterService) -> Text:
+    title = _KIND_TITLES.get(service.kind, service.kind)
+    if service.name:
+        title = f"{title} {service.name}"
+
+    if not service.applicable:
+        return Text(f"{title}: n/a here", style="dim")
+    if service.error:
+        return Text(f"{FAILED} {title}: {service.error}", style="red")
+
+    text = Text()
+    header_icon = _tri_state(service.quorum_ok)
+    header = f"{header_icon} {title}"
+    if service.detail:
+        header += f" — {service.detail}"
+    text.append(header + "\n", style="bold")
+    if service.leader:
+        text.append(f"   leader   {service.leader}\n")
+    for member in service.members:
+        icon = _tri_state(member.healthy)
+        label = member.node or member.name
+        line = f"   {icon} {label}"
+        if member.role:
+            line += f"  {member.role}"
+        if member.warning:
+            line += f"  {WARN} {member.warning}"
+        text.append(line + "\n")
+    return text
+
+
+def _clusters_panel(health: HealthInfo) -> Panel:
+    if "clusters" in health.truncated:
+        body: RenderableType = Text(f"{TRUNCATED} time budget exceeded", style="dim")
+    elif not health.clusters_probed:
+        # Never ran: no Docker client, or every kind disabled. Rendering this as
+        # "nothing found" would report a gap in coverage as a clean bill of health.
+        body = Text(f"{UNKNOWN} not checked (no Docker client)", style="dim")
+    elif not health.clusters:
+        body = Text("no clustered services found", style="dim")
+    else:
+        body = Group(*[_service_lines(service) for service in health.clusters])
+    return Panel(body, title="CLUSTERS", border_style="blue")
+
+
+def _peers_panel(health: HealthInfo) -> Panel:
+    if "peers" in health.truncated:
+        body: RenderableType = Text(f"{TRUNCATED} time budget exceeded", style="dim")
+    elif not health.peers:
+        body = Text("no peers detected", style="dim")
+    else:
+        table = Table.grid(padding=(0, 2))
+        table.add_column()
+        table.add_column()
+        for peer in health.peers:
+            table.add_row(
+                Text(f"{OK if peer.ok else WARN} {peer.name}"),
+                Text(peer.detail or "", style="dim"),
+            )
+        body = table
+    # NOTE: the method label reflects only the first peer. If health.peers mixes
+    # wireguard and tcp entries, or is empty, this title can mislabel or omit a
+    # method — see the concern raised in the task-12 report.
+    method = health.peers[0].method if health.peers else "wireguard"
+    label = "wg" if method == "wireguard" else "tcp"
+    return Panel(body, title=f"PEERS ({label})", border_style="blue")
+
+
+def _dns_panel(health: HealthInfo) -> Panel:
+    if "dns" in health.truncated:
+        body: RenderableType = Text(f"{TRUNCATED} time budget exceeded", style="dim")
+    elif not health.dns:
+        body = Text("no DNS checks", style="dim")
+    else:
+        table = Table.grid(padding=(0, 2))
+        table.add_column()
+        table.add_column()
+        for check in health.dns:
+            icon = WARN if check.ok is None else (OK if check.ok else DEAD)
+            table.add_row(Text(f"{icon} {check.label}"), Text(check.detail, style="dim"))
+        body = table
+    return Panel(body, title="DNS", border_style="blue")
+
+
+def _bottom_row(health: HealthInfo) -> Table:
+    grid = Table.grid(expand=True, padding=(0, 1))
+    grid.add_column(ratio=1)
+    grid.add_column(ratio=1)
+    grid.add_row(_peers_panel(health), _dns_panel(health))
+    return grid
+
+
+def health_section(health: HealthInfo | None, cfg: Config) -> RenderableType:
+    """The CLUSTER HEALTH block: infrastructure services, peer reachability, DNS."""
+    data = health or HealthInfo()
+    body = Group(_clusters_panel(data), _bottom_row(data))
+    return section("CLUSTER HEALTH", body)
