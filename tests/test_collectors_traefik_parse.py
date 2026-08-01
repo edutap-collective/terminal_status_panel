@@ -354,3 +354,28 @@ def test_the_provider_suffix_is_stripped():
 
 def test_a_payload_without_routers_yields_nothing():
     assert parse.parse_api_rawdata({}) == set()
+
+
+def test_a_router_without_a_status_is_not_reported_as_rejected():
+    """"Traefik reported no status" is not observable. Only a status the
+    parser could read, and that is not `enabled`, may become a rejection —
+    otherwise the tree would show a measured-failure marker for a router
+    nothing was ever measured about."""
+    accepted = parse.parse_api_rawdata({"routers": {"quiet@swarm": {}}})
+    assert "quiet" in accepted
+
+
+def test_a_router_whose_spec_is_not_a_mapping_is_not_reported_as_rejected():
+    """The other half of the same asymmetry: this shape already counted as
+    accepted, the dict-without-status one as rejected. Both are unreadable."""
+    accepted = parse.parse_api_rawdata({"routers": {"odd@swarm": ["nonsense"]}})
+    assert "odd" in accepted
+
+
+def test_a_router_positively_reported_as_disabled_is_still_rejected():
+    assert "broken" not in parse.parse_api_rawdata(RAWDATA)
+
+
+def test_a_payload_of_the_wrong_shape_yields_nothing_rather_than_raising():
+    assert parse.parse_api_rawdata({"routers": ["kafbat-ui@swarm"]}) == set()
+    assert parse.parse_api_rawdata(None) == set()

@@ -68,6 +68,12 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
     head = Text(f"  └─ {router.name}", style=style)
     if router.rule:
         head.append(f"        {router.rule}", style="dim")
+    if info.api_consulted and router.rejected:
+        # Traefik was asked and said no: a measured failure, not a suspicion.
+        # The accepted case stays silent — the tree already reads as
+        # configured-and-accepted — and an unconsulted router (`rejected is
+        # None`, or `api_consulted` False) implies nothing either way.
+        head.append(f"  {icons.DEAD} rejected by Traefik", style="red")
     parts: list[RenderableType] = [head]
     for name in router.middlewares:
         mw = info.middlewares.get(name)

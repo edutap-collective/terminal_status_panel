@@ -194,14 +194,25 @@ def parse_dynamic_yaml(
 
 
 def parse_api_rawdata(payload: dict) -> set[str]:
-    """Router names Traefik actually accepted, from /api/rawdata.
+    """Router names Traefik did not report as rejected, from /api/rawdata.
 
     Names carry a provider suffix there (kafbat-ui@swarm); the labels do not,
     so it is stripped for comparison.
+
+    A name is left out only when Traefik positively reported a status that is
+    not ``enabled`` — the one case where the caller may say the router was
+    rejected. A spec in a shape this parser cannot read (no ``status`` key, or
+    not a mapping at all) says nothing: "Traefik reported no status" is not
+    observable, and turning it into a rejection would put a measured-failure
+    marker on a router nothing was measured about. Both odd shapes therefore
+    stay in the set.
     """
+    routers = (payload or {}).get("routers") if isinstance(payload, dict) else None
+    if not isinstance(routers, dict):
+        return set()
     accepted: set[str] = set()
-    for name, spec in ((payload or {}).get("routers") or {}).items():
-        if isinstance(spec, dict) and spec.get("status") != "enabled":
+    for name, spec in routers.items():
+        if isinstance(spec, dict) and "status" in spec and spec["status"] != "enabled":
             continue
         accepted.add(str(name).split("@", 1)[0])
     return accepted

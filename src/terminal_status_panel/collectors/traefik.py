@@ -106,16 +106,20 @@ def _socket_timeout(client, timeout: float):
     off the login path.
     """
     api = getattr(client, "api", None)
-    previous = getattr(api, "timeout", _MISSING)
-    if previous is not _MISSING:
+    # Nothing to bound when the client carries no socket timeout of its own,
+    # which is also what keeps this working for a stand-in that is not a real
+    # docker-py client.
+    previous = getattr(api, "timeout", _MISSING) if api is not None else _MISSING
+    restore = previous is not _MISSING
+    if restore:
         try:
             api.timeout = timeout
         except Exception:
-            previous = _MISSING
+            restore = False
     try:
         yield
     finally:
-        if previous is not _MISSING:
+        if restore:
             try:
                 api.timeout = previous
             except Exception:
@@ -177,7 +181,13 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
 
 
 def mark_rejected(info: TraefikInfo, accepted: set[str]) -> None:
-    """Flag routers Traefik never accepted. Only call after really asking it."""
+    """Flag routers Traefik never accepted. Only call after really asking it.
+
+    ``accepted`` is what ``parse_api_rawdata`` returns: the routers Traefik
+    did *not* report as rejected, which includes the ones it reported in a
+    shape the parser could not read. Anything outside it is marked rejected,
+    so a name may only be left out on a status that was positively read.
+    """
     info.api_consulted = True
     for router in info.routers:
         router.rejected = router.name not in accepted

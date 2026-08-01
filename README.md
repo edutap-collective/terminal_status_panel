@@ -223,7 +223,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
 | `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see [Traefik wiring](#traefik-wiring) for why it cannot work on today's app servers. |
 | `traefik.cert` / `traefik.key` | *(unset)* | Client certificate/key for that endpoint (mTLS). Both `url` and `cert` must be set for the cross-check to run at all. |
-| `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate; falls back to the system trust store when unset. |
+| `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate. Unset, httpx falls back to **certifi's** bundle, *not* the system trust store — a corporate CA installed in `/etc/ssl/certs` is not picked up (only `SSL_CERT_FILE`/`SSL_CERT_DIR` in the environment override it). Set this explicitly for a privately signed endpoint. |
 
 ### Full example
 
@@ -535,9 +535,17 @@ unreachable or rejected connection is treated the same as "not configured"
 skipped, so no test will surface the mistake. Leave the section unset until
 the app servers have a certificate from the right CA.
 
-The collector records which routers Traefik accepted, but the tree does not
-yet surface this answer — so configuring `[traefik]` changes what is measured,
-not what is displayed.
+When the cross-check does run, the tree shows its answer: a router Traefik
+reported as *not* enabled is marked `💀 rejected by Traefik` on its own line
+— the configuration is there, Traefik declined it. The accepted case adds
+nothing: the tree already reads as configured-and-accepted, and a second
+checkmark on every line would only be noise.
+
+Nothing is marked unless Traefik was actually asked and actually answered
+about that router. With `[traefik]` unset, unreachable, or answering in a
+shape the parser cannot read (a router whose entry carries no `status` at
+all), no marker appears — "we did not ask" and "Traefik said no" must never
+look alike.
 
 ## Running it at login
 

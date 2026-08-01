@@ -252,6 +252,52 @@ def test_a_global_service_uses_the_reported_node_count_like_docker_infos():
     assert f"{icons.DEAD} 0/3" in out
 
 
+def test_a_router_traefik_rejected_carries_a_marker():
+    info = _wired()
+    info.api_consulted = True
+    info.routers[0].rejected = True
+    out = _render(info)
+    router_line = [ln for ln in out.splitlines() if "└─ kafbat-ui" in ln][0]
+    assert icons.DEAD in router_line
+    assert "rejected" in router_line
+
+
+def test_a_router_traefik_accepted_gets_no_second_checkmark():
+    """The tree already reads as configured-and-accepted; a marker for the
+    normal case would be noise on every line."""
+    info = _wired()
+    info.api_consulted = True
+    info.routers[0].rejected = False
+    assert _render(info) == _render(_wired())
+
+
+def test_an_unconsulted_router_renders_exactly_as_before():
+    """`rejected is None` means nobody asked Traefik — nothing may be implied
+    in either direction."""
+    info = _wired()
+    info.routers[0].rejected = None
+    assert _render(info) == _render(_wired())
+
+
+def test_a_stale_rejected_flag_without_a_consultation_implies_nothing():
+    info = _wired()
+    info.api_consulted = False
+    info.routers[0].rejected = True
+    assert _render(info) == _render(_wired())
+
+
+def test_a_rejected_router_is_not_reported_when_traefik_gave_no_status():
+    """End to end over the two halves of item 7: an unreadable spec must not
+    reach the tree as a measured failure."""
+    from terminal_status_panel.collectors.traefik import mark_rejected
+    from terminal_status_panel.collectors.traefik_parse import parse_api_rawdata
+
+    info = _wired()
+    mark_rejected(info, parse_api_rawdata({"routers": {"kafbat-ui@swarm": {}}}))
+    assert info.routers[0].rejected is False
+    assert "rejected" not in _render(info)
+
+
 def test_file_provider_error_is_shown_as_a_warning_above_the_tree():
     info = _wired()
     info.file_provider_error = "ConnectionError: configs.list() failed"
