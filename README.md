@@ -146,9 +146,11 @@ the system collectors, `status-server` never opens the Docker socket, and
 `status-health` never touches the system collectors either (though it does
 open the Docker socket, to `exec` into service containers) — so you can run
 just what a given host cares about. `status-traefik` also opens the Docker
-socket, to list Swarm services and configs, but runs no `exec` and reaches no
-network beyond Docker unless the optional `[traefik]` cross-check is
-configured (see [Traefik wiring](#traefik-wiring)). The combined command also
+socket, to list Swarm services and configs and to read the service states its
+tree renders verdicts from (the DOCKER INFOS block itself stays unrendered),
+but runs no `exec` and reaches no network beyond Docker unless the optional
+`[traefik]` cross-check is configured (see
+[Traefik wiring](#traefik-wiring)). The combined command also
 accepts `--sections` with any comma-separated subset to pick explicitly, e.g.
 `--sections server,docker,health,traefik` to render everything, including
 `traefik`, in one go.
