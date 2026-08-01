@@ -21,6 +21,18 @@ def _render(info, swarm=None, width=120):
     return capture.get()
 
 
+def _branch_heads(out: str, router: str) -> int:
+    """How many entrypoint branches the router heads.
+
+    Counting bare name occurrences cannot tell one branch from two: a router
+    under a *single* entrypoint already prints its name twice, on the ``└─
+    router`` line and on the ``└─ → service`` line below it. Only the branch
+    head is counted here, so the assertion fails if a router that belongs
+    under several entrypoints is drawn under one.
+    """
+    return sum(1 for line in out.splitlines() if line.strip().startswith(f"└─ {router}"))
+
+
 def _wired():
     return TraefikInfo(
         reachable=True,
@@ -63,7 +75,7 @@ def test_entrypoints_are_ordered_by_port():
 
 def test_a_router_on_two_entrypoints_appears_under_both():
     out = _render(_wired())
-    assert out.count("kafbat-ui") >= 2
+    assert _branch_heads(out, "kafbat-ui") == 2
 
 
 def test_an_entrypoint_without_a_router_says_so():
@@ -103,8 +115,10 @@ def test_a_router_on_a_known_and_an_unknown_entrypoint_appears_in_both_places():
                                service="half")],
     )
     out = _render(info)
-    assert out.count("half") >= 2
-    assert "nosuch" in out
+    # Once under the entrypoint that exists, once in the orphan block.
+    assert _branch_heads(out, "half") == 1
+    orphan_line = [ln for ln in out.splitlines() if "nosuch" in ln][0]
+    assert "half" in orphan_line
 
 
 def test_internal_routers_are_shown_but_dimmed_last():
@@ -160,8 +174,82 @@ def test_a_router_naming_no_entrypoint_appears_under_every_entrypoint():
         routers=[TraefikRouter(name="everywhere", entrypoints=[], service="everywhere")],
     )
     out = _render(info)
-    assert out.count("everywhere") >= 2
+    assert _branch_heads(out, "everywhere") == 2
     assert "ORPHANED" not in out
+
+
+def test_without_entrypoints_the_routers_are_still_shown_under_a_warning():
+    """Not finding the entrypoints is a coverage gap, not an empty panel.
+
+    It happens whenever the Traefik service is not matched by
+    TRAEFIK_SERVICE_PATTERNS, or its entrypoints come from static YAML rather
+    than from Args. Dropping every router in that state is the very blind spot
+    the orphan block exists to close.
+    """
+    info = TraefikInfo(
+        reachable=True,
+        entrypoints=[],
+        routers=[
+            TraefikRouter(name="alpha", entrypoints=["portalmgmt"], service="alpha"),
+            TraefikRouter(name="beta", entrypoints=["kafbat"], service="beta"),
+        ],
+    )
+    out = _render(info)
+    assert icons.WARN in out
+    assert "alpha" in out
+    assert "beta" in out
+
+
+def test_without_entrypoints_no_entrypoint_is_called_nonexistent():
+    """With nothing read, "entrypoint `x` does not exist" would be a claim
+    about something that was never measured."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="alpha", entrypoints=["portalmgmt"], service="alpha")],
+    )
+    out = _render(info)
+    assert "does not exist" not in out
+    assert icons.FAILED not in out
+
+
+def test_without_entrypoints_even_an_entrypoint_less_router_is_shown():
+    """A router naming no entrypoint is attached to all of them — and with none
+    read there is no branch for it either, so it is the one router the orphan
+    block would still drop."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="everywhere", service="everywhere")],
+    )
+    assert "everywhere" in _render(info)
+
+
+def test_an_unreachable_swarm_shows_unknown_not_a_missing_service():
+    """`reachable=False` means collect_docker never got an answer: the service
+    list is empty because nothing was measured, not because the service is
+    gone."""
+    out = _render(_wired(), swarm=SwarmInfo(reachable=False))
+    assert icons.UNKNOWN in out
+    assert icons.FAILED not in out
+
+
+def test_a_swarm_that_is_not_enabled_shows_unknown_not_a_missing_service():
+    """Off a Swarm, `services` holds container names, so no Swarm service name
+    can ever match — every router would read "no such service"."""
+    out = _render(_wired(), swarm=SwarmInfo(reachable=True, enabled=False))
+    assert icons.UNKNOWN in out
+    assert icons.FAILED not in out
+
+
+def test_a_global_service_uses_the_reported_node_count_like_docker_infos():
+    """`_node_map` swallows a failed node listing, so an empty node list beside
+    a non-zero count is normal. Counting only the list renders `· 0/0` here and
+    `💀 0/3` in DOCKER INFOS — two verdicts for one service."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_count=3, nodes=[],
+        services=[ServiceStatus("kafbat-ui_kafbat-ui", 0, None)],
+    )
+    out = _render(_wired(), swarm=swarm)
+    assert f"{icons.DEAD} 0/3" in out
 
 
 def test_file_provider_error_is_shown_as_a_warning_above_the_tree():

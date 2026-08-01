@@ -37,9 +37,13 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
     if name.endswith(_INTERNAL_SUFFIX):
         # Traefik's own endpoint: nothing was measured, so nothing is claimed.
         return line
-    if swarm is None:
-        # Nobody looked at Docker. Claiming the service does not exist would be
-        # asserting what was never measured — show the neutral dot, no count.
+    if swarm is None or not swarm.reachable or not swarm.enabled:
+        # Nobody looked at Docker, or the look came back empty-handed: no
+        # client (`swarm is None`), no answer from the daemon
+        # (`reachable=False`), or no Swarm at all (`enabled=False`, where
+        # `services` holds container names that can never match a Swarm
+        # service). Claiming the service does not exist would be asserting what
+        # was never measured — show the neutral dot, no count.
         line.append(f"  {icons.UNKNOWN}", style="dim")
         return line
     docker_name = ref.docker_service if ref else None
@@ -48,7 +52,13 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
         line.append(f"  {icons.FAILED} no such service", style="red")
         return line
     line.append("  ")
-    line.append_text(service_verdict(matching, node_count=len(swarm.nodes)))
+    # Same preference as DOCKER INFOS: ``_node_map`` swallows a failed node
+    # listing, so an empty node list beside a non-zero count is reachable, and
+    # counting only the list would give a global-mode service a second, softer
+    # verdict here than the one the other section shows.
+    line.append_text(
+        service_verdict(matching, node_count=swarm.node_count or len(swarm.nodes))
+    )
     return line
 
 
@@ -85,17 +95,43 @@ def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) ->
 
 def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
     known = {ep.name for ep in info.entrypoints}
-    orphans = [(r, unknown_entrypoints(r, known)) for r in info.routers]
-    orphans = [(r, missing) for r, missing in orphans if missing]
+    orphans: list[tuple[TraefikRouter, list[str]]] = []
+    for router in info.routers:
+        missing = unknown_entrypoints(router, known)
+        if missing:
+            orphans.append((router, missing))
+        elif not known and not router.entrypoints:
+            # Traefik attaches this one to every entrypoint — and not one of
+            # them could be read, so the tree above has no branch for it
+            # either. Without this it would be the router that vanishes.
+            orphans.append((router, []))
     if not orphans:
         return None
     parts: list[RenderableType] = [_subhead("ORPHANED ROUTERS")]
     for router, missing in orphans:
         named = ", ".join(f"`{name}`" for name in missing)
-        parts.append(
-            Text(f"  {icons.FAILED} {router.name}        entrypoint {named} does not exist",
-                 style="red")
-        )
+        if missing and known:
+            # The entrypoints were read, and this name is not among them.
+            head = Text(
+                f"  {icons.FAILED} {router.name}        entrypoint {named} does not exist",
+                style="red",
+            )
+        elif missing:
+            # No entrypoint was read at all: the router cannot be placed, but
+            # calling its entrypoint nonexistent would claim a measurement
+            # that never happened.
+            head = Text(
+                f"  {icons.WARN} {router.name}        entrypoint {named}"
+                " — no entrypoint could be read",
+                style="yellow",
+            )
+        else:
+            head = Text(
+                f"  {icons.WARN} {router.name}        attached to every entrypoint"
+                " — none could be read",
+                style="yellow",
+            )
+        parts.append(head)
         if router.rule:
             parts.append(Text(f"     {router.rule}", style="dim"))
         parts.append(_service_line(router, info, swarm))
@@ -111,10 +147,20 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
                        Text(f"{icons.FAILED} {data.error}", style="red"))
     if not data.reachable:
         return section("TRAEFIK WIRING", Text("not checked", style="dim"))
-    if not data.entrypoints:
-        return section("TRAEFIK WIRING", Text("no entrypoints found", style="dim"))
 
     parts: list[RenderableType] = []
+    if not data.entrypoints:
+        # A coverage gap, not an empty configuration: the Traefik service may
+        # carry a different name than TRAEFIK_SERVICE_PATTERNS matches, or
+        # declare its entrypoints in static YAML rather than in Args. The tree
+        # below cannot be drawn, but the routers are still known — they follow
+        # in the orphan block, which in this state holds every one of them.
+        parts.append(Text(
+            f"{icons.WARN} no entrypoints found — the tree cannot be drawn,"
+            " the routers below could not be placed",
+            style="yellow",
+        ))
+        parts.append(Text(""))
     if data.file_provider_error:
         # api@internal and ping-router live only in the file provider. Without
         # this line their absence from the tree below reads as a finding
