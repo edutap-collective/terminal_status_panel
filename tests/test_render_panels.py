@@ -401,3 +401,50 @@ def test_without_health_a_clustered_service_is_not_observable():
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert f"{icons.UNKNOWN} 5/5" in out
     assert f"{icons.OK} 5/5" not in out
+
+
+def _five_node_swarm_with_one_drained(services) -> SwarmInfo:
+    nodes = [
+        SwarmNode(f"srv-0{i}", reachable=True, state="ready", availability="active")
+        for i in range(1, 5)
+    ]
+    nodes.append(SwarmNode("srv-05", reachable=True, state="ready", availability="drain"))
+    return SwarmInfo(reachable=True, enabled=True, node_role="manager", node_count=5,
+                     nodes=nodes, services=services)
+
+
+def test_a_global_service_counts_the_tasks_swarm_scheduled():
+    """Swarm takes a global service's task off a drained node, so counting
+    against every node would claim a degradation nobody measured — while
+    ``docker service ls`` reads a contented 4/4."""
+    traefik = ServiceStatus(
+        "traefik_traefik", 4, None, stack="traefik",
+        tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 5)],
+    )
+    out = _text(panels.services_section(
+        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
+    assert f"{icons.OK} 4/4" in out
+    assert f"{icons.WARN} 4/5" not in out
+
+
+def test_a_global_service_missing_a_task_is_still_degraded():
+    traefik = ServiceStatus(
+        "traefik_traefik", 3, None, stack="traefik",
+        tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 4)]
+             + [ServiceTask("srv-04", "failed")],
+    )
+    out = _text(panels.services_section(
+        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
+    assert f"{icons.WARN} 3/4" in out
+
+
+def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
+    """``_node_map`` swallows a failed node listing, so an empty node list next
+    to a non-zero node_count is reachable — and '/0' would be a lie."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=4, nodes=[],
+        services=[ServiceStatus("traefik_traefik", 4, None, stack="traefik")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.OK} 4/4" in out
+    assert "4/0" not in out

@@ -9,6 +9,7 @@ rule header via :func:`section`; sub-blocks inside them use the lighter
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import datetime
 
 from rich.console import Group, RenderableType
@@ -18,7 +19,15 @@ from rich.text import Text
 
 from ..collectors.clusters import kind_for_service
 from ..config import Config, Thresholds
-from ..model import ClusterService, HealthInfo, ResourceUsage, SwarmInfo, SystemInfo, UpdateInfo
+from ..model import (
+    ClusterService,
+    HealthInfo,
+    ResourceUsage,
+    ServiceStatus,
+    SwarmInfo,
+    SystemInfo,
+    UpdateInfo,
+)
 from .bars import STATUS_COLORS, classify, format_bytes, render_bar
 from .icons import DEAD as _DEAD
 from .icons import OK as _OK
@@ -417,7 +426,9 @@ def _ui_subrows(ui_services, node_names, ui_keys) -> list[tuple[str, list, str]]
     return rows
 
 
-def _stack_matrix(title, entries, nodes, verdict) -> RenderableType:
+def _stack_matrix(
+    title, entries, nodes, verdict: Callable[[list[ServiceStatus]], Text]
+) -> RenderableType:
     short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")          # stack / service name
@@ -466,7 +477,10 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config,
     by_kind: dict[str, ClusterService] = {
         service.kind: service for service in (health.clusters if health else [])
     }
-    node_count = len(swarm.nodes)
+    # Same preference as the SWARM summary line: ``_node_map`` swallows a failed
+    # node listing, so an empty list next to a non-zero count is reachable and
+    # would otherwise render a global row as "/0".
+    node_count = swarm.node_count or len(swarm.nodes)
 
     def verdict(services):
         kind = next(

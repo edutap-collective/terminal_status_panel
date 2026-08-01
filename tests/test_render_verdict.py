@@ -1,6 +1,11 @@
 import pytest
 
-from terminal_status_panel.model import ClusterMember, ClusterService, ServiceStatus
+from terminal_status_panel.model import (
+    ClusterMember,
+    ClusterService,
+    ServiceStatus,
+    ServiceTask,
+)
 from terminal_status_panel.render import icons
 from terminal_status_panel.render.verdict import service_verdict
 
@@ -31,7 +36,41 @@ def test_a_row_sums_its_per_node_replicas():
     assert _cell([_svc(1, 1), _svc(1, 1), _svc(0, 1)]) == f"{icons.WARN} 2/3"
 
 
-def test_global_mode_counts_against_the_node_count():
+def _global(running, states, unassigned=0):
+    """A global-mode service (no replica count) with per-node task states."""
+    return ServiceStatus(
+        name="traefik_traefik",
+        running_replicas=running,
+        desired_replicas=None,
+        tasks=[ServiceTask(node=f"node{i}", state=s) for i, s in enumerate(states)],
+        unassigned=unassigned,
+    )
+
+
+def test_global_mode_counts_the_tasks_swarm_scheduled():
+    """Swarm removes a global service's task from a drained node, so counting
+    against every node would render a healthy service permanently degraded —
+    the panel asserting a degradation it never measured."""
+    four_of_five_nodes = ["running"] * 4
+    assert _cell([_global(4, four_of_five_nodes)], node_count=5) == f"{icons.OK} 4/4"
+
+
+def test_a_global_service_missing_a_task_still_warns():
+    assert (
+        _cell([_global(3, ["running"] * 3 + ["failed"])], node_count=5)
+        == f"{icons.WARN} 3/4"
+    )
+
+
+def test_a_global_task_pinned_to_a_dead_node_still_counts_as_wanted():
+    """An unassigned task is one Swarm wants to place and cannot."""
+    assert (
+        _cell([_global(3, ["running"] * 3, unassigned=1)], node_count=5)
+        == f"{icons.WARN} 3/4"
+    )
+
+
+def test_global_mode_falls_back_to_the_node_count_without_task_data():
     assert _cell([_svc(5, None)], node_count=5) == f"{icons.OK} 5/5"
     assert _cell([_svc(3, None)], node_count=5) == f"{icons.WARN} 3/5"
     assert _cell([_svc(0, None)], node_count=5) == f"{icons.DEAD} 0/5"

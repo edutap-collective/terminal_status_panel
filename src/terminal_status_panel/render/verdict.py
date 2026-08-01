@@ -41,13 +41,29 @@ _SEVERITY = {
 }
 
 
+def _desired(service: ServiceStatus, node_count: int) -> int:
+    """How many tasks this service wants.
+
+    A replicated service says so itself. A global-mode service reports no
+    replica count — it wants one task per *eligible* node, and a drained node
+    or a placement constraint makes it fewer than all of them: Swarm removes
+    the task from a drained node, so counting against every node would render
+    a healthy global service as permanently degraded. The tasks Docker
+    actually scheduled are measurable, and they are the same denominator
+    ``docker service ls`` shows, since the collector already filters tasks to
+    desired-state ``running``. Only a row that carries no task data at all
+    falls back to the node count.
+    """
+    if service.desired_replicas is not None:
+        return service.desired_replicas
+    scheduled = len(service.tasks) + service.unassigned
+    return scheduled or node_count
+
+
 def _counts(services: list[ServiceStatus], node_count: int) -> tuple[int, int]:
     """(running, desired) for a row, which bundles one service's per-node replicas."""
     running = sum(s.running_replicas for s in services)
-    # A global-mode service reports no replica count: it wants one task per node.
-    if all(s.desired_replicas is None for s in services):
-        return running, node_count
-    return running, sum(s.desired_replicas or 0 for s in services)
+    return running, sum(_desired(s, node_count) for s in services)
 
 
 def _replica_icon(running: int, desired: int) -> str:
