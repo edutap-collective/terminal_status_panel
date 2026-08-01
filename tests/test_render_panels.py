@@ -494,3 +494,66 @@ def test_tasks_of_several_services_in_one_row_are_counted_together():
         ServiceStatus("svc_2", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
     ]
     assert panels._node_cell(services, "srv-01").plain == f"{panels._OK}2"
+
+
+NODES = ["lmzvd06-ccc-01", "lmzvd06-ccn-01"]
+
+
+def test_an_ordinal_suffix_is_stripped():
+    assert (
+        panels._base_service_name("edutap_production_heidi_connector_1", NODES)
+        == "edutap_production_heidi_connector"
+    )
+
+
+def test_ordinal_stripping_survives_more_than_one_digit():
+    assert panels._base_service_name("stack_worker_12", NODES) == "stack_worker"
+
+
+def test_a_node_suffix_is_still_stripped():
+    assert panels._base_service_name("kafka_kafka-lmzvd06-ccc-01", NODES) == "kafka_kafka"
+
+
+def test_a_hyphen_before_digits_is_left_alone():
+    """PostgreSQL-18_PostgreSQL-18 must not become PostgreSQL-18_PostgreSQL —
+    '_' is what Swarm puts between a stack and its service, '-' is not."""
+    assert (
+        panels._base_service_name("PostgreSQL-18_PostgreSQL-18", NODES)
+        == "PostgreSQL-18_PostgreSQL-18"
+    )
+
+
+def test_a_name_without_a_suffix_is_untouched():
+    assert panels._base_service_name("traefik_sockproxy", NODES) == "traefik_sockproxy"
+
+
+def test_a_name_that_is_only_an_ordinal_is_left_alone():
+    assert panels._base_service_name("_1", NODES) == "_1"
+
+
+def test_ordinal_instances_collapse_into_one_row():
+    """Three pinned instances render as one sub-row summing their replicas.
+
+    The stack also runs another service (as edutap_production does with
+    thirteen, in production) so it renders as a stack header plus sub-rows
+    rather than collapsing to a single stack-named row — that single-service
+    collapse is a distinct, pre-existing case with its own tests."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=3,
+        nodes=[SwarmNode(n, reachable=True, state="ready", availability="active")
+               for n in ("srv-01", "srv-02", "srv-03")],
+        services=[
+            ServiceStatus(f"edutap_heidi_connector_{i}", 1, 1, stack="edutap",
+                          tasks=[ServiceTask(f"srv-0{i}", "running")])
+            for i in (1, 2, 3)
+        ] + [
+            ServiceStatus("edutap_web", 1, 1, stack="edutap",
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "heidi_connector" in out
+    assert "heidi_connector_1" not in out
+    assert f"{icons.OK} 3/3" in out
+    matches = [ln for ln in out.splitlines() if ln.strip().startswith("heidi_connector")]
+    assert len(matches) == 1

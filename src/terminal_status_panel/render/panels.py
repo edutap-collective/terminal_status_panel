@@ -9,6 +9,7 @@ rule header via :func:`section`; sub-blocks inside them use the lighter
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from datetime import datetime
 
@@ -41,6 +42,12 @@ _CPU_CRITICAL = 90.0
 
 # Name of the synthetic stack collecting infrastructure admin UIs.
 INFRA_UI_STACK = "infra-uis"
+
+# Ordinal instances of one service: heidi_connector must run as
+# heidi_connector_1, _2, … because each pinned instance needs its own secrets.
+# Underscore only — with '-<digits>' a stack named PostgreSQL-18 whose service
+# carries the same name would be mutilated to PostgreSQL-18_PostgreSQL.
+_ORDINAL_SUFFIX = re.compile(r"_\d+$")
 
 
 def section(title: str, body: RenderableType) -> Group:
@@ -375,14 +382,16 @@ def _node_cell(services, node_full: str) -> Text:
 
 def _base_service_name(name: str, node_names) -> str:
     """Strip a trailing '-<node hostname>' / '_<node hostname>' so per-node
-    replicas of the same service collapse (kafka_kafka-lmzvd06-ccc-01 ->
-    kafka_kafka)."""
+    replicas collapse (kafka_kafka-lmzvd06-ccc-01 -> kafka_kafka), then a
+    trailing '_<digits>' so ordinal instances collapse
+    (edutap_heidi_connector_1 -> edutap_heidi_connector)."""
     for nn in sorted(node_names, key=len, reverse=True):
         if nn and name.endswith(nn) and len(name) > len(nn) + 1:
             base = name[: -len(nn)].rstrip("-_")
             if base:
-                return base
-    return name
+                name = base
+                break
+    return _ORDINAL_SUFFIX.sub("", name) or name
 
 
 def _strip_stack_prefix(base: str, stack: str) -> str:
