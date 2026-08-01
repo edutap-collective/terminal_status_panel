@@ -139,7 +139,9 @@ def service_verdict(
     elif cluster is None:
         # A clustered service with no verdict: the health section did not run,
         # or this kind is not enabled. "Five brokers are running" is not the
-        # claim this column makes, so it stays unobserved.
+        # claim this column makes, so the cluster side contributes nothing —
+        # but _combined_icon still lets a replica state more severe than
+        # "unobserved" through, which is what renders ``💀 0/3`` here.
         icon = _combined_icon(replica, icons.UNKNOWN)
     else:
         icon = _combined_icon(replica, _cluster_icon(cluster))

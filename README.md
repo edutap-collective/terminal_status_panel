@@ -111,7 +111,7 @@ its own entry point — plus the combined command:
 |---------|----------|-----|
 | `status-full` | server + docker + health | The full panel (default). |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
-| `status-docker` | docker only | The Docker Swarm block. Collects no health, so every clustered service's **Working** cell stays `·` plus its Docker count — pair it with `status-health` to get those verdicts. |
+| `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `·` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
 | `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
 
 Each section only collects the data it needs: `status-docker` never touches
@@ -492,8 +492,10 @@ together: the Docker Swarm block and the clustered-services health block
 answer different questions (what's scheduled vs. what's actually healthy)
 and both only make sense where the Docker socket is available. Installed
 alone, `--panel docker` collects no health at all, so the **Working** cell of
-every clustered service reads `·` plus its replica count — honest, but the
-column only earns its cluster icons with `--panel health` beside it.
+every clustered service falls back to Docker's own measurement — `·` only for
+a row Docker itself measured clean (fully staffed or scaled to zero), still
+`💀`/`⚠️` when Docker measured it dead or degraded — honest, but the column
+only earns its cluster icons with `--panel health` beside it.
 
 Options:
 
