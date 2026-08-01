@@ -354,14 +354,23 @@ def _swarm_body(swarm: SwarmInfo) -> RenderableType:
 
 
 def _node_cell(services, node_full: str) -> Text:
-    """Aggregate status of a stack's tasks on one node: ✅ all running,
-    💀 some failed, blank when the stack has no task there."""
+    """Aggregate status of a row's tasks on one node.
+
+    A single task keeps the bare glyph, so the common cell stays exactly as
+    quiet as it was. From two tasks up the count is shown: one ✅ cannot say
+    whether a node holds one instance or five.
+    """
     tasks = [t for s in services for t in s.tasks if t.node == node_full]
     if not tasks:
         return Text(" ")
-    if all(t.running for t in tasks):
-        return Text(_OK)
-    return Text(_DEAD, style="red")
+    running = sum(1 for t in tasks if t.running)
+    if len(tasks) == 1:
+        return Text(_OK) if running else Text(_DEAD, style="red")
+    if running == len(tasks):
+        return Text(f"{_OK}{len(tasks)}")
+    if running == 0:
+        return Text(f"{_DEAD}0/{len(tasks)}", style="red")
+    return Text(f"{_WARN}{running}/{len(tasks)}", style="yellow")
 
 
 def _base_service_name(name: str, node_names) -> str:

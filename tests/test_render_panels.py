@@ -448,3 +448,49 @@ def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert f"{icons.OK} 4/4" in out
     assert "4/0" not in out
+
+
+def _tasks(*states):
+    """One ServiceStatus holding tasks on node 'srv-01' with the given states."""
+    return [ServiceStatus("svc", sum(s == "running" for s in states), len(states),
+                          tasks=[ServiceTask("srv-01", s) for s in states])]
+
+
+def test_a_single_running_task_still_renders_the_bare_glyph():
+    assert panels._node_cell(_tasks("running"), "srv-01").plain == panels._OK
+
+
+def test_a_single_failed_task_still_renders_the_bare_glyph():
+    assert panels._node_cell(_tasks("failed"), "srv-01").plain == panels._DEAD
+
+
+def test_an_empty_node_cell_stays_blank():
+    assert panels._node_cell(_tasks("running"), "other-node").plain == " "
+
+
+def test_several_running_tasks_show_their_count():
+    assert panels._node_cell(_tasks("running", "running"), "srv-01").plain == f"{panels._OK}2"
+    assert (
+        panels._node_cell(_tasks("running", "running", "running"), "srv-01").plain
+        == f"{panels._OK}3"
+    )
+
+
+def test_a_partially_staffed_node_is_degraded_not_broken():
+    cell = panels._node_cell(_tasks("running", "failed"), "srv-01")
+    assert cell.plain == f"{panels._WARN}1/2"
+
+
+def test_a_node_where_nothing_runs_is_broken_with_its_count():
+    cell = panels._node_cell(_tasks("failed", "failed"), "srv-01")
+    assert cell.plain == f"{panels._DEAD}0/2"
+
+
+def test_tasks_of_several_services_in_one_row_are_counted_together():
+    """A row bundles services — after ordinal grouping, two instances of one
+    service can share a node."""
+    services = [
+        ServiceStatus("svc_1", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+        ServiceStatus("svc_2", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+    ]
+    assert panels._node_cell(services, "srv-01").plain == f"{panels._OK}2"
