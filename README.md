@@ -529,6 +529,10 @@ unreachable or rejected connection is treated the same as "not configured"
 skipped, so no test will surface the mistake. Leave the section unset until
 the app servers have a certificate from the right CA.
 
+The collector records which routers Traefik accepted, but the tree does not
+yet surface this answer — so configuring `[traefik]` changes what is measured,
+not what is displayed.
+
 ## Running it at login
 
 **Recommended: run it from `profile.d` (the login shell), not from
