@@ -11,6 +11,11 @@ from terminal_status_panel.model import (
     SwarmInfo,
     SwarmNode,
     SystemInfo,
+    TraefikEntrypoint,
+    TraefikInfo,
+    TraefikMiddleware,
+    TraefikRouter,
+    TraefikServiceRef,
 )
 
 
@@ -78,3 +83,46 @@ def test_dns_check_none_means_warning():
 
 def test_health_info_defaults_to_unprobed_peers():
     assert HealthInfo().peers_probed is False
+
+
+def test_traefik_entrypoint_carries_name_and_address():
+    ep = TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)
+    assert (ep.name, ep.address, ep.port) == ("portalmgmt", ":2020", 2020)
+
+
+def test_a_router_defaults_to_unconsulted_rather_than_accepted():
+    """rejected is None until the Traefik API was actually asked."""
+    router = TraefikRouter(name="kafbat-ui")
+    assert router.rejected is None
+    assert router.source == "swarm"
+    assert router.entrypoints == []
+    assert router.middlewares == []
+
+
+def test_a_service_reference_may_be_internal():
+    ref = TraefikServiceRef(name="api@internal", internal=True)
+    assert ref.internal is True
+    assert ref.port is None
+
+
+def test_a_middleware_keeps_its_kind_and_detail():
+    mw = TraefikMiddleware(name="image_api_stripprefix", kind="stripprefix",
+                           detail="prefixes=/wallet/image-api")
+    assert mw.kind == "stripprefix"
+
+
+def test_traefik_info_defaults_are_empty_and_unconsulted():
+    info = TraefikInfo()
+    assert info.reachable is False
+    assert info.entrypoints == []
+    assert info.routers == []
+    assert info.middlewares == {}
+    assert info.services == {}
+    assert info.api_consulted is False
+    assert info.error is None
+
+
+def test_panel_data_carries_traefik():
+    assert PanelData().traefik is None
+    info = TraefikInfo(reachable=True)
+    assert PanelData(traefik=info).traefik.reachable is True

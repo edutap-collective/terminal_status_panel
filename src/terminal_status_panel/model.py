@@ -174,9 +174,63 @@ class HealthInfo:
 
 
 @dataclass
+class TraefikEntrypoint:
+    """A port Traefik listens on, as declared in its static configuration."""
+
+    name: str
+    address: str  # ":2020"
+    port: int | None = None
+
+
+@dataclass
+class TraefikMiddleware:
+    name: str
+    kind: str | None = None  # stripprefix, headers, …
+    detail: str | None = None  # the first configured key, for display
+
+
+@dataclass
+class TraefikServiceRef:
+    """What a router points at — a Docker service, or one of Traefik's own."""
+
+    name: str
+    port: int | None = None
+    scheme: str | None = None
+    internal: bool = False  # api@internal / ping@internal
+    docker_service: str | None = None  # the Swarm service backing it, when known
+
+
+@dataclass
+class TraefikRouter:
+    name: str
+    entrypoints: list[str] = field(default_factory=list)
+    rule: str | None = None
+    middlewares: list[str] = field(default_factory=list)
+    service: str | None = None
+    tls: bool = False
+    source: str = "swarm"  # swarm | file
+    origin: str | None = None  # the Docker service or config it was read from
+    # None means the Traefik API was never asked. It must not render as
+    # "accepted": not consulted is not the same as confirmed.
+    rejected: bool | None = None
+
+
+@dataclass
+class TraefikInfo:
+    reachable: bool = False
+    entrypoints: list[TraefikEntrypoint] = field(default_factory=list)
+    routers: list[TraefikRouter] = field(default_factory=list)
+    middlewares: dict[str, TraefikMiddleware] = field(default_factory=dict)
+    services: dict[str, TraefikServiceRef] = field(default_factory=dict)
+    api_consulted: bool = False
+    error: str | None = None
+
+
+@dataclass
 class PanelData:
     system: SystemInfo | None = None
     resources: ResourceUsage | None = None
     swarm: SwarmInfo | None = None
     updates: UpdateInfo | None = None
     health: HealthInfo | None = None
+    traefik: TraefikInfo | None = None
