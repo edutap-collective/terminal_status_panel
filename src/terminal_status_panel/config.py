@@ -39,7 +39,7 @@ class HealthConfig:
 DEFAULT_INFRASTRUCTURE_STACKS = [
     "postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer",
     "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql",
-    "elasticsearch",
+    "elasticsearch", "bugsink",
 ]
 
 # Admin web UIs for infrastructure services. Matched case-insensitively against

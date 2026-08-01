@@ -557,3 +557,22 @@ def test_ordinal_instances_collapse_into_one_row():
     assert f"{icons.OK} 3/3" in out
     matches = [ln for ln in out.splitlines() if ln.strip().startswith("heidi_connector")]
     assert len(matches) == 1
+
+
+def test_bugsink_is_infrastructure():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[
+            ServiceStatus("bugsink_bugsink", 1, 1, stack="bugsink",
+                          description="Bugsink (Fehler-Tracker)",
+                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("app_web", 1, 1, stack="app",
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastruktur"))
+    service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
+    bugsink_at = _line_index(out, lambda ln: ln.strip().startswith("bugsink"))
+    assert infra_at < bugsink_at < service_at
