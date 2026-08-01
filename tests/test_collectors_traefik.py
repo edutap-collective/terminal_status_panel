@@ -146,6 +146,142 @@ def test_the_normal_path_leaves_file_provider_error_unset():
     assert info.file_provider_error is None
 
 
+def test_a_mis_cased_entrypoints_label_still_reaches_the_orphan_block():
+    """The branch's headline finding depends on this: image_api names the
+    entrypoint `websecure`, which does not exist. Parsed case-sensitively the
+    label vanishes, the empty list reads as "attached to all entrypoints", and
+    the finding turns into "wired to all nine ports"."""
+    client = _FakeClient(services=[
+        _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+        _FakeService("edutap_production_image_api", labels={
+            "traefik.http.routers.image_api.entryPoints": "websecure",
+            "traefik.http.routers.image_api.rule": "Host(`www.portal.uni-muenchen.de`)",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    router = next(r for r in info.routers if r.name == "image_api")
+    assert router.entrypoints == ["websecure"]
+    assert collector.unknown_entrypoints(router, {"portalmgmt"}) == ["websecure"]
+
+
+def test_a_service_whose_attrs_are_not_a_mapping_does_not_raise():
+    """`collect_traefik` is specified never to raise, and `main` swallows what
+    it does raise — so an odd shape here prints a blank panel, not a
+    traceback."""
+    class _Odd:
+        name = "weird"
+        attrs = ["not", "a", "mapping"]
+
+    info = collector.collect_traefik(_FakeClient(services=[_Odd()]))
+    assert info.error is None
+    assert info.reachable is True
+    assert info.routers == []
+
+
+def test_a_spec_that_is_not_a_mapping_does_not_raise():
+    class _Odd:
+        name = "traefik_traefik"
+        attrs = {"Spec": ["TaskTemplate"]}
+
+    info = collector.collect_traefik(_FakeClient(services=[_Odd()]))
+    assert info.error is None
+    assert info.entrypoints == []
+
+
+def test_an_undecodable_config_is_reported_as_a_file_provider_error():
+    """A config that cannot be decoded yields no routers — indistinguishable
+    from "no dynamic config exists" unless it is reported, and the dashboard
+    entrypoint would read `— no router` instead of showing the gap."""
+    class _Undecodable:
+        name = "traefik_dynamic_yml_v2"
+        attrs = {"Spec": {"Data": "not base64 %%%"}}
+
+    client = _FakeClient(
+        services=[_FakeService("traefik_traefik", args=[])],
+        configs=[_Undecodable()],
+    )
+    info = collector.collect_traefik(client)
+    assert info.routers == []
+    assert info.file_provider_error is not None
+    assert "traefik_dynamic_yml_v2" in info.file_provider_error
+
+
+def test_a_config_with_broken_yaml_is_reported_as_a_file_provider_error():
+    client = _FakeClient(
+        services=[_FakeService("traefik_traefik", args=[])],
+        configs=[_FakeConfig("traefik_dynamic_yml_v2", "http:\n  routers: [unclosed\n")],
+    )
+    info = collector.collect_traefik(client)
+    assert info.routers == []
+    assert info.file_provider_error is not None
+    assert "traefik_dynamic_yml_v2" in info.file_provider_error
+
+
+def test_a_config_that_parses_to_nothing_is_not_an_error():
+    """Valid YAML without an http section is a real, empty answer."""
+    client = _FakeClient(
+        services=[_FakeService("traefik_traefik", args=[])],
+        configs=[_FakeConfig("traefik_dynamic_yml_v2", "tls:\n  options: {}\n")],
+    )
+    assert collector.collect_traefik(client).file_provider_error is None
+
+
+def test_the_collector_bounds_its_own_docker_calls_with_its_timeout():
+    """docker-py has no per-call timeout, and the client handed to this
+    collector carries the health section's larger socket timeout. Two
+    unbudgeted main-thread calls against a hung daemon is what `docker.timeout`
+    is documented to prevent."""
+    seen = []
+
+    class _Api:
+        timeout = 4.0
+
+    class _Recording(_FakeClient):
+        def __init__(self):
+            super().__init__(services=[], configs=[])
+            self.api = _Api()
+
+        @property
+        def services(self):
+            seen.append(self.api.timeout)
+            return self._Coll([])
+
+        @property
+        def configs(self):
+            seen.append(self.api.timeout)
+            return self._Coll([])
+
+    client = _Recording()
+    collector.collect_traefik(client, timeout=1.5)
+    assert seen == [1.5, 1.5]
+    assert client.api.timeout == 4.0
+
+
+def test_the_socket_timeout_is_restored_even_when_the_call_fails():
+    class _Api:
+        timeout = 4.0
+
+    class _Broken(_FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.api = _Api()
+
+        @property
+        def services(self):
+            raise RuntimeError("socket gone")
+
+    client = _Broken()
+    assert "socket gone" in collector.collect_traefik(client, timeout=1.5).error
+    assert client.api.timeout == 4.0
+
+
+def test_a_client_without_an_api_attribute_still_collects():
+    """The fakes in these tests have no `api`; neither has anything else that
+    quacks like a Docker client without one."""
+    info = collector.collect_traefik(_FakeClient(services=[]), timeout=1.5)
+    assert info.reachable is True
+
+
 def test_rejected_stays_none_when_the_api_was_not_consulted():
     info = collector.collect_traefik(_FakeClient(services=[]))
     assert info.api_consulted is False

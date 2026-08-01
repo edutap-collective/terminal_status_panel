@@ -47,11 +47,19 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
     return found
 
 
-_ROUTER = re.compile(r"^traefik\.http\.routers\.(?P<name>[^.]+)\.(?P<key>.+)$")
+# Same trap as the entrypoint arguments above: Traefik reads its label keys
+# case-insensitively, so `…routers.image_api.entryPoints` is a valid spelling.
+# Matched case-sensitively it parses to no entrypoints at all — which the
+# renderer reads as "attached to every entrypoint", turning a router wired to a
+# nonexistent port into one wired to all of them.
+_ROUTER = re.compile(r"^traefik\.http\.routers\.(?P<name>[^.]+)\.(?P<key>.+)$", re.IGNORECASE)
 _MIDDLEWARE = re.compile(
-    r"^traefik\.http\.middlewares\.(?P<name>[^.]+)\.(?P<kind>[^.]+)\.(?P<key>.+)$"
+    r"^traefik\.http\.middlewares\.(?P<name>[^.]+)\.(?P<kind>[^.]+)\.(?P<key>.+)$",
+    re.IGNORECASE,
 )
-_SERVICE = re.compile(r"^traefik\.http\.services\.(?P<name>[^.]+)\.(?P<key>.+)$")
+_SERVICE = re.compile(
+    r"^traefik\.http\.services\.(?P<name>[^.]+)\.(?P<key>.+)$", re.IGNORECASE
+)
 
 
 def _csv(value: str) -> list[str]:
@@ -73,7 +81,10 @@ def parse_labels(
                 match.group("name"),
                 TraefikRouter(name=match.group("name"), origin=origin),
             )
-            field = match.group("key")
+            # Case-folded for the same reason the pattern is: only the field
+            # name is folded, never the router name — `ImageApi` and
+            # `image_api` are two routers as far as Traefik is concerned.
+            field = match.group("key").lower()
             if field == "entrypoints":
                 router.entrypoints = _csv(value)
             elif field == "rule":
@@ -104,7 +115,7 @@ def parse_labels(
             service = services.setdefault(
                 name, TraefikServiceRef(name=name, docker_service=origin)
             )
-            field = match.group("key")
+            field = match.group("key").lower()
             if field.endswith("server.port"):
                 try:
                     service.port = int(value)

@@ -149,6 +149,66 @@ def test_a_service_without_a_port_still_appears():
     assert services["plain"].port is None
 
 
+def test_both_spellings_of_the_entrypoints_label_parse_the_same():
+    """Traefik accepts `entryPoints` in a label too, and the renderer reads an
+    empty entrypoint list as "attached to all of them" — so a mis-cased key
+    does not drop the router, it draws it under every entrypoint and hides it
+    from the orphan block."""
+    lower, _, _ = parse.parse_labels(
+        {"traefik.http.routers.image_api.entrypoints": "websecure"}, origin="x"
+    )
+    upper, _, _ = parse.parse_labels(
+        {"traefik.http.routers.image_api.entryPoints": "websecure"}, origin="x"
+    )
+    assert upper[0].entrypoints == ["websecure"]
+    assert upper == lower
+
+
+def test_a_mis_cased_router_key_is_still_read():
+    routers, _, _ = parse.parse_labels(
+        {
+            "traefik.http.routers.image_api.Rule": "Host(`www.portal.uni-muenchen.de`)",
+            "traefik.http.routers.image_api.TLS": "true",
+            "traefik.http.routers.image_api.Middlewares": "image_api_stripprefix",
+            "traefik.http.routers.image_api.Service": "image_api",
+        },
+        origin="x",
+    )
+    assert routers[0].rule == "Host(`www.portal.uni-muenchen.de`)"
+    assert routers[0].tls is True
+    assert routers[0].middlewares == ["image_api_stripprefix"]
+    assert routers[0].service == "image_api"
+
+
+def test_a_mis_cased_service_key_is_still_read():
+    _, _, services = parse.parse_labels(
+        {
+            "traefik.http.services.image_api.loadBalancer.server.Port": "8090",
+            "traefik.http.services.image_api.loadBalancer.server.Scheme": "https",
+        },
+        origin="x",
+    )
+    assert services["image_api"].port == 8090
+    assert services["image_api"].scheme == "https"
+
+
+def test_a_mis_cased_middleware_key_is_still_read():
+    _, middlewares, _ = parse.parse_labels(
+        {"traefik.HTTP.middlewares.strip.stripPrefix.prefixes": "/wallet/image-api"},
+        origin="x",
+    )
+    assert "strip" in middlewares
+
+
+def test_router_names_keep_their_case():
+    """Only the field name is case-folded: a router named ImageApi is a
+    different router from image_api as far as Traefik is concerned."""
+    routers, _, _ = parse.parse_labels(
+        {"traefik.http.routers.ImageApi.rule": "Path(`/x`)"}, origin="x"
+    )
+    assert routers[0].name == "ImageApi"
+
+
 def test_routers_come_back_in_a_stable_order():
     labels = {
         "traefik.http.routers.zebra.rule": "Path(`/z`)",
