@@ -21,12 +21,13 @@ out in four tiers:
   service deployed as `heidi_connector_1`, `_2`, `_3` (one pinned instance per
   node, each with its own secrets) renders as a single `heidi_connector` row.
   That stripping is unconditional, and it has an accepted cost: if one
-  instance is later removed from the deployment, its row just folds into the
-  remaining ones, and the panel reads `✅ 1/1` with nothing to say a second
-  instance was ever expected. The gap is invisible only across a
-  *deployment* change, never a *failure* — a failing instance still has a
-  desired replica and renders `💀` or `⚠️` in both the Working column and its
-  node cell, so a lost instance is silent but a broken one is not. Each row also
+  instance is later removed from the deployment — or scaled to zero — its
+  row just folds into the remaining two, and the panel reads `✅ 2/2` with
+  nothing to say a third instance was ever expected. The gap is invisible
+  only across a *deployment* change, never a *failure* — a failing instance
+  still has a desired replica and renders `💀` or `⚠️` in both the Working
+  column and its node cell, so a lost instance is silent but a broken one is
+  not. Each row also
   carries a **Working** cell right after the service name: an icon plus the
   row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
   Three rules keep that cell from over-claiming:

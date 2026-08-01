@@ -47,6 +47,13 @@ INFRA_UI_STACK = "infra-uis"
 # heidi_connector_1, _2, … because each pinned instance needs its own secrets.
 # Underscore only — with '-<digits>' a stack named PostgreSQL-18 whose service
 # carries the same name would be mutilated to PostgreSQL-18_PostgreSQL.
+# The price: two unrelated services whose names differ only in a trailing
+# '_<digits>' — say infra_php_7 and infra_php_8 — collapse into one "php" row
+# summing their replicas, and _group_desc shows only the first one's
+# description, so the second service disappears along with its description.
+# Accepted: no service in this environment is named that way, and the
+# alternative — collapsing only when siblings actually exist — would rename
+# the row as instances come and go.
 _ORDINAL_SUFFIX = re.compile(r"_\d+$")
 
 
