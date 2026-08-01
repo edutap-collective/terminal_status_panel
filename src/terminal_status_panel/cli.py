@@ -106,13 +106,18 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     health = "health" in sections
     traefik = "traefik" in sections
 
+    # The traefik section needs this data too, though it renders no DOCKER
+    # INFOS block: every router's service line is resolved against the Swarm
+    # service list, and without it `status-traefik` — the command the README
+    # documents as the way to run the wiring viewer — could only ever print
+    # the neutral `·`, never a verdict.
     swarm = (
         collect_docker(
             timeout=cfg.docker_timeout,
             critical=cfg.critical_services,
             description_label=cfg.description_label,
         )
-        if docker_section
+        if docker_section or traefik
         else None
     )
 

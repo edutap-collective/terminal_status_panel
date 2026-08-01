@@ -479,8 +479,14 @@ socket are needed, and no change to the Traefik deployment.
 The panel renders one branch per entrypoint (sorted by port), each listing
 its routers (dimmed when they come from the file provider), their
 middlewares, and the Docker service each one points at — cross-checked
-against the DOCKER INFOS data when the `docker` section also ran, otherwise
-shown with a neutral `·` since nothing was measured. A router naming no
+against the same Swarm service data the DOCKER INFOS section uses, through
+the same `service_verdict`, so one service never gets two verdicts. That
+data is collected whenever the `traefik` section runs, including for a bare
+`status-traefik`; the DOCKER INFOS block itself is *not* rendered as a side
+effect. When the Docker daemon gives no answer at all — no client, or an
+unreachable or non-Swarm daemon — the service line shows a neutral `·`
+rather than claiming the service is missing, since nothing was measured. A
+router naming no
 entrypoint is attached to every entrypoint by Traefik itself, so it appears
 under all of them; an entrypoint with no attached router reads `— no
 router`, which is a finding (a published port nothing serves), not an
