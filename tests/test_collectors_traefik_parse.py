@@ -376,6 +376,11 @@ def test_a_router_positively_reported_as_disabled_is_still_rejected():
     assert "broken" not in parse.parse_api_rawdata(RAWDATA)
 
 
-def test_a_payload_of_the_wrong_shape_yields_nothing_rather_than_raising():
+def test_a_payload_of_the_wrong_shape_does_not_raise():
+    """The parser's contract is only that it never raises. Its empty set is
+    *not* the answer to "which routers did Traefik accept" here — an empty set
+    reaching `mark_rejected` marks every router rejected, so deciding that the
+    payload was unreadable is `fetch_accepted`'s job, and it is pinned there
+    (`test_fetch_accepted_returns_none_when_the_payload_cannot_be_read`)."""
     assert parse.parse_api_rawdata({"routers": ["kafbat-ui@swarm"]}) == set()
     assert parse.parse_api_rawdata(None) == set()

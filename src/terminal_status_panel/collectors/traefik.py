@@ -104,6 +104,16 @@ def _socket_timeout(client, timeout: float):
     section's larger timeout, and both calls below run unbudgeted on the main
     thread — which is precisely what ``docker.timeout`` is documented to keep
     off the login path.
+
+    **This mutates a client other code may hold.** It is safe only because
+    ``collect_all`` calls ``_docker_client`` twice and hands the health section
+    a *different* ``APIClient`` — so the health probes' daemon threads never
+    see this attribute move under them. That is a property of the current
+    structure, not a guarantee of this function: merging the two clients into
+    one would turn this into a race, in which the health probes could run
+    against the traefik timeout or the reverse. Anyone merging them must give
+    this collector its own client, or drop the mutation and accept the shared
+    timeout.
     """
     api = getattr(client, "api", None)
     # Nothing to bound when the client carries no socket timeout of its own,
@@ -168,6 +178,13 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             # as "no such router" instead of "not read".
             _note_file_provider_error(info, f"{name}: config data is not decodable")
             continue
+        if not text.strip():
+            # An empty body decodes cleanly and parses cleanly to nothing, so
+            # neither guard above nor `_yaml_error` below sees it — but a
+            # dynamic config with no content is a read that came back empty,
+            # not a file provider that declares no routers.
+            _note_file_provider_error(info, f"{name}: config data is empty")
+            continue
         routers, middlewares = parse_dynamic_yaml(text, origin=name)
         if not routers and not middlewares:
             error = _yaml_error(text)
@@ -193,8 +210,26 @@ def mark_rejected(info: TraefikInfo, accepted: set[str]) -> None:
         router.rejected = router.name not in accepted
 
 
+def _is_readable_rawdata(payload) -> bool:
+    """Whether ``payload`` is a /api/rawdata answer this code can read.
+
+    ``parse_api_rawdata`` never raises, so an unreadable payload comes back
+    from it as an empty set — and an empty set is a *statement*: fed to
+    ``mark_rejected`` it marks every router rejected. The difference between
+    "Traefik holds no routers" and "we could not read the answer" has to be
+    decided here, where the ``set[str] | None`` return type still has a way
+    to say the second one.
+    """
+    return isinstance(payload, dict) and isinstance(payload.get("routers"), dict)
+
+
 def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | None:
-    """Ask Traefik what it accepted, or None when not configured or reachable.
+    """Ask Traefik what it accepted, or None when that could not be learned.
+
+    ``None`` covers every way of not learning it: not configured, unreachable,
+    an error response, and a 200 whose body could not be read. Only a payload
+    in the expected shape produces a set — an empty one included, since
+    "Traefik holds no routers" is a real answer.
 
     ``client`` is a private testing seam: pass an ``httpx.Client`` built on a
     ``MockTransport`` to exercise this against a recorded response without a
@@ -215,7 +250,10 @@ def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | Non
                 timeout=5.0,
             )
         response.raise_for_status()
-        return parse_api_rawdata(response.json())
+        payload = response.json()
+        if not _is_readable_rawdata(payload):
+            return None
+        return parse_api_rawdata(payload)
     except Exception:
         # Unreachable is not the same as "rejected everything": leave the
         # routers unconsulted rather than marking them all rejected.

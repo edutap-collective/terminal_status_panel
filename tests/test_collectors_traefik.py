@@ -217,6 +217,20 @@ def test_a_config_with_broken_yaml_is_reported_as_a_file_provider_error():
     assert "traefik_dynamic_yml_v2" in info.file_provider_error
 
 
+def test_an_empty_config_body_is_reported_as_a_file_provider_error():
+    """It decodes cleanly and parses cleanly to nothing, so it slips past both
+    the decode guard and the YAML guard — the last silent way for the file
+    provider to contribute no routers."""
+    client = _FakeClient(
+        services=[_FakeService("traefik_traefik", args=[])],
+        configs=[_FakeConfig("traefik_dynamic_yml_v2", "")],
+    )
+    info = collector.collect_traefik(client)
+    assert info.routers == []
+    assert info.file_provider_error is not None
+    assert "traefik_dynamic_yml_v2" in info.file_provider_error
+
+
 def test_a_config_that_parses_to_nothing_is_not_an_error():
     """Valid YAML without an http section is a real, empty answer."""
     client = _FakeClient(
@@ -345,6 +359,63 @@ def test_fetch_accepted_parses_a_successful_response():
         result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
 
     assert result == {"kafbat-ui"}
+
+
+def test_fetch_accepted_returns_none_when_the_payload_cannot_be_read():
+    """A 200 whose body is not the expected shape is "we asked and could not
+    read the answer" — the same not-observable state as an unreachable API.
+    Returning an empty set instead would send `mark_rejected` through every
+    router with nothing to match, marking all of them rejected."""
+    shapes = [
+        {"routers": ["kafbat-ui@swarm"]},  # a list where a mapping belongs
+        {"routers": None},
+        {},
+        [],
+        None,
+    ]
+    for payload in shapes:
+        def handler(request, payload=payload):
+            return httpx.Response(200, json=payload)
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
+
+        assert result is None, payload
+
+
+def test_an_unreadable_payload_leaves_every_router_unconsulted():
+    """The seam the defect lived at: neither the parser's tests nor the
+    renderer's could see it, because each side was right on its own."""
+    from terminal_status_panel.model import TraefikInfo
+
+    def handler(request):
+        return httpx.Response(200, json={"routers": ["kafbat-ui@swarm"]})
+
+    info = TraefikInfo(routers=[TraefikRouter(name="a"), TraefikRouter(name="b")])
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        accepted = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
+    if accepted is not None:  # what cli.collect_all does
+        collector.mark_rejected(info, accepted)
+
+    assert info.api_consulted is False
+    assert all(router.rejected is None for router in info.routers)
+
+
+def test_an_empty_router_list_is_a_readable_answer_and_rejects_everything():
+    """The counter-case: Traefik answered, in the right shape, that it holds
+    no routers. That is measured, and every configured router really was
+    rejected."""
+    from terminal_status_panel.model import TraefikInfo
+
+    def handler(request):
+        return httpx.Response(200, json={"routers": {}})
+
+    info = TraefikInfo(routers=[TraefikRouter(name="a")])
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        accepted = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
+    assert accepted == set()
+    collector.mark_rejected(info, accepted)
+    assert info.routers[0].rejected is True
 
 
 def test_fetch_accepted_returns_none_on_a_server_error_like_unreachable():
