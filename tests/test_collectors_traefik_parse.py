@@ -71,3 +71,88 @@ def test_an_unparsable_address_keeps_the_entrypoint_without_a_port():
 
 def test_no_arguments_yield_no_entrypoints():
     assert parse.parse_entrypoints([]) == []
+
+
+KAFBAT_LABELS = {
+    "traefik.enable": "true",
+    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt,kafbat",
+    "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/portale/kafka-ui`)",
+    "traefik.http.routers.kafbat-ui.tls": "true",
+    "traefik.http.services.kafbat-ui.loadbalancer.server.port": "8080",
+    "traefik.http.services.kafbat-ui.loadbalancer.server.scheme": "http",
+    "traefik.swarm.network": "kafbat-ui",
+}
+
+IMAGE_API_LABELS = {
+    "traefik.docker.network": "traefik-public",
+    "traefik.enable": "true",
+    "traefik.http.middlewares.image_api_stripprefix.stripprefix.prefixes":
+        "/wallet/image-api",
+    "traefik.http.routers.image_api.entrypoints": "websecure",
+    "traefik.http.routers.image_api.middlewares": "image_api_stripprefix",
+    "traefik.http.routers.image_api.rule":
+        "Host(`www.portal.uni-muenchen.de`) && PathPrefix(`/wallet/image-api`)",
+    "traefik.http.routers.image_api.tls": "true",
+    "traefik.http.services.image_api.loadbalancer.server.port": "8090",
+}
+
+
+def test_a_router_on_several_entrypoints_keeps_all_of_them():
+    routers, _, _ = parse.parse_labels(KAFBAT_LABELS, origin="kafbat-ui_kafbat-ui")
+    assert len(routers) == 1
+    assert routers[0].entrypoints == ["portalmgmt", "kafbat"]
+    assert routers[0].rule == "PathPrefix(`/portale/kafka-ui`)"
+    assert routers[0].tls is True
+    assert routers[0].origin == "kafbat-ui_kafbat-ui"
+    assert routers[0].source == "swarm"
+
+
+def test_a_router_without_a_service_key_defaults_to_its_own_name():
+    routers, _, _ = parse.parse_labels(KAFBAT_LABELS, origin="x")
+    assert routers[0].service == "kafbat-ui"
+
+
+def test_service_port_and_scheme_are_parsed():
+    _, _, services = parse.parse_labels(KAFBAT_LABELS, origin="kafbat-ui_kafbat-ui")
+    assert services["kafbat-ui"].port == 8080
+    assert services["kafbat-ui"].scheme == "http"
+    assert services["kafbat-ui"].docker_service == "kafbat-ui_kafbat-ui"
+
+
+def test_a_middleware_keeps_its_kind_and_first_key():
+    _, middlewares, _ = parse.parse_labels(IMAGE_API_LABELS, origin="x")
+    mw = middlewares["image_api_stripprefix"]
+    assert mw.kind == "stripprefix"
+    assert "prefixes" in mw.detail
+    assert "/wallet/image-api" in mw.detail
+
+
+def test_a_router_keeps_its_middleware_references():
+    routers, _, _ = parse.parse_labels(IMAGE_API_LABELS, origin="x")
+    assert routers[0].middlewares == ["image_api_stripprefix"]
+
+
+def test_labels_that_are_not_traefik_are_ignored():
+    routers, middlewares, services = parse.parse_labels(
+        {"com.docker.stack.namespace": "kafka", "lmu.service.description": "x"},
+        origin="x",
+    )
+    assert (routers, middlewares, services) == ([], {}, {})
+
+
+def test_a_service_without_a_port_still_appears():
+    _, _, services = parse.parse_labels(
+        {"traefik.http.services.plain.loadbalancer.server.scheme": "https"},
+        origin="x",
+    )
+    assert services["plain"].scheme == "https"
+    assert services["plain"].port is None
+
+
+def test_routers_come_back_in_a_stable_order():
+    labels = {
+        "traefik.http.routers.zebra.rule": "Path(`/z`)",
+        "traefik.http.routers.alpha.rule": "Path(`/a`)",
+    }
+    routers, _, _ = parse.parse_labels(labels, origin="x")
+    assert [r.name for r in routers] == ["alpha", "zebra"]
