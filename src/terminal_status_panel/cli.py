@@ -34,12 +34,11 @@ from .config import Config, load_config
 from .model import PanelData
 from .render.layout import SECTIONS, build_layout
 
-# The sections a bare `status-full` renders. Deliberately narrower than
-# `SECTIONS` (which lists every section the layout knows how to build, so
-# `--sections traefik` works): nine entrypoints and their routers would bury
-# the login banner, so `traefik` is opt-in via `--sections` or `status-traefik`
-# rather than part of the default full panel.
-DEFAULT_SECTIONS: tuple[str, ...] = ("server", "docker", "health")
+# The sections a bare `status-full` renders — every section the layout knows
+# how to build. The wiring would bury the banner as a tree, so `build_layout`
+# renders it in summary form whenever it appears beside other sections; the
+# full tree is what `status-traefik` is for.
+DEFAULT_SECTIONS: tuple[str, ...] = SECTIONS
 
 
 def _health_socket_timeout(cfg: Config) -> float:

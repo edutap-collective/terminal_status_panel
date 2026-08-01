@@ -66,11 +66,13 @@ def test_traefik_is_a_known_section():
     assert "traefik" in SECTIONS
 
 
-def test_traefik_is_not_in_the_default_full_panel():
-    """Nine entrypoints would bury the login banner."""
+def test_traefik_is_in_the_default_full_panel():
+    """It renders there in summary form — the tree would bury the banner, but
+    leaving the wiring out of the panel people actually see hides the findings
+    it exists to surface."""
     from terminal_status_panel import cli
 
-    assert "traefik" not in cli.DEFAULT_SECTIONS
+    assert "traefik" in cli.DEFAULT_SECTIONS
 
 
 def test_docker_section_receives_the_health_data(monkeypatch):
@@ -85,3 +87,54 @@ def test_docker_section_receives_the_health_data(monkeypatch):
     health = HealthInfo(clusters_probed=True)
     layout.docker_section(PanelData(swarm=SwarmInfo(reachable=True), health=health), Config())
     assert seen["health"] is health
+
+
+def _traefik_data():
+    from terminal_status_panel.model import (
+        ServiceStatus,
+        ServiceTask,
+        TraefikEntrypoint,
+        TraefikInfo,
+        TraefikRouter,
+        TraefikServiceRef,
+    )
+
+    return PanelData(
+        swarm=SwarmInfo(reachable=True, enabled=True, services=[
+            ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ]),
+        traefik=TraefikInfo(
+            reachable=True,
+            entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020",
+                                           port=2020)],
+            routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"],
+                                   rule="PathPrefix(`/portale/kafka-ui`)",
+                                   service="kafbat-ui")],
+            services={"kafbat-ui": TraefikServiceRef(
+                name="kafbat-ui", port=8080, scheme="http",
+                docker_service="kafbat-ui_kafbat-ui")},
+        ),
+    )
+
+
+def _has_branch(out: str, router: str) -> bool:
+    return any(line.strip().startswith(f"└─ {router}") for line in out.splitlines())
+
+
+def test_the_wiring_alone_gets_the_full_tree():
+    """Asked for on its own it is the whole point of the run."""
+    console = Console(width=120, force_terminal=True, color_system=None, record=True)
+    console.print(build_layout(_traefik_data(), Config(), ("traefik",)))
+    assert _has_branch(console.export_text(), "kafbat-ui")
+
+
+def test_the_wiring_beside_other_sections_is_summarised():
+    """One block of a panel, not a debugging view: the tree would push the
+    server header off the screen."""
+    console = Console(width=120, force_terminal=True, color_system=None, record=True)
+    console.print(build_layout(_traefik_data(), Config(), ("docker", "traefik")))
+    out = console.export_text()
+    assert "TRAEFIK WIRING" in out
+    assert not _has_branch(out, "kafbat-ui")
+    assert "1 router" in out

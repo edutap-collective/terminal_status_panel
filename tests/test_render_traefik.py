@@ -308,3 +308,79 @@ def test_file_provider_error_is_shown_as_a_warning_above_the_tree():
     # The tree still renders beneath the warning.
     tree_idx = next(i for i, ln in enumerate(lines) if "kafbat-ui" in ln)
     assert tree_idx > warning_idx
+
+
+def _render_compact(info, swarm=None, width=120):
+    console = Console(width=width, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(info, Config(), swarm, compact=True))
+    return capture.get()
+
+
+def test_compact_renders_one_line_per_entrypoint_not_a_branch():
+    """The full tree is ~70 lines on lrz_cc, which is a debugging view rather
+    than a login banner."""
+    swarm = SwarmInfo(reachable=True, enabled=True, services=[
+        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                      tasks=[ServiceTask("srv-01", "running")]),
+    ])
+    out = _render_compact(_wired(), swarm=swarm)
+    assert _branch_heads(out, "kafbat-ui") == 0
+    assert "1 router" in out
+    assert icons.OK in out
+    # Two entrypoints carry the router, one carries none — and the empty one
+    # is still named, since a published port nothing serves is a finding.
+    assert "no router" in out
+
+
+def test_compact_expands_only_the_routers_that_are_not_healthy():
+    """A summary that says ⚠️ without naming which router is not actionable;
+    expanding the healthy ones is what the full tree is for."""
+    info = _wired()
+    info.routers.append(TraefikRouter(
+        name="broken", entrypoints=["portalmgmt"],
+        rule="PathPrefix(`/gone`)", service="gone"))
+    swarm = SwarmInfo(reachable=True, enabled=True, services=[
+        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                      tasks=[ServiceTask("srv-01", "running")]),
+    ])
+    out = _render_compact(info, swarm=swarm)
+    assert _branch_heads(out, "broken") == 1
+    assert _branch_heads(out, "kafbat-ui") == 0
+
+
+def test_compact_shows_the_worst_verdict_of_an_entrypoint():
+    info = _wired()
+    info.routers.append(TraefikRouter(
+        name="broken", entrypoints=["portalmgmt"], service="gone"))
+    swarm = SwarmInfo(reachable=True, enabled=True, services=[
+        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                      tasks=[ServiceTask("srv-01", "running")]),
+    ])
+    out = _render_compact(info, swarm=swarm)
+    portalmgmt = [ln for ln in out.splitlines() if "portalmgmt" in ln][0]
+    assert icons.FAILED in portalmgmt
+    kafbat = [ln for ln in out.splitlines() if ln.strip().startswith("kafbat ")][0]
+    assert icons.OK in kafbat
+
+
+def test_compact_never_expands_on_an_unmeasured_docker():
+    """`·` is one condition for the whole panel, not a finding about any single
+    router — expanding on it would print every branch in full, which is exactly
+    what the summary exists to avoid."""
+    out = _render_compact(_wired(), swarm=None)
+    assert _branch_heads(out, "kafbat-ui") == 0
+    assert icons.UNKNOWN in out
+
+
+def test_compact_keeps_the_orphan_block_whole():
+    """The orphan block holds the findings, and a finding is never the part to
+    shorten."""
+    info = _wired()
+    info.routers.append(TraefikRouter(
+        name="image_api", entrypoints=["websecure"],
+        rule="Host(`www.portal.uni-muenchen.de`)", service="image_api"))
+    out = _render_compact(info)
+    assert "ORPHANED" in out
+    assert "websecure" in out
+    assert "Host(`www.portal.uni-muenchen.de`)" in out
