@@ -262,13 +262,26 @@ def test_wide_terminals_put_cluster_blocks_side_by_side():
 
 
 def test_narrow_terminals_stack_the_blocks():
+    """Width 40 is comfortably narrower than one block, so this asserts the
+    fallback itself rather than where the boundary happens to sit — pinning
+    that boundary would make the column padding untouchable."""
     health = HealthInfo(clusters_probed=True, clusters=[
         _cluster("postgres", "PostgreSQL-18"),
         _cluster("kafka", "cluster-id"),
     ])
-    out = _render(health, width=60)
+    out = _render(health, width=40)
     assert not [ln for ln in out.splitlines()
                 if "PostgreSQL" in ln and "Kafka" in ln]
+
+
+def test_very_wide_terminals_keep_the_blocks_side_by_side():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        _cluster("postgres", "PostgreSQL-18"),
+        _cluster("kafka", "cluster-id"),
+    ])
+    out = _render(health, width=200)
+    assert [ln for ln in out.splitlines()
+            if "PostgreSQL" in ln and "Kafka" in ln]
 
 
 def test_not_applicable_services_collapse_to_one_line():

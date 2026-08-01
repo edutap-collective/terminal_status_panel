@@ -120,8 +120,10 @@ def _clusters_body(health: HealthInfo) -> RenderableType:
     )
 
     # Columns flows the blocks into as many columns as the width allows and
-    # falls back to one on a narrow terminal.
-    parts: list[RenderableType] = [Columns(blocks, padding=(0, 8), expand=False)]
+    # falls back to one on a narrow terminal. The gap matches the PEERS/DNS
+    # grid below and the DOCKER INFOS tables, so the section is spaced like the
+    # rest of the dashboard.
+    parts: list[RenderableType] = [Columns(blocks, padding=(0, 4), expand=False)]
 
     if not_applicable:
         # A one-line "n/a" does not deserve a column of its own.

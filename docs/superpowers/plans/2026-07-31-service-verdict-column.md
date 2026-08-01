@@ -801,7 +801,7 @@ In the DOCKER INFOS description, add the column: it sits after the service name 
 State the three rules plainly:
 
 - `desired == 0` renders `·`, not `💀` — a service scaled to zero is a decision, not an outage.
-- For the five clustered services the **icon** comes from the cluster's own verdict while the **count** stays Docker's. `⚠️ 5/5` therefore means "every broker is running and the quorum is degraded anyway", which is the case a replica count alone gets wrong.
+- For the four clustered services that run as Docker services (GlusterFS is queried on the host, so it never gets a DOCKER INFOS row) the **icon** comes from the cluster's own verdict while the **count** stays Docker's. RustFS at `3/5 live` therefore renders `⚠️ 5/5` — a minority of members measured unhealthy while the majority quorum still holds and every container is up — which is the case a replica count alone gets wrong. A row measured `💀`/`⚠️` by its own replicas keeps that icon regardless: a cluster-level `✅` or `·` never talks it back up.
 - Under `status-docker`, which runs without the health section, a clustered service shows `·` plus its count rather than a replica-derived `✅`. "Five brokers are running" is not the claim the column makes. The same applies when the probe found no member on this node, or when the kind is not in `health.enabled`.
 
 - [ ] **Step 2: Note the cluster layout**
