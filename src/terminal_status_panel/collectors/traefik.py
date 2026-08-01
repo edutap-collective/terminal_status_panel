@@ -66,6 +66,29 @@ def _labels_of(service) -> dict:
     return _mapping(_spec_of(service).get("Labels"))
 
 
+def _mounted_config_names(service) -> set[str]:
+    """The Docker configs this service actually mounts.
+
+    Swarm keeps every generation of a config — ``traefik_dynamic_yml_v1``
+    through ``_v4`` all exist on ``lrz_cc`` — and only the ones named in the
+    service spec are the ones Traefik reads. Selecting by name prefix instead
+    parses the superseded generations too, which is how the panel came to show
+    ``ping-router`` four times per entrypoint and to invent orphans out of
+    entrypoints that were removed two revisions ago.
+    """
+    task_template = _mapping(_spec_of(service).get("TaskTemplate"))
+    container = _mapping(task_template.get("ContainerSpec"))
+    refs = container.get("Configs")
+    if not isinstance(refs, list):
+        return set()
+    names = set()
+    for ref in refs:
+        name = _mapping(ref).get("ConfigName")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
 def _config_text(config) -> str | None:
     """The decoded config body, or ``None`` when it could not be decoded."""
     data = _spec_of(config).get("Data") or ""
@@ -142,6 +165,7 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
     Never raises.
     """
     info = TraefikInfo()
+    mounted: set[str] | None = None
     with _socket_timeout(client, timeout):
         try:
             services = client.services.list()
@@ -153,6 +177,7 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             name = getattr(service, "name", "") or ""
             if any(pattern in name for pattern in TRAEFIK_SERVICE_PATTERNS):
                 info.entrypoints = parse_entrypoints(_args_of(service))
+                mounted = _mounted_config_names(service)
             routers, middlewares, refs = parse_labels(_labels_of(service), origin=name)
             info.routers.extend(routers)
             info.middlewares.update(middlewares)
@@ -167,9 +192,26 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             info.file_provider_error = f"{type(exc).__name__}: {exc}"
             configs = []
 
+    if mounted is None and configs:
+        # Without the Traefik service there is no way to tell a live config
+        # generation from a superseded one, and guessing by name would put
+        # routers on screen that Traefik has not read since two deploys ago.
+        # An unreadable file provider is the honest report: the warning names
+        # the reason, and the routers are visibly missing rather than wrong.
+        _note_file_provider_error(
+            info,
+            "traefik service not found, so which config generations are"
+            " mounted cannot be determined",
+        )
+        configs = []
+
     for config in configs:
         name = getattr(config, "name", "") or ""
         if DYNAMIC_CONFIG_PREFIX not in name:
+            continue
+        if name not in mounted:
+            # A superseded generation. Not an error and not worth a warning —
+            # Swarm keeping the old ones is normal.
             continue
         text = _config_text(config)
         if text is None:

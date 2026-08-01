@@ -6,11 +6,19 @@ from terminal_status_panel.model import TraefikRouter
 
 
 class _FakeService:
-    def __init__(self, name, labels=None, args=None):
+    def __init__(self, name, labels=None, args=None, configs=None):
         self.name = name
         spec = {"Labels": labels or {}}
+        container = {}
         if args is not None:
-            spec["TaskTemplate"] = {"ContainerSpec": {"Args": args}}
+            container["Args"] = args
+        if configs is not None:
+            # What the real Traefik service carries: one entry per mounted
+            # config generation, which is how the collector tells the live ones
+            # from the superseded ones Swarm keeps around.
+            container["Configs"] = [{"ConfigName": name} for name in configs]
+        if container:
+            spec["TaskTemplate"] = {"ContainerSpec": container}
         self.attrs = {"Spec": spec}
 
 
@@ -83,7 +91,8 @@ def test_collect_joins_labels_from_every_service():
 
 def test_collect_reads_the_file_provider_configs():
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[])],
+        services=[_FakeService("traefik_traefik", args=[],
+                               configs=["traefik_dynamic_yml_v2"])],
         configs=[_FakeConfig("traefik_dynamic_yml_v2", (
             "http:\n  routers:\n    api:\n      entrypoints: dashboard\n"
             "      rule: PathPrefix(`/traefik`)\n      service: api@internal\n"
@@ -197,7 +206,8 @@ def test_an_undecodable_config_is_reported_as_a_file_provider_error():
         attrs = {"Spec": {"Data": "not base64 %%%"}}
 
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[])],
+        services=[_FakeService("traefik_traefik", args=[],
+                               configs=["traefik_dynamic_yml_v2"])],
         configs=[_Undecodable()],
     )
     info = collector.collect_traefik(client)
@@ -208,7 +218,8 @@ def test_an_undecodable_config_is_reported_as_a_file_provider_error():
 
 def test_a_config_with_broken_yaml_is_reported_as_a_file_provider_error():
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[])],
+        services=[_FakeService("traefik_traefik", args=[],
+                               configs=["traefik_dynamic_yml_v2"])],
         configs=[_FakeConfig("traefik_dynamic_yml_v2", "http:\n  routers: [unclosed\n")],
     )
     info = collector.collect_traefik(client)
@@ -222,7 +233,8 @@ def test_an_empty_config_body_is_reported_as_a_file_provider_error():
     the decode guard and the YAML guard — the last silent way for the file
     provider to contribute no routers."""
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[])],
+        services=[_FakeService("traefik_traefik", args=[],
+                               configs=["traefik_dynamic_yml_v2"])],
         configs=[_FakeConfig("traefik_dynamic_yml_v2", "")],
     )
     info = collector.collect_traefik(client)
@@ -234,7 +246,8 @@ def test_an_empty_config_body_is_reported_as_a_file_provider_error():
 def test_a_config_that_parses_to_nothing_is_not_an_error():
     """Valid YAML without an http section is a real, empty answer."""
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[])],
+        services=[_FakeService("traefik_traefik", args=[],
+                               configs=["traefik_dynamic_yml_v2"])],
         configs=[_FakeConfig("traefik_dynamic_yml_v2", "tls:\n  options: {}\n")],
     )
     assert collector.collect_traefik(client).file_provider_error is None
@@ -426,3 +439,48 @@ def test_fetch_accepted_returns_none_on_a_server_error_like_unreachable():
         result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
 
     assert result is None
+
+
+def test_only_the_config_generations_the_service_mounts_are_read():
+    """Swarm keeps every generation. Reading them all put `ping-router` four
+    times on each entrypoint and invented orphans out of entrypoints removed
+    two revisions ago — the panel showed wiring Traefik has not read in weeks."""
+    body = (
+        "http:\n  routers:\n    ping-router:\n      entrypoints: {eps}\n"
+        "      rule: Path(`/_traefik_ping_`)\n      service: ping@internal\n"
+    )
+    client = _FakeClient(
+        services=[_FakeService("traefik_traefik",
+                               args=["--entryPoints.portalmgmt.address=:2020"],
+                               configs=["traefik_dynamic_yml_v4"])],
+        configs=[
+            _FakeConfig("traefik_dynamic_yml_v1", body.format(eps="db-ui, kafbat")),
+            _FakeConfig("traefik_dynamic_yml_v4", body.format(eps="portalmgmt")),
+        ],
+    )
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["ping-router"]
+    assert info.routers[0].entrypoints == ["portalmgmt"]
+    assert info.file_provider_error is None
+
+
+def test_without_the_traefik_service_no_config_generation_is_guessed():
+    """Which generation is live cannot be known, and showing all of them would
+    put stale routers on screen as if they were current. The routers are
+    visibly missing instead, with the reason named."""
+    client = _FakeClient(
+        services=[_FakeService("some_other_stack")],
+        configs=[_FakeConfig("traefik_dynamic_yml_v1", (
+            "http:\n  routers:\n    api:\n      rule: PathPrefix(`/traefik`)\n"
+        ))],
+    )
+    info = collector.collect_traefik(client)
+    assert info.routers == []
+    assert "traefik service not found" in info.file_provider_error
+
+
+def test_no_configs_at_all_is_not_reported_as_a_gap():
+    """Nothing was hidden, so nothing is claimed: a daemon without dynamic
+    configs must not read as a file provider that failed."""
+    info = collector.collect_traefik(_FakeClient(services=[_FakeService("other")]))
+    assert info.file_provider_error is None
