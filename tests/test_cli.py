@@ -206,3 +206,15 @@ def test_main_never_propagates_a_collector_explosion(isolated_cli):
 
     isolated_cli.setattr(cli, "collect_health", boom)
     assert cli.main(["--sections", "health"]) == 0
+
+
+def test_traefik_main_returns_zero(isolated_cli):
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: None)
+    assert cli.traefik_main([]) == 0
+
+
+def test_collect_all_skips_traefik_when_not_selected(isolated_cli):
+    called = []
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append(True))
+    cli.collect_all(Config(), sections=("server",))
+    assert called == []

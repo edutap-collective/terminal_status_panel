@@ -1,13 +1,17 @@
 """Compose sections into the final dashboard layout.
 
-The panel is split into three independently selectable sections:
+The panel is split into four independently selectable sections:
 
 - ``server``  — SYSTEM OVERVIEW + UPDATES (top row) and the SYSTEM STATUS block.
 - ``docker``  — the DOCKER INFOS block.
 - ``health``  — the CLUSTER HEALTH block.
+- ``traefik`` — the TRAEFIK WIRING block.
 
-``build_layout`` renders whichever sections are requested (default: all),
-followed by a shared footer, and stretches to the console width.
+``build_layout`` renders whichever sections are requested (default: all of
+``SECTIONS``), followed by a shared footer, and stretches to the console
+width. ``SECTIONS`` lists every section the layout knows how to build, so
+``--sections traefik`` works — it is not the same as the *default* set of
+sections a bare ``status-full`` renders; see ``cli.DEFAULT_SECTIONS`` for that.
 """
 
 from __future__ import annotations
@@ -23,8 +27,9 @@ from ..config import Config
 from ..model import PanelData
 from .health import health_section
 from .panels import services_section, system_overview, system_status, updates_panel
+from .traefik import traefik_section
 
-SECTIONS: tuple[str, ...] = ("server", "docker", "health")
+SECTIONS: tuple[str, ...] = ("server", "docker", "health", "traefik")
 
 
 def _footer() -> Table:
@@ -58,10 +63,16 @@ def health_block(data: PanelData, cfg: Config) -> RenderableType:
     return health_section(data.health, cfg)
 
 
+def traefik_block(data: PanelData, cfg: Config) -> RenderableType:
+    """The TRAEFIK WIRING block."""
+    return traefik_section(data.traefik, cfg, data.swarm)
+
+
 _SECTION_BUILDERS = {
     "server": server_section,
     "docker": docker_section,
     "health": health_block,
+    "traefik": traefik_block,
 }
 
 

@@ -53,6 +53,7 @@ status-full = "terminal_status_panel.cli:main"
 status-server = "terminal_status_panel.cli:server_main"
 status-docker = "terminal_status_panel.cli:docker_main"
 status-health = "terminal_status_panel.cli:health_main"
+status-traefik = "terminal_status_panel.cli:traefik_main"
 install-panel = "terminal_status_panel.install:main"
 
 [project.urls]

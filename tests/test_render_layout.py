@@ -62,6 +62,17 @@ def test_build_layout_renders_only_the_requested_section():
     assert "DOCKER" not in output
 
 
+def test_traefik_is_a_known_section():
+    assert "traefik" in SECTIONS
+
+
+def test_traefik_is_not_in_the_default_full_panel():
+    """Nine entrypoints would bury the login banner."""
+    from terminal_status_panel import cli
+
+    assert "traefik" not in cli.DEFAULT_SECTIONS
+
+
 def test_docker_section_receives_the_health_data(monkeypatch):
     """The Kafka verdict lives in the health section; the matrix must see it."""
     seen = {}
