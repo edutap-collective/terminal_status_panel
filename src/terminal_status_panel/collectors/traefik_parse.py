@@ -180,3 +180,17 @@ def parse_dynamic_yaml(
         middlewares[str(name)] = TraefikMiddleware(name=str(name), kind=kind)
 
     return routers, middlewares
+
+
+def parse_api_rawdata(payload: dict) -> set[str]:
+    """Router names Traefik actually accepted, from /api/rawdata.
+
+    Names carry a provider suffix there (kafbat-ui@swarm); the labels do not,
+    so it is stripped for comparison.
+    """
+    accepted: set[str] = set()
+    for name, spec in ((payload or {}).get("routers") or {}).items():
+        if isinstance(spec, dict) and spec.get("status") != "enabled":
+            continue
+        accepted.add(str(name).split("@", 1)[0])
+    return accepted

@@ -111,3 +111,23 @@ def test_a_broken_health_block_falls_back_to_defaults_instead_of_raising(tmp_pat
 budget = "not a number"
 """)
     assert load_config(path).health.budget == 5.0
+
+
+def test_traefik_api_is_off_by_default():
+    cfg = load_config("/nonexistent/config.toml")
+    assert cfg.traefik.url is None
+    assert cfg.traefik.cert is None
+
+
+def test_traefik_api_can_be_configured(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[traefik]\n"
+        'url = "https://localhost:8082/traefik/api/rawdata"\n'
+        'cert = "/etc/ssl/panel.pem"\n'
+        'key = "/etc/ssl/panel.key"\n'
+        'ca = "/etc/ssl/webfe-ca.pem"\n'
+    )
+    cfg = load_config(str(path))
+    assert cfg.traefik.url.endswith("/rawdata")
+    assert cfg.traefik.cert == "/etc/ssl/panel.pem"

@@ -14,7 +14,12 @@ from __future__ import annotations
 import base64
 
 from ..model import TraefikInfo, TraefikRouter
-from .traefik_parse import parse_dynamic_yaml, parse_entrypoints, parse_labels
+from .traefik_parse import (
+    parse_api_rawdata,
+    parse_dynamic_yaml,
+    parse_entrypoints,
+    parse_labels,
+)
 
 TRAEFIK_SERVICE_PATTERNS = ("traefik_traefik",)
 DYNAMIC_CONFIG_PREFIX = "traefik_dynamic"
@@ -83,3 +88,32 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
 
     info.routers.sort(key=lambda r: (r.source != "swarm", r.name))
     return info
+
+
+def mark_rejected(info: TraefikInfo, accepted: set[str]) -> None:
+    """Flag routers Traefik never accepted. Only call after really asking it."""
+    info.api_consulted = True
+    for router in info.routers:
+        router.rejected = router.name not in accepted
+
+
+def fetch_accepted(cfg) -> set[str] | None:
+    """Ask Traefik what it accepted, or None when not configured or reachable."""
+    api = getattr(cfg, "traefik", None)
+    if not api or not api.url or not api.cert:
+        return None
+    try:
+        import httpx
+
+        response = httpx.get(
+            api.url,
+            cert=(api.cert, api.key) if api.key else api.cert,
+            verify=api.ca or True,
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        return parse_api_rawdata(response.json())
+    except Exception:
+        # Unreachable is not the same as "rejected everything": leave the
+        # routers unconsulted rather than marking them all rejected.
+        return None

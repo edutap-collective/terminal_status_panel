@@ -270,3 +270,27 @@ def test_a_middleware_with_an_empty_spec_has_no_kind_rather_than_crashing():
 def test_a_middleware_with_a_null_spec_has_no_kind_rather_than_crashing():
     _, middlewares = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
     assert middlewares["null_middleware"].kind is None
+
+
+RAWDATA = {
+    "routers": {
+        "kafbat-ui@swarm": {"entryPoints": ["portalmgmt"], "status": "enabled"},
+        "api@internal": {"status": "enabled"},
+        "broken@swarm": {"status": "disabled", "error": ["bad rule"]},
+    }
+}
+
+
+def test_only_enabled_routers_count_as_accepted():
+    accepted = parse.parse_api_rawdata(RAWDATA)
+    assert "kafbat-ui" in accepted
+    assert "api" in accepted
+    assert "broken" not in accepted
+
+
+def test_the_provider_suffix_is_stripped():
+    assert parse.parse_api_rawdata(RAWDATA) >= {"kafbat-ui", "api"}
+
+
+def test_a_payload_without_routers_yields_nothing():
+    assert parse.parse_api_rawdata({}) == set()

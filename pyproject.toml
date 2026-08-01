@@ -29,6 +29,7 @@ dependencies = [
     "distro",
     "dnspython",  # query resolvers directly: getaddrinfo would hide /etc/hosts divergence
     "pyyaml",  # parse the Traefik file-provider config (api and ping-router routers)
+    "httpx",  # the optional cross-check against Traefik's own /api/rawdata
 ]
 
 [project.optional-dependencies]

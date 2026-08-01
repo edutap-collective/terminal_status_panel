@@ -82,6 +82,20 @@ DEFAULT_HEALTH_TIMEOUTS = {
 
 
 @dataclass
+class TraefikApiConfig:
+    """The optional runtime cross-check. Off unless a URL and cert are given.
+
+    Dormant today: the dashboard router requires a client certificate signed by
+    the webfe CA, and the Ansible role issues only app-server TinyCA ones.
+    """
+
+    url: str | None = None
+    cert: str | None = None
+    key: str | None = None
+    ca: str | None = None
+
+
+@dataclass
 class Config:
     width: int = 80
     docker_timeout: float = 1.5
@@ -95,6 +109,7 @@ class Config:
     )
     thresholds: Thresholds = field(default_factory=Thresholds)
     health: HealthConfig = field(default_factory=HealthConfig)
+    traefik: TraefikApiConfig = field(default_factory=TraefikApiConfig)
 
 
 def _section(data: dict, *keys: str) -> dict:
@@ -171,6 +186,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     services = _section(data, "services")
     infra = docker.get("infrastructure_stacks", services.get("infrastructure", None))
     infra_uis = docker.get("infra_ui_services", None)
+    traefik_section = _section(data, "traefik")
+    traefik = TraefikApiConfig(
+        url=traefik_section.get("url") or None,
+        cert=traefik_section.get("cert") or None,
+        key=traefik_section.get("key") or None,
+        ca=traefik_section.get("ca") or None,
+    )
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
@@ -182,4 +204,5 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         else list(DEFAULT_INFRA_UI_SERVICES),
         thresholds=thresholds,
         health=_health_config(data),
+        traefik=traefik,
     )

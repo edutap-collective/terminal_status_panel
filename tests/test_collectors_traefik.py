@@ -141,3 +141,22 @@ def test_the_normal_path_leaves_file_provider_error_unset():
     client = _FakeClient(services=[_FakeService("traefik_traefik", args=[])])
     info = collector.collect_traefik(client)
     assert info.file_provider_error is None
+
+
+def test_rejected_stays_none_when_the_api_was_not_consulted():
+    info = collector.collect_traefik(_FakeClient(services=[]))
+    assert info.api_consulted is False
+    assert all(r.rejected is None for r in info.routers)
+
+
+def test_mark_rejected_flags_routers_traefik_never_accepted():
+    from terminal_status_panel.model import TraefikInfo
+
+    info = TraefikInfo(routers=[
+        TraefikRouter(name="kept"), TraefikRouter(name="dropped"),
+    ])
+    collector.mark_rejected(info, {"kept"})
+    by_name = {r.name: r for r in info.routers}
+    assert by_name["kept"].rejected is False
+    assert by_name["dropped"].rejected is True
+    assert info.api_consulted is True
