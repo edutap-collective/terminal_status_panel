@@ -378,7 +378,11 @@ traefik.http.services.<name>.loadbalancer.server.port   = 8080
 traefik.http.services.<name>.loadbalancer.server.scheme = http
 ```
 
-`origin` is the Docker service the labels came from; it goes on every object so a row can say where it was configured.
+`origin` is the Docker service the labels came from. It goes on routers and
+service references, both of which display it. Middlewares carry no origin: they
+render only as `⇢ name (kind)` beneath their router, whose origin is already on
+screen — a field nothing shows would be scaffolding for a display that does not
+exist.
 
 Note two real quirks the fixtures carry: a router's `entrypoints` may name several, and a router's `service` key is often absent — Traefik then defaults the service name to the router's own name.
 
