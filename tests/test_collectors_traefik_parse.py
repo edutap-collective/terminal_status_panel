@@ -156,3 +156,74 @@ def test_routers_come_back_in_a_stable_order():
     }
     routers, _, _ = parse.parse_labels(labels, origin="x")
     assert [r.name for r in routers] == ["alpha", "zebra"]
+
+
+DYNAMIC_YML = """\
+http:
+    routers:
+        api:
+            entrypoints: dashboard
+            rule: PathPrefix(`/traefik`)
+            service: api@internal
+            tls: 'true'
+        ping-router:
+            entryPoints:
+            - login_lmu_de
+            - portalmgmt
+            - www_portal_uni_muenchen_de
+            - db-ui
+            - kafbat
+            - default
+            rule: Path(`/_traefik_ping_`)
+            service: ping@internal
+            tls: 'true'
+    serversTransports:
+        dummy: {}
+tls:
+    certificates: []
+    options:
+        default:
+            clientAuth:
+                caFiles:
+                - /certs/client_ca.pem
+                clientAuthType: RequireAndVerifyClientCert
+            sniStrict: false
+"""
+
+
+def test_file_routers_are_marked_as_coming_from_the_file_provider():
+    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="traefik_dynamic_yml_v2")
+    assert {r.name for r in routers} == {"api", "ping-router"}
+    assert all(r.source == "file" for r in routers)
+    assert all(r.origin == "traefik_dynamic_yml_v2" for r in routers)
+
+
+def test_a_single_entrypoint_string_becomes_a_list():
+    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    api = [r for r in routers if r.name == "api"][0]
+    assert api.entrypoints == ["dashboard"]
+    assert api.service == "api@internal"
+
+
+def test_the_capitalised_entrypoints_key_is_also_read():
+    """The file provider accepts entryPoints as well as entrypoints, and this
+    fixture uses both — one per router."""
+    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    ping = [r for r in routers if r.name == "ping-router"][0]
+    assert ping.entrypoints == [
+        "login_lmu_de", "portalmgmt", "www_portal_uni_muenchen_de",
+        "db-ui", "kafbat", "default",
+    ]
+
+
+def test_a_quoted_tls_string_counts_as_true():
+    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    assert all(r.tls for r in routers)
+
+
+def test_malformed_yaml_yields_nothing_rather_than_raising():
+    assert parse.parse_dynamic_yaml("http: [unclosed", origin="x") == ([], {})
+
+
+def test_yaml_without_an_http_section_yields_nothing():
+    assert parse.parse_dynamic_yaml("tls:\n  stores: {}\n", origin="x") == ([], {})

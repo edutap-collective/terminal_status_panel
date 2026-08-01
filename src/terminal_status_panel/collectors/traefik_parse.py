@@ -117,3 +117,57 @@ def parse_labels(
             router.service = router.name
 
     return [routers[name] for name in sorted(routers)], middlewares, services
+
+
+def _as_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]
+
+
+def parse_dynamic_yaml(text: str, origin: str):
+    """Routers and middlewares from a file-provider config.
+
+    The api and ping-router entries live only here. Without them the dashboard
+    entrypoint looks empty and the /_traefik_ping_ path every webfe health
+    check depends on is invisible.
+    """
+    import yaml
+
+    try:
+        data = yaml.safe_load(text) or {}
+    except Exception:
+        return [], {}
+    if not isinstance(data, dict):
+        return [], {}
+    http = data.get("http") or {}
+    if not isinstance(http, dict):
+        return [], {}
+
+    routers: list[TraefikRouter] = []
+    for name, spec in sorted((http.get("routers") or {}).items()):
+        if not isinstance(spec, dict):
+            continue
+        # The file provider accepts either spelling of the key.
+        entrypoints = spec.get("entrypoints", spec.get("entryPoints"))
+        routers.append(
+            TraefikRouter(
+                name=str(name),
+                entrypoints=_as_list(entrypoints),
+                rule=spec.get("rule"),
+                middlewares=_as_list(spec.get("middlewares")),
+                service=spec.get("service"),
+                tls=str(spec.get("tls", "")).lower() == "true",
+                source="file",
+                origin=origin,
+            )
+        )
+
+    middlewares: dict[str, TraefikMiddleware] = {}
+    for name, spec in sorted((http.get("middlewares") or {}).items()):
+        kind = next(iter(spec), None) if isinstance(spec, dict) else None
+        middlewares[str(name)] = TraefikMiddleware(name=str(name), kind=kind)
+
+    return routers, middlewares

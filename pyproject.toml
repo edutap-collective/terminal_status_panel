@@ -28,6 +28,7 @@ dependencies = [
     "psutil",
     "distro",
     "dnspython",  # query resolvers directly: getaddrinfo would hide /etc/hosts divergence
+    "pyyaml",  # parse the Traefik file-provider config (api and ping-router routers)
 ]
 
 [project.optional-dependencies]
