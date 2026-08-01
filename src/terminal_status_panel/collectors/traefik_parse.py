@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+import yaml
+
 from ..model import TraefikEntrypoint, TraefikMiddleware, TraefikRouter, TraefikServiceRef
 
 # The four default entrypoints are declared '--entrypoints.…' and the five
@@ -119,7 +121,7 @@ def parse_labels(
     return [routers[name] for name in sorted(routers)], middlewares, services
 
 
-def _as_list(value) -> list[str]:
+def _as_list(value: object) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
@@ -127,15 +129,15 @@ def _as_list(value) -> list[str]:
     return [str(item) for item in value]
 
 
-def parse_dynamic_yaml(text: str, origin: str):
+def parse_dynamic_yaml(
+    text: str, origin: str
+) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware]]:
     """Routers and middlewares from a file-provider config.
 
     The api and ping-router entries live only here. Without them the dashboard
     entrypoint looks empty and the /_traefik_ping_ path every webfe health
     check depends on is invisible.
     """
-    import yaml
-
     try:
         data = yaml.safe_load(text) or {}
     except Exception:
@@ -146,8 +148,15 @@ def parse_dynamic_yaml(text: str, origin: str):
     if not isinstance(http, dict):
         return [], {}
 
+    raw_routers = http.get("routers") or {}
+    if not isinstance(raw_routers, dict):
+        raw_routers = {}
+    raw_middlewares = http.get("middlewares") or {}
+    if not isinstance(raw_middlewares, dict):
+        raw_middlewares = {}
+
     routers: list[TraefikRouter] = []
-    for name, spec in sorted((http.get("routers") or {}).items()):
+    for name, spec in sorted(raw_routers.items()):
         if not isinstance(spec, dict):
             continue
         # The file provider accepts either spelling of the key.
@@ -166,7 +175,7 @@ def parse_dynamic_yaml(text: str, origin: str):
         )
 
     middlewares: dict[str, TraefikMiddleware] = {}
-    for name, spec in sorted((http.get("middlewares") or {}).items()):
+    for name, spec in sorted(raw_middlewares.items()):
         kind = next(iter(spec), None) if isinstance(spec, dict) else None
         middlewares[str(name)] = TraefikMiddleware(name=str(name), kind=kind)
 

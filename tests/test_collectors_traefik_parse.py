@@ -227,3 +227,46 @@ def test_malformed_yaml_yields_nothing_rather_than_raising():
 
 def test_yaml_without_an_http_section_yields_nothing():
     assert parse.parse_dynamic_yaml("tls:\n  stores: {}\n", origin="x") == ([], {})
+
+
+def test_routers_as_a_list_instead_of_a_mapping_yields_nothing():
+    """http.routers is documented as a mapping of name -> spec. If it comes
+    back as a list instead, .items() must not be called on it."""
+    assert parse.parse_dynamic_yaml("http:\n  routers:\n  - a\n  - b\n", origin="x") == ([], {})
+
+
+def test_middlewares_as_a_list_instead_of_a_mapping_yields_nothing():
+    """Same shape problem as routers, but for http.middlewares."""
+    routers, middlewares = parse.parse_dynamic_yaml(
+        "http:\n  middlewares:\n  - a\n  - b\n", origin="x"
+    )
+    assert (routers, middlewares) == ([], {})
+
+
+DYNAMIC_YML_WITH_MIDDLEWARES = """\
+http:
+    middlewares:
+        image_api_stripprefix:
+            stripprefix:
+                prefixes:
+                - /wallet/image-api
+        empty_middleware: {}
+        null_middleware:
+"""
+
+
+def test_a_middleware_keeps_its_name_and_first_configured_key_as_kind():
+    _, middlewares = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    mw = middlewares["image_api_stripprefix"]
+    assert mw.name == "image_api_stripprefix"
+    assert mw.kind == "stripprefix"
+
+
+def test_a_middleware_with_an_empty_spec_has_no_kind_rather_than_crashing():
+    _, middlewares = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    assert middlewares["empty_middleware"].kind is None
+
+
+def test_a_middleware_with_a_null_spec_has_no_kind_rather_than_crashing():
+    _, middlewares = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    assert middlewares["null_middleware"].kind is None
