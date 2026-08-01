@@ -3,7 +3,7 @@
 A small Python package that renders a colorful server status panel on login —
 best run from a `profile.d` snippet so it uses the full terminal width (see
 [Running it at login](#running-it-at-login)). The full-width dashboard is laid
-out in four tiers:
+out in four tiers by default, plus one opt-in fifth:
 
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
 - **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
@@ -93,6 +93,14 @@ out in four tiers:
   [Cluster health checks](#cluster-health-checks)
   below for the full icon vocabulary and what the section deliberately
   cannot see.
+- **TRAEFIK WIRING** *(opt-in — `status-traefik`, or `status-full --sections
+  server,docker,health,traefik`; **not** part of `status-full`'s default,
+  since nine entrypoints and their routers would bury the login banner)* —
+  Traefik's wiring **as configured**: one branch per entrypoint (ordered by
+  port), each with its routers, their middlewares, and the service they point
+  at. See [Traefik wiring](#traefik-wiring) below for what "as configured"
+  means, the orphaned-router block, and the optional (currently dormant) live
+  cross-check against Traefik itself.
 
 The panel itself opens no database or broker connection and holds no
 credentials. Its only privilege is the Docker socket: the Docker section
@@ -116,40 +124,50 @@ pip install terminal-status-panel     # from PyPI, once published
 pip install .
 ```
 
-This installs four panel commands (`status-full`, `status-server`,
-`status-docker`, `status-health`) plus an `install-panel` helper to wire it
-into a login shell.
+This installs five panel commands (`status-full`, `status-server`,
+`status-docker`, `status-health`, `status-traefik`) plus an `install-panel`
+helper to wire it into a login shell.
 
 ## Commands (sections)
 
-The dashboard is split into three independently runnable sections, each with
+The dashboard is split into four independently runnable sections, each with
 its own entry point — plus the combined command:
 
 | Command | Sections | Use |
 |---------|----------|-----|
-| `status-full` | server + docker + health | The full panel (default). |
+| `status-full` | server + docker + health | The full panel (default). `traefik` is **not** included — see below. |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
 | `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `·` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
 | `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
+| `status-traefik` | traefik only | Traefik's entrypoint → router → middleware → service wiring, **as configured**. Opt-in: run it explicitly, or add `traefik` to `--sections` on `status-full`. |
 
 Each section only collects the data it needs: `status-docker` never touches
 the system collectors, `status-server` never opens the Docker socket, and
 `status-health` never touches the system collectors either (though it does
 open the Docker socket, to `exec` into service containers) — so you can run
-just what a given host cares about. The combined command also accepts
-`--sections server,docker,health` to pick explicitly.
+just what a given host cares about. `status-traefik` also opens the Docker
+socket, to list Swarm services and configs and to read the service states its
+tree renders verdicts from (the DOCKER INFOS block itself stays unrendered),
+but runs no `exec` and reaches no network beyond Docker unless the optional
+`[traefik]` cross-check is configured (see
+[Traefik wiring](#traefik-wiring)). The combined command also
+accepts `--sections` with any comma-separated subset to pick explicitly, e.g.
+`--sections server,docker,health,traefik` to render everything, including
+`traefik`, in one go.
 
-Any of the four works in the profile.d snippet (see *Running it at login*) —
-e.g. call `status-docker` or `status-health` on Docker Swarm nodes and
-`status-server` on plain servers.
+Any of the five works in the profile.d snippet (see *Running it at login*) —
+e.g. call `status-docker` or `status-health` on Docker Swarm nodes,
+`status-server` on plain servers, and `status-traefik` wherever you want to
+check what Traefik is actually wired to serve.
 
 ## Usage
 
 ```bash
-status-full   [--sections server,docker,health] [--width N] [--no-color] [--config PATH]
+status-full    [--sections server,docker,health,traefik] [--width N] [--no-color] [--config PATH]
 status-server  [--width N] [--no-color] [--config PATH]
 status-docker  [--width N] [--no-color] [--config PATH]
 status-health  [--width N] [--no-color] [--config PATH]
+status-traefik [--width N] [--no-color] [--config PATH]
 ```
 
 The command **always exits 0** so it can never break a login shell. If a
@@ -160,7 +178,7 @@ a placeholder instead of erroring.
 
 | Option        | Default | Description |
 |---------------|---------|-------------|
-| `--sections`  | *(all / per command)* | Comma-separated sections to render: `server`, `docker`, `health`. On `status-full` the default is all three; the dedicated commands fix their own section. |
+| `--sections`  | *(per command)* | Comma-separated sections to render: `server`, `docker`, `health`, `traefik`. On `status-full` the default is `server,docker,health` (not `traefik` — see [Commands](#commands-sections)); the dedicated commands fix their own section. |
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
 | `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
@@ -205,6 +223,9 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
 | `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
+| `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see [Traefik wiring](#traefik-wiring) for why it cannot work on today's app servers. |
+| `traefik.cert` / `traefik.key` | *(unset)* | Client certificate/key for that endpoint (mTLS). Both `url` and `cert` must be set for the cross-check to run at all. |
+| `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate. Unset, httpx falls back to **certifi's** bundle, *not* the system trust store — a corporate CA installed in `/etc/ssl/certs` is not picked up (only `SSL_CERT_FILE`/`SSL_CERT_DIR` in the environment override it). Set this explicitly for a privately signed endpoint. |
 
 ### Full example
 
@@ -446,6 +467,88 @@ this blind spot is specific to the health section's per-node view.
   than an error — the tool being unreachable says nothing about the volume's
   actual health.
 
+## Traefik wiring
+
+`status-traefik` (and the `traefik` section inside `status-full`, when
+explicitly requested) reads Traefik's entrypoint → router → middleware →
+service wiring straight from the Docker API: the entrypoints from the
+Traefik service's own command arguments, the routers/middlewares/services
+from every Swarm service's `traefik.http.*` labels, and the file-provider
+routers from the mounted Docker configs (`traefik_dynamic*`) — the `api` and
+`ping-router` entries live only there. No credentials beyond the Docker
+socket are needed, and no change to the Traefik deployment.
+
+The panel renders one branch per entrypoint (sorted by port), each listing
+its routers (dimmed when they come from the file provider), their
+middlewares, and the Docker service each one points at — cross-checked
+against the same Swarm service data the DOCKER INFOS section uses, through
+the same `service_verdict`, so one service never gets two verdicts. That
+data is collected whenever the `traefik` section runs, including for a bare
+`status-traefik`; the DOCKER INFOS block itself is *not* rendered as a side
+effect. When the Docker daemon gives no answer at all — no client, or an
+unreachable or non-Swarm daemon — the service line shows a neutral `·`
+rather than claiming the service is missing, since nothing was measured. A
+router naming no
+entrypoint is attached to every entrypoint by Traefik itself, so it appears
+under all of them; an entrypoint with no attached router reads `— no
+router`, which is a finding (a published port nothing serves), not an
+absence.
+
+### What "as configured" means, and its limit
+
+Everything above is read from *configuration* — labels and YAML — never from
+Traefik's own runtime state. **A router with a typo'd rule, or naming an
+entrypoint that does not exist, still appears here exactly as declared**,
+because nothing in this reading path asks Traefik whether it actually
+accepted it. The real case on this cluster: the `image_api` router's label
+names the entrypoint `websecure` (Traefik's own common naming convention for
+a TLS entrypoint), but this cluster's nine entrypoints are named `dashboard`,
+`ping`, `default`, `https`, `login_lmu_de`, `portalmgmt`,
+`www_portal_uni_muenchen_de`, `db-ui` and `kafbat` — no `websecure` among
+them, so the router is wired to a port that plainly doesn't exist. Since a
+tree keyed by entrypoint has no branch to put such a router under, it would
+otherwise vanish from the panel silently. Instead it gets its own
+**ORPHANED ROUTERS** block, listing the router, the entrypoint name(s) it
+refers to that do not exist, its rule, and the service it would have pointed
+at.
+
+When the Docker configs backing the file provider could not be listed at
+all, a `file provider unreadable: …` warning appears above the tree — a
+partial-read failure, distinct from the routers simply being empty. Because
+`api` and `ping-router` live only in the file provider, this warning is the
+signal that their absence below is a read failure, not a finding.
+
+### The optional live cross-check
+
+The `[traefik]` config section (`url`, `cert`, `key`, `ca` — see
+[Configuration reference](#configuration-reference)) is meant to close the
+"as configured" gap: given Traefik's `/api/rawdata` endpoint and a client
+certificate, the collector asks Traefik what it actually accepted and
+records the answer per router.
+
+**It is dormant on every app server today, and should stay unset.** Reaching
+that endpoint needs a client certificate signed by the **webfe CA**, and the
+Ansible role that provisions app servers currently issues only
+**app-server TinyCA** certificates — for Traefik→service mTLS, a different
+trust chain than the one the dashboard's own listener expects. Configuring
+`traefik.url` without a certificate the dashboard accepts does not error: an
+unreachable or rejected connection is treated the same as "not configured"
+(see `fetch_accepted` in `collectors/traefik.py`) and the check is silently
+skipped, so no test will surface the mistake. Leave the section unset until
+the app servers have a certificate from the right CA.
+
+When the cross-check does run, the tree shows its answer: a router Traefik
+reported as *not* enabled is marked `💀 rejected by Traefik` on its own line
+— the configuration is there, Traefik declined it. The accepted case adds
+nothing: the tree already reads as configured-and-accepted, and a second
+checkmark on every line would only be noise.
+
+Nothing is marked unless Traefik was actually asked and actually answered
+about that router. With `[traefik]` unset, unreachable, or answering in a
+shape the parser cannot read (a router whose entry carries no `status` at
+all), no marker appears — "we did not ask" and "Traefik said no" must never
+look alike.
+
 ## Running it at login
 
 **Recommended: run it from `profile.d` (the login shell), not from
@@ -520,7 +623,7 @@ Options:
 | Option | Values | Default | Meaning |
 |--------|--------|---------|---------|
 | `--scope` | `global` \| `user` | `user` | `/etc/profile.d` (needs root) vs. your own login profile. |
-| `--panel` | `full` \| `server` \| `docker` \| `health` | `full` | Which command to run; repeatable. |
+| `--panel` | `full` \| `server` \| `docker` \| `health` \| `traefik` | `full` | Which command to run; repeatable. |
 | `--shell` | `auto` \| `bash` \| `zsh` | `auto` | Target profile; `zsh` uses `zprofile` (zsh does not read `/etc/profile`). |
 | `--uninstall` | — | — | Remove a previous install. |
 | `--dry-run` | — | — | Show what would change, write nothing. |

@@ -88,3 +88,11 @@ def test_main_user_install_health(tmp_path, monkeypatch, capsys):
     assert rc_arg == 0
     assert "status-health" in cli_home_profile.read_text()
     assert "login shells" in capsys.readouterr().out
+
+
+def test_install_panel_can_wire_up_traefik(tmp_path, monkeypatch):
+    """install.py derives --panel choices from PANELS; a missing entry made
+    --panel health unusable once already."""
+    from terminal_status_panel import install
+
+    assert install.PANELS["traefik"] == "status-traefik"

@@ -1,15 +1,19 @@
 """Command-line entry points: collect data, render the panel, always exit 0.
 
-Four console scripts share this module:
+Five console scripts share this module:
 
-- ``status-full``   — all sections (``server`` + ``docker`` + ``health``).
-- ``status-server`` — only the system/server section.
-- ``status-docker`` — only the Docker section.
-- ``status-health`` — only the cluster health section.
+- ``status-full``    — the default sections (``server`` + ``docker`` + ``health``).
+- ``status-server``  — only the system/server section.
+- ``status-docker``  — only the Docker section.
+- ``status-health``  — only the cluster health section.
+- ``status-traefik`` — only the Traefik wiring section.
 
 Each section collects only the data it needs, so ``status-docker`` never
 touches the system collectors and ``status-server`` never opens the Docker
 socket.
+
+``status-traefik`` is deliberately not part of ``status-full``'s default —
+see ``DEFAULT_SECTIONS`` below.
 """
 
 from __future__ import annotations
@@ -24,10 +28,18 @@ from .collectors.docker import collect_docker
 from .collectors.health import collect_health
 from .collectors.resources import collect_resources
 from .collectors.system import collect_system
+from .collectors.traefik import collect_traefik, fetch_accepted, mark_rejected
 from .collectors.updates import collect_updates
 from .config import Config, load_config
 from .model import PanelData
 from .render.layout import SECTIONS, build_layout
+
+# The sections a bare `status-full` renders. Deliberately narrower than
+# `SECTIONS` (which lists every section the layout knows how to build, so
+# `--sections traefik` works): nine entrypoints and their routers would bury
+# the login banner, so `traefik` is opt-in via `--sections` or `status-traefik`
+# rather than part of the default full panel.
+DEFAULT_SECTIONS: tuple[str, ...] = ("server", "docker", "health")
 
 
 def _health_socket_timeout(cfg: Config) -> float:
@@ -92,14 +104,20 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     server = "server" in sections
     docker_section = "docker" in sections
     health = "health" in sections
+    traefik = "traefik" in sections
 
+    # The traefik section needs this data too, though it renders no DOCKER
+    # INFOS block: every router's service line is resolved against the Swarm
+    # service list, and without it `status-traefik` — the command the README
+    # documents as the way to run the wiring viewer — could only ever print
+    # the neutral `·`, never a verdict.
     swarm = (
         collect_docker(
             timeout=cfg.docker_timeout,
             critical=cfg.critical_services,
             description_label=cfg.description_label,
         )
-        if docker_section
+        if docker_section or traefik
         else None
     )
 
@@ -118,12 +136,24 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
             ),
         )
 
+    traefik_info = None
+    if traefik:
+        client = _docker_client(cfg)
+        traefik_info = collect_traefik(client, timeout=cfg.docker_timeout)
+        # The API cross-check is optional (see TraefikApiConfig) and, when
+        # unreachable, `fetch_accepted` returns None rather than an empty set —
+        # so an unreachable API leaves every router unconsulted, not rejected.
+        accepted = fetch_accepted(cfg)
+        if accepted is not None:
+            mark_rejected(traefik_info, accepted)
+
     return PanelData(
         system=collect_system() if server else None,
         resources=collect_resources() if server else None,
         updates=collect_updates(timeout=cfg.docker_timeout) if server else None,
         swarm=swarm,
         health=health_info,
+        traefik=traefik_info,
     )
 
 
@@ -161,11 +191,12 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     parser.add_argument("--config", default=None, help="path to a TOML config file")
     parser.add_argument("--sections", default=None,
-                        help="comma-separated sections to render: server,docker,health")
+                        help="comma-separated sections to render: "
+                             "server,docker,health,traefik")
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None, sections: tuple[str, ...] = SECTIONS,
+def main(argv: list[str] | None = None, sections: tuple[str, ...] = DEFAULT_SECTIONS,
          prog: str = "status-full") -> int:
     """Render the status panel. Always returns 0 — never fails a login."""
     try:
@@ -195,6 +226,11 @@ def docker_main(argv: list[str] | None = None) -> int:
 def health_main(argv: list[str] | None = None) -> int:
     """Entry point for ``status-health`` — cluster health section only."""
     return main(argv, sections=("health",), prog="status-health")
+
+
+def traefik_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``status-traefik`` — the wiring viewer only."""
+    return main(argv, sections=("traefik",), prog="status-traefik")
 
 
 if __name__ == "__main__":

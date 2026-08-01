@@ -206,3 +206,70 @@ def test_main_never_propagates_a_collector_explosion(isolated_cli):
 
     isolated_cli.setattr(cli, "collect_health", boom)
     assert cli.main(["--sections", "health"]) == 0
+
+
+def test_traefik_main_returns_zero(isolated_cli):
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: None)
+    assert cli.traefik_main([]) == 0
+
+
+def test_the_traefik_section_collects_the_swarm_data_too(isolated_cli):
+    """Without it every service line renders `·`: the tree would never show a
+    real verdict from the command the README documents as the way to run it,
+    and `service_verdict` — reused so there is no second verdict logic — would
+    be dead in that path."""
+    from terminal_status_panel.model import ServiceStatus, SwarmInfo, TraefikInfo
+
+    swarm = SwarmInfo(reachable=True, enabled=True,
+                      services=[ServiceStatus("kafbat-ui_kafbat-ui", 1, 1)])
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: swarm)
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: TraefikInfo())
+    data = cli.collect_all(Config(), sections=("traefik",))
+    assert data.swarm is swarm
+
+
+def test_the_traefik_section_does_not_render_docker_infos(isolated_cli, capsys):
+    """Only the data is fetched — the DOCKER INFOS block stays out of the
+    traefik-only panel."""
+    from terminal_status_panel.model import SwarmInfo, TraefikInfo
+
+    isolated_cli.setattr(cli, "collect_docker",
+                         lambda *a, **k: SwarmInfo(reachable=True, enabled=True))
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: TraefikInfo())
+    assert cli.traefik_main(["--width", "100"]) == 0
+    out = capsys.readouterr().out
+    assert "TRAEFIK WIRING" in out
+    assert "DOCKER INFOS" not in out
+
+
+def test_a_traefik_only_panel_shows_a_real_verdict_not_a_dot(isolated_cli, capsys):
+    from terminal_status_panel.model import (
+        ServiceStatus,
+        SwarmInfo,
+        TraefikEntrypoint,
+        TraefikInfo,
+        TraefikRouter,
+        TraefikServiceRef,
+    )
+
+    swarm = SwarmInfo(reachable=True, enabled=True,
+                      services=[ServiceStatus("kafbat-ui_kafbat-ui", 1, 1)])
+    info = TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
+        routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"],
+                               service="kafbat-ui")],
+        services={"kafbat-ui": TraefikServiceRef(
+            name="kafbat-ui", docker_service="kafbat-ui_kafbat-ui")},
+    )
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: swarm)
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: info)
+    assert cli.traefik_main(["--width", "100"]) == 0
+    assert "1/1" in capsys.readouterr().out
+
+
+def test_collect_all_skips_traefik_when_not_selected(isolated_cli):
+    called = []
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append(True))
+    cli.collect_all(Config(), sections=("server",))
+    assert called == []
