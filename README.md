@@ -16,7 +16,17 @@ out in four tiers:
   Per-node replicas of the same service (e.g. `kafka_kafka-<node>` on every
   node) collapse into a single row; a stack with one logical service shows as
   one row named after the stack, a stack with several shows a header plus one
-  sub-row per service (stack prefix and node name stripped). Each row also
+  sub-row per service (stack prefix and node name stripped). A trailing
+  `_<digits>` is stripped the same way, so ordinal instances collapse too — a
+  service deployed as `heidi_connector_1`, `_2`, `_3` (one pinned instance per
+  node, each with its own secrets) renders as a single `heidi_connector` row.
+  That stripping is unconditional, and it has an accepted cost: if one
+  instance is later removed from the deployment, its row just folds into the
+  remaining ones, and the panel reads `✅ 1/1` with nothing to say a second
+  instance was ever expected. The gap is invisible only across a
+  *deployment* change, never a *failure* — a failing instance still has a
+  desired replica and renders `💀` or `⚠️` in both the Working column and its
+  node cell, so a lost instance is silent but a broken one is not. Each row also
   carries a **Working** cell right after the service name: an icon plus the
   row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
   Three rules keep that cell from over-claiming:
@@ -54,11 +64,18 @@ out in four tiers:
   (`healthy is None` — MongoDB reports its replica-set members but not their
   state) does not raise this warning; not measured is not a failure.
 
-  Columns are otherwise the nodes (alphabetical) with ✅ / 💀 placement, plus a
-  description column. See [Icon vocabulary](#icon-vocabulary) for what each
-  glyph means — the Working column uses exactly the same vocabulary, no new
-  glyphs, including `✗` when the underlying cluster probe itself failed (only
-  `…`, the time-budget marker, never appears in this column).
+  Columns are otherwise the nodes (alphabetical), plus a description column.
+  A node cell holding a single task keeps the bare glyph, ✅ or 💀 — the
+  overwhelming majority of cells, since most rows place one task per node —
+  and from two tasks up it carries the count right after the glyph, with no
+  space in between: `✅2` when all of them run, `⚠️1/2` when some do, `💀0/2`
+  when none do. (Grouping can put more than one task on the same node — after
+  ordinal stripping merges two originally separate services into one row,
+  both can land on the same node, and that node's cell counts both.) See
+  [Icon vocabulary](#icon-vocabulary) for what each glyph means — the Working
+  column uses exactly the same vocabulary, no new glyphs, including `✗` when
+  the underlying cluster probe itself failed (only `…`, the time-budget
+  marker, never appears in this column).
 - **CLUSTER HEALTH** — the clustered infrastructure services this node
   participates in (PostgreSQL, MongoDB, Kafka, GlusterFS, RustFS) with
   leader/member state, WireGuard peer handshake ages (TCP-probe fallback when
@@ -176,7 +193,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `width` | `80` | Fallback render width when no TTY is available (see width resolution above). |
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
 | `docker.description_label` | `"lmu.service.description"` | Docker **service label** read as the per-service description column. |
-| `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch"]` | Case-insensitive substrings. A stack (or ungrouped service, e.g. `registry`) whose name matches goes into the **Infrastruktur** column; everything else goes into **Service**. |
+| `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A stack (or ungrouped service, e.g. `registry`) whose name matches goes into the **Infrastruktur** column; everything else goes into **Service**. |
 | `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastruktur** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
 | `thresholds.memory.warning` / `.critical` | `75` / `90` | RAM usage % thresholds (yellow / red). |
