@@ -224,6 +224,9 @@ class TraefikInfo:
     services: dict[str, TraefikServiceRef] = field(default_factory=dict)
     api_consulted: bool = False
     error: str | None = None
+    # A partial failure: the labels were read but the file provider was not.
+    # Distinct from `error`, which means nothing could be read at all.
+    file_provider_error: str | None = None
 
 
 @dataclass

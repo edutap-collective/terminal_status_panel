@@ -120,6 +120,7 @@ def test_traefik_info_defaults_are_empty_and_unconsulted():
     assert info.services == {}
     assert info.api_consulted is False
     assert info.error is None
+    assert info.file_provider_error is None
 
 
 def test_panel_data_carries_traefik():

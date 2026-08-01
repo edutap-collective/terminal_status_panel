@@ -115,3 +115,29 @@ def test_no_traefik_service_yields_no_entrypoints_but_does_not_fail():
     assert info.reachable is True
     assert info.entrypoints == []
     assert info.error is None
+
+
+def test_a_broken_file_provider_is_reported_but_labels_still_stand():
+    class _ConfigsBreak(_FakeClient):
+        @property
+        def configs(self):
+            raise RuntimeError("config read failed")
+
+    client = _ConfigsBreak(services=[
+        _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+        _FakeService("kafbat-ui_kafbat-ui", labels={
+            "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
+            "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    assert info.reachable is True
+    assert info.error is None
+    assert "config read failed" in info.file_provider_error
+    assert [r.name for r in info.routers] == ["kafbat-ui"]
+
+
+def test_the_normal_path_leaves_file_provider_error_unset():
+    client = _FakeClient(services=[_FakeService("traefik_traefik", args=[])])
+    info = collector.collect_traefik(client)
+    assert info.file_provider_error is None

@@ -67,8 +67,12 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
 
     try:
         configs = client.configs.list()
-    except Exception:
-        configs = []  # the file provider is optional; the labels still stand
+    except Exception as exc:
+        # The file provider is optional, but a read failure is not the same
+        # as "no dynamic config exists" — the caller must be able to tell
+        # them apart, since api@internal and ping-router live only there.
+        info.file_provider_error = f"{type(exc).__name__}: {exc}"
+        configs = []
     for config in configs:
         name = getattr(config, "name", "") or ""
         if DYNAMIC_CONFIG_PREFIX not in name:
