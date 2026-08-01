@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import base64
 
+import httpx
+
 from ..model import TraefikInfo, TraefikRouter
 from .traefik_parse import (
     parse_api_rawdata,
@@ -97,20 +99,27 @@ def mark_rejected(info: TraefikInfo, accepted: set[str]) -> None:
         router.rejected = router.name not in accepted
 
 
-def fetch_accepted(cfg) -> set[str] | None:
-    """Ask Traefik what it accepted, or None when not configured or reachable."""
+def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | None:
+    """Ask Traefik what it accepted, or None when not configured or reachable.
+
+    ``client`` is a private testing seam: pass an ``httpx.Client`` built on a
+    ``MockTransport`` to exercise this against a recorded response without a
+    real socket. Production code never sets it — the default builds a plain
+    request with the configured mTLS material.
+    """
     api = getattr(cfg, "traefik", None)
     if not api or not api.url or not api.cert:
         return None
     try:
-        import httpx
-
-        response = httpx.get(
-            api.url,
-            cert=(api.cert, api.key) if api.key else api.cert,
-            verify=api.ca or True,
-            timeout=5.0,
-        )
+        if client is not None:
+            response = client.get(api.url, timeout=5.0)
+        else:
+            response = httpx.get(
+                api.url,
+                cert=(api.cert, api.key) if api.key else api.cert,
+                verify=api.ca or True,
+                timeout=5.0,
+            )
         response.raise_for_status()
         return parse_api_rawdata(response.json())
     except Exception:

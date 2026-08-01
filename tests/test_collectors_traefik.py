@@ -1,4 +1,7 @@
+import httpx
+
 from terminal_status_panel.collectors import traefik as collector
+from terminal_status_panel.config import Config, TraefikApiConfig
 from terminal_status_panel.model import TraefikRouter
 
 
@@ -160,3 +163,59 @@ def test_mark_rejected_flags_routers_traefik_never_accepted():
     assert by_name["kept"].rejected is False
     assert by_name["dropped"].rejected is True
     assert info.api_consulted is True
+
+
+_API_CFG = TraefikApiConfig(
+    url="https://localhost:8082/traefik/api/rawdata", cert="/etc/ssl/panel.pem"
+)
+
+
+def test_fetch_accepted_returns_none_and_makes_no_request_when_not_configured():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"routers": {}})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = collector.fetch_accepted(Config(), client=client)
+
+    assert result is None
+    assert calls == []
+
+
+def test_fetch_accepted_returns_none_not_empty_set_when_unreachable():
+    def handler(request):
+        raise httpx.ConnectError("connection refused", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
+
+    assert result is None
+
+
+def test_fetch_accepted_parses_a_successful_response():
+    payload = {
+        "routers": {
+            "kafbat-ui@swarm": {"entryPoints": ["portalmgmt"], "status": "enabled"},
+            "broken@swarm": {"status": "disabled", "error": ["bad rule"]},
+        }
+    }
+
+    def handler(request):
+        return httpx.Response(200, json=payload)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
+
+    assert result == {"kafbat-ui"}
+
+
+def test_fetch_accepted_returns_none_on_a_server_error_like_unreachable():
+    def handler(request):
+        return httpx.Response(500)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
+
+    assert result is None
