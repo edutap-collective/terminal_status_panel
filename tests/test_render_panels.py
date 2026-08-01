@@ -448,3 +448,131 @@ def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert f"{icons.OK} 4/4" in out
     assert "4/0" not in out
+
+
+def _tasks(*states):
+    """One ServiceStatus holding tasks on node 'srv-01' with the given states."""
+    return [ServiceStatus("svc", sum(s == "running" for s in states), len(states),
+                          tasks=[ServiceTask("srv-01", s) for s in states])]
+
+
+def test_a_single_running_task_still_renders_the_bare_glyph():
+    assert panels._node_cell(_tasks("running"), "srv-01").plain == panels._OK
+
+
+def test_a_single_failed_task_still_renders_the_bare_glyph():
+    assert panels._node_cell(_tasks("failed"), "srv-01").plain == panels._DEAD
+
+
+def test_an_empty_node_cell_stays_blank():
+    assert panels._node_cell(_tasks("running"), "other-node").plain == " "
+
+
+def test_several_running_tasks_show_their_count():
+    assert panels._node_cell(_tasks("running", "running"), "srv-01").plain == f"{panels._OK}2"
+    assert (
+        panels._node_cell(_tasks("running", "running", "running"), "srv-01").plain
+        == f"{panels._OK}3"
+    )
+
+
+def test_a_partially_staffed_node_is_degraded_not_broken():
+    cell = panels._node_cell(_tasks("running", "failed"), "srv-01")
+    assert cell.plain == f"{panels._WARN}1/2"
+
+
+def test_a_node_where_nothing_runs_is_broken_with_its_count():
+    cell = panels._node_cell(_tasks("failed", "failed"), "srv-01")
+    assert cell.plain == f"{panels._DEAD}0/2"
+
+
+def test_tasks_of_several_services_in_one_row_are_counted_together():
+    """A row bundles services — after ordinal grouping, two instances of one
+    service can share a node."""
+    services = [
+        ServiceStatus("svc_1", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+        ServiceStatus("svc_2", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+    ]
+    assert panels._node_cell(services, "srv-01").plain == f"{panels._OK}2"
+
+
+NODES = ["lmzvd06-ccc-01", "lmzvd06-ccn-01"]
+
+
+def test_an_ordinal_suffix_is_stripped():
+    assert (
+        panels._base_service_name("edutap_production_heidi_connector_1", NODES)
+        == "edutap_production_heidi_connector"
+    )
+
+
+def test_ordinal_stripping_survives_more_than_one_digit():
+    assert panels._base_service_name("stack_worker_12", NODES) == "stack_worker"
+
+
+def test_a_node_suffix_is_still_stripped():
+    assert panels._base_service_name("kafka_kafka-lmzvd06-ccc-01", NODES) == "kafka_kafka"
+
+
+def test_a_hyphen_before_digits_is_left_alone():
+    """PostgreSQL-18_PostgreSQL-18 must not become PostgreSQL-18_PostgreSQL —
+    '_' is what Swarm puts between a stack and its service, '-' is not."""
+    assert (
+        panels._base_service_name("PostgreSQL-18_PostgreSQL-18", NODES)
+        == "PostgreSQL-18_PostgreSQL-18"
+    )
+
+
+def test_a_name_without_a_suffix_is_untouched():
+    assert panels._base_service_name("traefik_sockproxy", NODES) == "traefik_sockproxy"
+
+
+def test_a_name_that_is_only_an_ordinal_is_left_alone():
+    assert panels._base_service_name("_1", NODES) == "_1"
+
+
+def test_ordinal_instances_collapse_into_one_row():
+    """Three pinned instances render as one sub-row summing their replicas.
+
+    The stack also runs another service (as edutap_production does with
+    thirteen, in production) so it renders as a stack header plus sub-rows
+    rather than collapsing to a single stack-named row — that single-service
+    collapse is a distinct, pre-existing case with its own tests."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=3,
+        nodes=[SwarmNode(n, reachable=True, state="ready", availability="active")
+               for n in ("srv-01", "srv-02", "srv-03")],
+        services=[
+            ServiceStatus(f"edutap_heidi_connector_{i}", 1, 1, stack="edutap",
+                          tasks=[ServiceTask(f"srv-0{i}", "running")])
+            for i in (1, 2, 3)
+        ] + [
+            ServiceStatus("edutap_web", 1, 1, stack="edutap",
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "heidi_connector" in out
+    assert "heidi_connector_1" not in out
+    assert f"{icons.OK} 3/3" in out
+    matches = [ln for ln in out.splitlines() if ln.strip().startswith("heidi_connector")]
+    assert len(matches) == 1
+
+
+def test_bugsink_is_infrastructure():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[
+            ServiceStatus("bugsink_bugsink", 1, 1, stack="bugsink",
+                          description="Bugsink (Fehler-Tracker)",
+                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("app_web", 1, 1, stack="app",
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastruktur"))
+    service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
+    bugsink_at = _line_index(out, lambda ln: ln.strip().startswith("bugsink"))
+    assert infra_at < bugsink_at < service_at

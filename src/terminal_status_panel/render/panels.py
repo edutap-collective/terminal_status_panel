@@ -9,6 +9,7 @@ rule header via :func:`section`; sub-blocks inside them use the lighter
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from datetime import datetime
 
@@ -41,6 +42,19 @@ _CPU_CRITICAL = 90.0
 
 # Name of the synthetic stack collecting infrastructure admin UIs.
 INFRA_UI_STACK = "infra-uis"
+
+# Ordinal instances of one service: heidi_connector must run as
+# heidi_connector_1, _2, … because each pinned instance needs its own secrets.
+# Underscore only — with '-<digits>' a stack named PostgreSQL-18 whose service
+# carries the same name would be mutilated to PostgreSQL-18_PostgreSQL.
+# The price: two unrelated services whose names differ only in a trailing
+# '_<digits>' — say infra_php_7 and infra_php_8 — collapse into one "php" row
+# summing their replicas, and _group_desc shows only the first one's
+# description, so the second service disappears along with its description.
+# Accepted: no service in this environment is named that way, and the
+# alternative — collapsing only when siblings actually exist — would rename
+# the row as instances come and go.
+_ORDINAL_SUFFIX = re.compile(r"_\d+$")
 
 
 def section(title: str, body: RenderableType) -> Group:
@@ -354,26 +368,37 @@ def _swarm_body(swarm: SwarmInfo) -> RenderableType:
 
 
 def _node_cell(services, node_full: str) -> Text:
-    """Aggregate status of a stack's tasks on one node: ✅ all running,
-    💀 some failed, blank when the stack has no task there."""
+    """Aggregate status of a row's tasks on one node.
+
+    A single task keeps the bare glyph, so the common cell stays exactly as
+    quiet as it was. From two tasks up the count is shown: one ✅ cannot say
+    whether a node holds one instance or five.
+    """
     tasks = [t for s in services for t in s.tasks if t.node == node_full]
     if not tasks:
         return Text(" ")
-    if all(t.running for t in tasks):
-        return Text(_OK)
-    return Text(_DEAD, style="red")
+    running = sum(1 for t in tasks if t.running)
+    if len(tasks) == 1:
+        return Text(_OK) if running else Text(_DEAD, style="red")
+    if running == len(tasks):
+        return Text(f"{_OK}{len(tasks)}")
+    if running == 0:
+        return Text(f"{_DEAD}0/{len(tasks)}", style="red")
+    return Text(f"{_WARN}{running}/{len(tasks)}", style="yellow")
 
 
 def _base_service_name(name: str, node_names) -> str:
     """Strip a trailing '-<node hostname>' / '_<node hostname>' so per-node
-    replicas of the same service collapse (kafka_kafka-lmzvd06-ccc-01 ->
-    kafka_kafka)."""
+    replicas collapse (kafka_kafka-lmzvd06-ccc-01 -> kafka_kafka), then a
+    trailing '_<digits>' so ordinal instances collapse
+    (edutap_heidi_connector_1 -> edutap_heidi_connector)."""
     for nn in sorted(node_names, key=len, reverse=True):
         if nn and name.endswith(nn) and len(name) > len(nn) + 1:
             base = name[: -len(nn)].rstrip("-_")
             if base:
-                return base
-    return name
+                name = base
+                break
+    return _ORDINAL_SUFFIX.sub("", name) or name
 
 
 def _strip_stack_prefix(base: str, stack: str) -> str:
