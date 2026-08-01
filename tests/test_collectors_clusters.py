@@ -1012,6 +1012,15 @@ def test_kind_for_service_does_not_match_the_admin_uis():
     assert clusters.kind_for_service("s3manager_s3manager") is None
 
 
+def test_kind_for_service_does_not_match_a_ui_inside_a_cluster_stack():
+    """``mongodb`` has to stay broad as a *probe* pattern, so as a join key it
+    would otherwise drag in every sidecar sharing the mongodb stack — including
+    an admin UI that was never probed."""
+    assert clusters.kind_for_service("mongodb_mongo-express") is None
+    assert clusters.kind_for_service("mongodb_mongo-gui") is None
+    assert clusters.kind_for_service("rustfs_rustfs-console") is None
+
+
 def test_kind_for_service_returns_none_for_ordinary_services():
     assert clusters.kind_for_service("edutap_production_backend") is None
     assert clusters.kind_for_service("traefik_traefik") is None

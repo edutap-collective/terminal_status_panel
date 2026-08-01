@@ -47,6 +47,12 @@ def test_a_clustered_service_without_a_verdict_is_not_observable():
     assert _cell([_svc(5, 5)], kind="kafka") == f"{icons.UNKNOWN} 5/5"
 
 
+def test_a_dead_clustered_row_still_shows_dead_without_a_verdict():
+    """Withholding the cluster's claim is not a reason to withhold Docker's:
+    'no task is running' was measured here, health section or not."""
+    assert _cell([_svc(0, 3)], kind="kafka") == f"{icons.DEAD} 0/3"
+
+
 def test_the_cluster_verdict_beats_the_replica_count():
     degraded = ClusterService(kind="kafka", quorum_ok=False)
     assert _cell([_svc(5, 5)], kind="kafka", cluster=degraded) == f"{icons.DEAD} 5/5"
@@ -69,13 +75,60 @@ def test_a_failed_probe_shows_the_failure_marker():
 
 def test_not_applicable_here_says_nothing_about_the_service():
     """The probe found no member on THIS node. That is a statement about the
-    observer, not about the service, which may run fine elsewhere."""
+    observer, not about the service, which may run fine elsewhere — so a row
+    whose own replicas are all up stays unobserved rather than green."""
     elsewhere = ClusterService(kind="rustfs", applicable=False)
-    assert _cell([_svc(4, 5)], kind="rustfs", cluster=elsewhere) == f"{icons.UNKNOWN} 4/5"
+    assert _cell([_svc(5, 5)], kind="rustfs", cluster=elsewhere) == f"{icons.UNKNOWN} 5/5"
 
 
 def test_an_empty_row_renders_nothing_rather_than_a_verdict():
     assert _cell([]) == ""
+
+
+def test_a_measured_dead_row_beats_a_healthy_cluster_verdict():
+    """The join key is a substring match, so a service that merely shares a
+    cluster's stack can pick up its verdict. A row with zero running tasks was
+    *measured* dead; rendering it green because some other service's quorum
+    holds is the blank-row failure in a louder form."""
+    healthy = ClusterService(kind="mongodb", quorum_ok=True)
+    assert _cell([_svc(0, 1)], kind="mongodb", cluster=healthy) == f"{icons.DEAD} 0/1"
+
+
+def test_a_partially_staffed_row_beats_a_healthy_cluster_verdict():
+    healthy = ClusterService(kind="rustfs", quorum_ok=True)
+    assert _cell([_svc(2, 5)], kind="rustfs", cluster=healthy) == f"{icons.WARN} 2/5"
+
+
+def test_a_measured_dead_row_beats_an_unobservable_cluster():
+    """'The probe found no member here' says nothing about the service — but
+    'no task is running' is a measurement of this Docker service."""
+    elsewhere = ClusterService(kind="rustfs", applicable=False)
+    assert _cell([_svc(0, 3)], kind="rustfs", cluster=elsewhere) == f"{icons.DEAD} 0/3"
+
+
+def test_a_dead_row_does_not_soften_a_failed_probe():
+    """✗ is the more specific statement and no less severe, so it stands."""
+    broken = ClusterService(kind="rustfs", error="no running container")
+    assert _cell([_svc(0, 1)], kind="rustfs", cluster=broken) == f"{icons.FAILED} 0/1"
+
+
+def test_a_degraded_row_does_not_soften_a_lost_quorum():
+    lost = ClusterService(kind="kafka", quorum_ok=False)
+    assert _cell([_svc(2, 5)], kind="kafka", cluster=lost) == f"{icons.DEAD} 2/5"
+
+
+def test_a_dead_row_beats_a_warning_cluster():
+    degraded = ClusterService(
+        kind="rustfs", quorum_ok=True,
+        members=[ClusterMember(name="node1", healthy=False)],
+    )
+    assert _cell([_svc(0, 5)], kind="rustfs", cluster=degraded) == f"{icons.DEAD} 0/5"
+
+
+def test_a_row_scaled_to_zero_leaves_the_cluster_verdict_alone():
+    """0/0 is a decision, not a measurement of trouble, so it overrides nothing."""
+    healthy = ClusterService(kind="rustfs", quorum_ok=True)
+    assert _cell([_svc(0, 0)], kind="rustfs", cluster=healthy) == f"{icons.OK} 0/0"
 
 
 def test_a_minority_of_dead_members_warns_even_though_quorum_holds():
@@ -131,4 +184,4 @@ def test_all_members_healthy_shows_ok():
 def test_no_member_data_shows_ok():
     """Quorum holds and there is no member list at all: nothing to warn about."""
     no_members = ClusterService(kind="rustfs", quorum_ok=True, members=[])
-    assert _cell([_svc(3, 5)], kind="rustfs", cluster=no_members) == f"{icons.OK} 3/5"
+    assert _cell([_svc(5, 5)], kind="rustfs", cluster=no_members) == f"{icons.OK} 5/5"

@@ -2,8 +2,13 @@
 
 The cell carries an icon and a count. They can come from different places: for
 a clustered service the icon is the cluster's own verdict while the count stays
-Docker's, so ``⚠️ 5/5`` reads "every broker is running and the quorum is
-degraded anyway" — the case where a replica count on its own lies.
+Docker's, so RustFS at ``3/5 live`` — a minority of members measured unhealthy
+while the majority quorum still holds — renders ``⚠️ 5/5``: every container is
+up as a Docker task, which is the case where a replica count on its own lies.
+
+The reconciliation runs the other way too. See ``_combined_icon``: a replica
+state measured ``💀`` or ``⚠️`` is a fact about *this* Docker service and is
+never softened by a cluster-level ``✅`` or ``·``.
 
 Pure: no Rich layout, no I/O, so the table of cases is testable directly.
 """
@@ -21,6 +26,18 @@ _STYLES = {
     icons.DEAD: "red",
     icons.FAILED: "red",
     icons.UNKNOWN: "dim",
+}
+
+# How much each icon claims, from least to most. "Not observable" ranks *above*
+# OK on purpose: an unmeasured cluster must never render as a clean bill of
+# health. ``✗`` tops the scale because it names a failed probe — as severe as
+# 💀 and more specific about why.
+_SEVERITY = {
+    icons.OK: 0,
+    icons.UNKNOWN: 1,
+    icons.WARN: 2,
+    icons.DEAD: 3,
+    icons.FAILED: 4,
 }
 
 
@@ -67,6 +84,28 @@ def _cluster_icon(cluster: ClusterService) -> str:
     return icons.OK
 
 
+def _combined_icon(replica: str, cluster: str) -> str:
+    """Reconcile two independent measurements of the same row.
+
+    The cluster verdict is the more specific statement and normally wins — it
+    is what makes ``⚠️ 5/5`` and ``· 5/5`` possible at all. But ``💀``/``⚠️``
+    from the replica count are measurements of *this* Docker service, and the
+    join key is a substring match: a service that merely shares a cluster's
+    stack can pick up its verdict. So a degraded replica state wins whenever
+    it is strictly more severe than the cluster's, and a row with nothing to
+    say (``✅`` fully staffed, ``·`` scaled to zero) never overrides anything:
+
+        replica \\ cluster   ✅    ·     ⚠️    💀    ✗
+        ✅ (n/n)             ✅    ·     ⚠️    💀    ✗
+        · (0/0)              ✅    ·     ⚠️    💀    ✗
+        ⚠️ (1..n-1 / n)      ⚠️    ⚠️    ⚠️    💀    ✗
+        💀 (0/n)             💀    💀    💀    💀    ✗
+    """
+    if replica in (icons.DEAD, icons.WARN) and _SEVERITY[replica] > _SEVERITY[cluster]:
+        return replica
+    return cluster
+
+
 def service_verdict(
     services: list[ServiceStatus],
     *,
@@ -78,13 +117,14 @@ def service_verdict(
     if not services:
         return Text("")
     running, desired = _counts(services, node_count)
+    replica = _replica_icon(running, desired)
     if kind is None:
-        icon = _replica_icon(running, desired)
+        icon = replica
     elif cluster is None:
         # A clustered service with no verdict: the health section did not run,
         # or this kind is not enabled. "Five brokers are running" is not the
         # claim this column makes, so it stays unobserved.
-        icon = icons.UNKNOWN
+        icon = _combined_icon(replica, icons.UNKNOWN)
     else:
-        icon = _cluster_icon(cluster)
+        icon = _combined_icon(replica, _cluster_icon(cluster))
     return Text(f"{icon} {running}/{desired}", style=_STYLES.get(icon, ""))

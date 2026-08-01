@@ -26,6 +26,7 @@ from collections.abc import Callable
 from typing import Any
 from xml.etree import ElementTree
 
+from ..config import DEFAULT_INFRA_UI_SERVICES
 from ..model import ClusterMember, ClusterService
 
 # Container name substrings, matched case-insensitively. Deliberately narrow:
@@ -632,9 +633,22 @@ _KIND_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# Names that must never resolve to a kind, however well they match. This is the
+# join's own, narrower key: ``MONGODB_PATTERNS`` has to stay the bare word so
+# ``probe_mongodb`` finds the local container, but as a join key it also matches
+# every sidecar that merely shares the ``mongodb`` stack — an admin UI such as
+# ``mongodb_mongo-express``. Handing such a service the replica set's verdict
+# would state a health measurement about something that was never probed.
+_NEVER_A_MEMBER: tuple[str, ...] = tuple(
+    name.lower() for name in DEFAULT_INFRA_UI_SERVICES
+)
+
+
 def kind_for_service(name: str) -> str | None:
     """The cluster kind a Docker service name belongs to, or None."""
     lowered = (name or "").lower()
+    if any(ui in lowered for ui in _NEVER_A_MEMBER):
+        return None
     for kind, patterns in _KIND_PATTERNS:
         if any(pattern.lower() in lowered for pattern in patterns):
             return kind
