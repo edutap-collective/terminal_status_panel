@@ -996,3 +996,39 @@ def test_probe_rustfs_minority_endpoints_healthy_loses_quorum():
     assert service.reachable is True
     assert service.quorum_ok is False
     assert service.detail == "1/3 live"
+
+
+def test_kind_for_service_matches_the_real_service_names():
+    assert clusters.kind_for_service("PostgreSQL-18_pg-lmzvd06-ccc-01") == "postgres"
+    assert clusters.kind_for_service("mongodb_lmzvd06-internet-app-1") == "mongodb"
+    assert clusters.kind_for_service("kafka_kafka-lmzvd06-ccc-01") == "kafka"
+    assert clusters.kind_for_service("rustfs_rustfs-lmzvd06-ccn-01") == "rustfs"
+
+
+def test_kind_for_service_does_not_match_the_admin_uis():
+    """The narrow patterns exist so the UIs cannot be mistaken for members."""
+    assert clusters.kind_for_service("kafbat-ui_kafbat-ui") is None
+    assert clusters.kind_for_service("cloudbeaver_cloudbeaver") is None
+    assert clusters.kind_for_service("s3manager_s3manager") is None
+
+
+def test_kind_for_service_does_not_match_a_ui_inside_a_cluster_stack():
+    """``mongodb`` has to stay broad as a *probe* pattern, so as a join key it
+    would otherwise drag in every sidecar sharing the mongodb stack — including
+    an admin UI that was never probed."""
+    assert clusters.kind_for_service("mongodb_mongo-express") is None
+    assert clusters.kind_for_service("mongodb_mongo-gui") is None
+    assert clusters.kind_for_service("rustfs_rustfs-console") is None
+
+
+def test_kind_for_service_returns_none_for_ordinary_services():
+    assert clusters.kind_for_service("edutap_production_backend") is None
+    assert clusters.kind_for_service("traefik_traefik") is None
+
+
+def test_kind_for_service_is_case_insensitive():
+    assert clusters.kind_for_service("POSTGRESQL-18_PG-NODE") == "postgres"
+
+
+def test_glusterfs_has_no_docker_service_and_never_matches():
+    assert clusters.kind_for_service("glusterfs") is None

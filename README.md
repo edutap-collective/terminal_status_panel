@@ -16,18 +16,63 @@ out in four tiers:
   Per-node replicas of the same service (e.g. `kafka_kafka-<node>` on every
   node) collapse into a single row; a stack with one logical service shows as
   one row named after the stack, a stack with several shows a header plus one
-  sub-row per service (stack prefix and node name stripped). Columns are the
-  nodes (alphabetical) with ✅ / 💀 placement, plus a description column.
+  sub-row per service (stack prefix and node name stripped). Each row also
+  carries a **Working** cell right after the service name: an icon plus the
+  row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
+  Three rules keep that cell from over-claiming:
+
+  - a service scaled to zero replicas renders `· 0/0`, not `💀` — that is a
+    decision, not an outage;
+  - for the four clustered services that actually run as Docker services
+    (PostgreSQL, MongoDB, Kafka, RustFS — GlusterFS is queried on the host via
+    `sudo -n`, not as a container, so it never gets a DOCKER INFOS row) the
+    **icon** comes from that service's own CLUSTER HEALTH verdict while the
+    **count** stays Docker's running/desired tally, so the two are allowed to
+    disagree on purpose — except that a row measured `💀` or `⚠️` by its own
+    replicas keeps that icon: no cluster-level `✅` or `·` can talk a row with
+    nothing (or not everything) running into looking healthy;
+  - under `status-docker`, which runs without the health section, a clustered
+    service's cell falls back to `·` plus Docker's own count instead of a
+    replica-derived `✅` — "five brokers are running" is not the claim this
+    column makes — and the same fallback applies when the probe found no
+    member of that service on this node, or the kind is not listed in
+    `health.enabled`. Withholding the cluster's claim does not withhold
+    Docker's, so such a row still renders `💀 0/3` when nothing runs.
+
+  A global-mode service (Traefik here) reports no replica count, so the
+  denominator is the number of tasks Swarm actually scheduled — the same one
+  `docker service ls` shows. Counting against every node instead would render
+  a healthy global service as degraded for as long as one node is drained or a
+  placement constraint applies.
+
+  RustFS is the worked example for the second rule: its own CLUSTER HEALTH
+  block can read `3/5 live` (a minority of members measured unhealthy while
+  the majority quorum still holds) even though every RustFS container is
+  still up as a Docker task, so the row here reads `⚠️ 5/5` — a bare replica
+  count with no cluster context would have shown a clean `✅ 5/5` and missed
+  the degradation entirely. A member that was simply never measured
+  (`healthy is None` — MongoDB reports its replica-set members but not their
+  state) does not raise this warning; not measured is not a failure.
+
+  Columns are otherwise the nodes (alphabetical) with ✅ / 💀 placement, plus a
+  description column. See [Icon vocabulary](#icon-vocabulary) for what each
+  glyph means — the Working column uses exactly the same vocabulary, no new
+  glyphs, including `✗` when the underlying cluster probe itself failed (only
+  `…`, the time-budget marker, never appears in this column).
 - **CLUSTER HEALTH** — the clustered infrastructure services this node
   participates in (PostgreSQL, MongoDB, Kafka, GlusterFS, RustFS) with
   leader/member state, WireGuard peer handshake ages (TCP-probe fallback when
   passwordless sudo is unavailable), and DNS consistency checks. Every check
   runs concurrently under a shared time budget (default 5 s); a check that
   runs out renders `…`, deliberately distinct from `✗` for a check that
-  actually failed. A service with no member on this node renders `n/a here`
-  and is not an error; a service that *should* run here but has no running
-  container (most likely a crash loop) renders `✗ <service>: no running
-  container` instead. See [Cluster health checks](#cluster-health-checks)
+  actually failed. Each applicable service gets its own block (leader,
+  members, warnings), and the blocks flow into as many columns as the
+  terminal width allows — one column on a narrow terminal; services with no
+  member on this node are not given a block each but summarised together on a
+  single dim `n/a here: <names>` line. A service that *should* run here but
+  has no running container (most likely a crash loop) still gets its own
+  block, reading `✗ <service>: no running container` instead. See
+  [Cluster health checks](#cluster-health-checks)
   below for the full icon vocabulary and what the section deliberately
   cannot see.
 
@@ -66,7 +111,7 @@ its own entry point — plus the combined command:
 |---------|----------|-----|
 | `status-full` | server + docker + health | The full panel (default). |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
-| `status-docker` | docker only | The Docker Swarm block. |
+| `status-docker` | docker only | The Docker Swarm block. Collects no health, so every clustered service's **Working** cell stays `·` plus its Docker count — pair it with `status-health` to get those verdicts. |
 | `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
 
 Each section only collects the data it needs: `status-docker` never touches
@@ -445,7 +490,10 @@ install-panel --scope user --uninstall
 A Swarm node is the natural case for `--panel docker --panel health`
 together: the Docker Swarm block and the clustered-services health block
 answer different questions (what's scheduled vs. what's actually healthy)
-and both only make sense where the Docker socket is available.
+and both only make sense where the Docker socket is available. Installed
+alone, `--panel docker` collects no health at all, so the **Working** cell of
+every clustered service reads `·` plus its replica count — honest, but the
+column only earns its cluster icons with `--panel health` beside it.
 
 Options:
 

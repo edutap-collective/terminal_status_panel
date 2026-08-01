@@ -2,7 +2,9 @@ from rich.console import Console
 
 from terminal_status_panel.config import Config
 from terminal_status_panel.model import (
+    ClusterService,
     FilesystemUsage,
+    HealthInfo,
     ResourceUsage,
     ServiceStatus,
     ServiceTask,
@@ -11,7 +13,7 @@ from terminal_status_panel.model import (
     SystemInfo,
     UpdateInfo,
 )
-from terminal_status_panel.render import panels
+from terminal_status_panel.render import icons, panels
 
 
 def _text(renderable, width=100) -> str:
@@ -338,3 +340,111 @@ def test_no_infra_uis_row_without_matching_services():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "infra-uis" not in out
+
+
+def test_the_matrix_has_a_working_column():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[
+            ServiceStatus("app_web", 3, 3, stack="app",
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "Working" in out
+    assert f"{icons.OK} 3/3" in out
+
+
+def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
+    """Nine such rows render blank today — the outage is invisible."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("edutap_admin_backend", 0, 3, stack="edutap")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.DEAD} 0/3" in out
+
+
+def test_a_service_scaled_to_zero_is_not_marked_dead():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("app_paused", 0, 0, stack="app")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.UNKNOWN} 0/0" in out
+    assert f"{icons.DEAD} 0/0" not in out
+
+
+def test_the_kafka_row_follows_the_cluster_verdict_not_the_replicas():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
+    )
+    health = HealthInfo(clusters_probed=True,
+                        clusters=[ClusterService(kind="kafka", quorum_ok=False)])
+    out = _text(panels.services_section(swarm, Config(), health), width=170)
+    assert f"{icons.DEAD} 5/5" in out
+
+
+def test_without_health_a_clustered_service_is_not_observable():
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
+        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.UNKNOWN} 5/5" in out
+    assert f"{icons.OK} 5/5" not in out
+
+
+def _five_node_swarm_with_one_drained(services) -> SwarmInfo:
+    nodes = [
+        SwarmNode(f"srv-0{i}", reachable=True, state="ready", availability="active")
+        for i in range(1, 5)
+    ]
+    nodes.append(SwarmNode("srv-05", reachable=True, state="ready", availability="drain"))
+    return SwarmInfo(reachable=True, enabled=True, node_role="manager", node_count=5,
+                     nodes=nodes, services=services)
+
+
+def test_a_global_service_counts_the_tasks_swarm_scheduled():
+    """Swarm takes a global service's task off a drained node, so counting
+    against every node would claim a degradation nobody measured — while
+    ``docker service ls`` reads a contented 4/4."""
+    traefik = ServiceStatus(
+        "traefik_traefik", 4, None, stack="traefik",
+        tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 5)],
+    )
+    out = _text(panels.services_section(
+        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
+    assert f"{icons.OK} 4/4" in out
+    assert f"{icons.WARN} 4/5" not in out
+
+
+def test_a_global_service_missing_a_task_is_still_degraded():
+    traefik = ServiceStatus(
+        "traefik_traefik", 3, None, stack="traefik",
+        tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 4)]
+             + [ServiceTask("srv-04", "failed")],
+    )
+    out = _text(panels.services_section(
+        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
+    assert f"{icons.WARN} 3/4" in out
+
+
+def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
+    """``_node_map`` swallows a failed node listing, so an empty node list next
+    to a non-zero node_count is reachable — and '/0' would be a lie."""
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=4, nodes=[],
+        services=[ServiceStatus("traefik_traefik", 4, None, stack="traefik")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert f"{icons.OK} 4/4" in out
+    assert "4/0" not in out

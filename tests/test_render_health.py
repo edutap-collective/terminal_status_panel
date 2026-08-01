@@ -236,3 +236,81 @@ def test_unprobed_peers_are_not_rendered_as_no_peers():
 def test_probed_but_empty_peers_say_no_peers():
     output = _render(HealthInfo(peers_probed=True))
     assert "no peers detected" in output
+
+
+# -- Task 5: cluster blocks flow into columns --
+
+
+def _cluster(kind, name, members=2):
+    return ClusterService(
+        kind=kind, name=name, reachable=True, quorum_ok=True,
+        members=[ClusterMember(name=f"{kind}-{i}", role="peer", healthy=True)
+                 for i in range(members)],
+    )
+
+
+def test_wide_terminals_put_cluster_blocks_side_by_side():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        _cluster("postgres", "PostgreSQL-18"),
+        _cluster("kafka", "cluster-id"),
+        _cluster("glusterfs", "shared"),
+    ])
+    out = _render(health, width=150)
+    side_by_side = [ln for ln in out.splitlines()
+                    if "PostgreSQL" in ln and "Kafka" in ln]
+    assert side_by_side, "at 150 columns two clusters should share a line"
+
+
+def test_narrow_terminals_stack_the_blocks():
+    """Width 40 is comfortably narrower than one block, so this asserts the
+    fallback itself rather than where the boundary happens to sit — pinning
+    that boundary would make the column padding untouchable."""
+    health = HealthInfo(clusters_probed=True, clusters=[
+        _cluster("postgres", "PostgreSQL-18"),
+        _cluster("kafka", "cluster-id"),
+    ])
+    out = _render(health, width=40)
+    assert not [ln for ln in out.splitlines()
+                if "PostgreSQL" in ln and "Kafka" in ln]
+
+
+def test_very_wide_terminals_keep_the_blocks_side_by_side():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        _cluster("postgres", "PostgreSQL-18"),
+        _cluster("kafka", "cluster-id"),
+    ])
+    out = _render(health, width=200)
+    assert [ln for ln in out.splitlines()
+            if "PostgreSQL" in ln and "Kafka" in ln]
+
+
+def test_not_applicable_services_collapse_to_one_line():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        _cluster("postgres", "PostgreSQL-18"),
+        ClusterService(kind="mongodb", applicable=False),
+        ClusterService(kind="rustfs", applicable=False),
+    ])
+    out = _render(health, width=150)
+    assert "n/a here:" in out
+    assert "MongoDB" in out
+    assert "RustFS" in out
+    # One shared line, not one block each.
+    assert len([ln for ln in out.splitlines() if "n/a here:" in ln]) == 1
+
+
+def test_an_all_not_applicable_panel_is_just_the_summary_line():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        ClusterService(kind="mongodb", applicable=False),
+    ])
+    out = _render(health, width=150)
+    assert "n/a here: MongoDB" in out
+
+
+def test_a_failed_service_keeps_its_own_block():
+    health = HealthInfo(clusters_probed=True, clusters=[
+        _cluster("postgres", "PostgreSQL-18"),
+        ClusterService(kind="rustfs", error="no running container"),
+    ])
+    out = _render(health, width=150)
+    assert "no running container" in out
+    assert "n/a here" not in out
