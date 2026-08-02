@@ -8,6 +8,7 @@ it silently — and the cluster has one today.
 
 from __future__ import annotations
 
+from rich.columns import Columns
 from rich.console import Group, RenderableType
 from rich.text import Text
 
@@ -44,6 +45,15 @@ def _service_state(router: TraefikRouter, info: TraefikInfo,
     if name.endswith(_INTERNAL_SUFFIX):
         # Traefik's own endpoint: nothing was measured, so nothing is claimed.
         return "", line
+    if ref and ref.source == "file":
+        # Declared in the file provider, not in Swarm. Docker cannot see where
+        # this one points, so the target is shown and no verdict is given —
+        # matching it against Swarm service names would report a service that
+        # was never supposed to be there as missing.
+        for url in ref.upstreams:
+            line.append(f"  {url}", style="dim")
+        line.append(f"  {icons.UNKNOWN}", style="dim")
+        return icons.UNKNOWN, line
     if swarm is None or not swarm.reachable or not swarm.enabled:
         # Nobody looked at Docker, or the look came back empty-handed: no
         # client (`swarm is None`), no answer from the daemon
@@ -113,36 +123,22 @@ def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) ->
     head = Text(f"{entrypoint.name}  {entrypoint.address}", style="bold cyan")
     attached = _attached(entrypoint, info)
     if not attached:
-        # A published port nothing serves is a finding, not an absence.
-        head.append("   — no router", style="dim")
+        if entrypoint.name == info.ping_entrypoint:
+            # `--ping.entryPoint=…`: Traefik answers /ping here itself. The one
+            # entrypoint that is supposed to carry no router.
+            head.append("   — Traefik's own health check", style="dim")
+        else:
+            # A published port nothing serves is a finding, not an absence.
+            head.append("   — no router", style="dim")
         return Group(head)
-    return Group(head, *[_router_lines(r, info, swarm) for r in attached])
-
-
-def _compact_entrypoint(entrypoint, info: TraefikInfo,
-                        swarm: SwarmInfo | None) -> Group:
-    """One line per entrypoint, expanded only where something is wrong.
-
-    The summary carries the worst verdict among the entrypoint's routers, so a
-    healthy branch costs one line and a broken one still names which router
-    broke. ``·`` is shown but never expanded: it means Docker was not measured,
-    which is one condition for the whole panel rather than a finding about any
-    single router — expanding on it would print every branch in full.
-    """
-    head = Text(f"  {entrypoint.name}  {entrypoint.address}", style="bold cyan")
-    attached = _attached(entrypoint, info)
-    if not attached:
-        head.append("   — no router", style="dim")
-        return Group(head)
-    states = [(router, *_service_state(router, info, swarm)) for router in attached]
-    head.append(f"   {len(attached)} router", style="dim")
-    worst = max((icon for _, icon, _ in states), key=severity, default="")
+    worst = max(
+        (_service_state(r, info, swarm)[0] for r in attached), key=severity, default=""
+    )
     if worst:
+        # The column head carries the worst verdict below it, so a wall of
+        # branches still says at a glance which one to read first.
         head.append(f"   {worst}")
-    problems = [
-        router for router, icon, _ in states if severity(icon) >= severity(icons.WARN)
-    ]
-    return Group(head, *[_router_lines(r, info, swarm) for r in problems])
+    return Group(head, *[_router_lines(r, info, swarm) for r in attached])
 
 
 def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
@@ -191,16 +187,14 @@ def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
 
 
 def traefik_section(info: TraefikInfo | None, cfg: Config,
-                    swarm: SwarmInfo | None = None,
-                    compact: bool = False) -> RenderableType:
+                    swarm: SwarmInfo | None = None) -> RenderableType:
     """The TRAEFIK WIRING block.
 
-    ``compact`` replaces the tree with one line per entrypoint. The full tree
-    runs to some seventy lines on ``lrz_cc``, which is a debugging view, not a
-    login banner — so the panel that greets a login summarises, and
-    ``status-traefik`` still draws the whole thing. The orphan block is
-    identical either way: it holds the findings, and a finding is never the
-    part to shorten.
+    The entrypoint branches flow into as many columns as the width allows, the
+    same arrangement CLUSTER HEALTH uses: stacked vertically they run to some
+    seventy lines while two thirds of the terminal stay empty. The orphan block
+    stays full width below them — its lines are the longest in the section, and
+    it holds the findings.
     """
     data = info or TraefikInfo()
     if data.error:
@@ -232,14 +226,11 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
             style="dim",
         ))
         parts.append(Text(""))
-    ordered = sorted(data.entrypoints, key=lambda ep: (ep.port is None, ep.port))
-    for entrypoint in ordered:
-        if compact:
-            parts.append(_compact_entrypoint(entrypoint, data, swarm))
-        else:
-            parts.append(_entrypoint_block(entrypoint, data, swarm))
-            parts.append(Text(""))
-    if compact and ordered:
+    if data.entrypoints:
+        # Declaration order, which the collector preserves: the four
+        # entrypoints every cluster has come before this cluster's own.
+        blocks = [_entrypoint_block(ep, data, swarm) for ep in data.entrypoints]
+        parts.append(Columns(blocks, padding=(0, 4), expand=False))
         parts.append(Text(""))
     orphans = _orphan_block(data, swarm)
     if orphans is not None:

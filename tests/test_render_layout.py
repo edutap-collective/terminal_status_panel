@@ -118,23 +118,17 @@ def _traefik_data():
     )
 
 
-def _has_branch(out: str, router: str) -> bool:
-    return any(line.strip().startswith(f"└─ {router}") for line in out.splitlines())
-
-
-def test_the_wiring_alone_gets_the_full_tree():
-    """Asked for on its own it is the whole point of the run."""
+def _render_sections(sections):
     console = Console(width=120, force_terminal=True, color_system=None, record=True)
-    console.print(build_layout(_traefik_data(), Config(), ("traefik",)))
-    assert _has_branch(console.export_text(), "kafbat-ui")
+    console.print(build_layout(_traefik_data(), Config(), sections))
+    return console.export_text()
 
 
-def test_the_wiring_beside_other_sections_is_summarised():
-    """One block of a panel, not a debugging view: the tree would push the
-    server header off the screen."""
-    console = Console(width=120, force_terminal=True, color_system=None, record=True)
-    console.print(build_layout(_traefik_data(), Config(), ("docker", "traefik")))
-    out = console.export_text()
-    assert "TRAEFIK WIRING" in out
-    assert not _has_branch(out, "kafbat-ui")
-    assert "1 router" in out
+def test_the_wiring_renders_the_same_whether_it_is_alone_or_not():
+    """One rendering, flowed into columns — so the block a login shows is the
+    block `status-traefik` shows, and nothing is only visible in one of them."""
+    alone = _render_sections(("traefik",))
+    beside = _render_sections(("docker", "traefik"))
+    assert alone.count("\u2514\u2500 kafbat-ui") == 1
+    assert beside.count("\u2514\u2500 kafbat-ui") == 1
+    assert "TRAEFIK WIRING" in beside

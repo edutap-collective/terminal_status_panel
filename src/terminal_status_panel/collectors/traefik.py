@@ -23,6 +23,7 @@ from .traefik_parse import (
     parse_dynamic_yaml,
     parse_entrypoints,
     parse_labels,
+    parse_ping_entrypoint,
 )
 
 TRAEFIK_SERVICE_PATTERNS = ("traefik_traefik",)
@@ -176,7 +177,9 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
         for service in services:
             name = getattr(service, "name", "") or ""
             if any(pattern in name for pattern in TRAEFIK_SERVICE_PATTERNS):
-                info.entrypoints = parse_entrypoints(_args_of(service))
+                args = _args_of(service)
+                info.entrypoints = parse_entrypoints(args)
+                info.ping_entrypoint = parse_ping_entrypoint(args)
                 mounted = _mounted_config_names(service)
             routers, middlewares, refs = parse_labels(_labels_of(service), origin=name)
             info.routers.extend(routers)
@@ -227,13 +230,17 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             # not a file provider that declares no routers.
             _note_file_provider_error(info, f"{name}: config data is empty")
             continue
-        routers, middlewares = parse_dynamic_yaml(text, origin=name)
-        if not routers and not middlewares:
+        routers, middlewares, refs = parse_dynamic_yaml(text, origin=name)
+        if not routers and not middlewares and not refs:
             error = _yaml_error(text)
             if error is not None:
                 _note_file_provider_error(info, f"{name}: {error}")
         info.routers.extend(routers)
         info.middlewares.update(middlewares)
+        # Labels win: a Swarm service that also carries a file-provider entry
+        # of the same name is the one that can actually be measured.
+        for ref_name, ref in refs.items():
+            info.services.setdefault(ref_name, ref)
 
     info.routers.sort(key=lambda r: (r.source != "swarm", r.name))
     return info

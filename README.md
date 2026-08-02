@@ -94,16 +94,15 @@ out in five tiers:
   below for the full icon vocabulary and what the section deliberately
   cannot see.
 - **TRAEFIK WIRING** — Traefik's wiring **as configured**: one branch per
-  entrypoint (ordered by port), each with its routers, their middlewares, and
-  the service they point at. `status-traefik` draws that tree in full; inside
-  `status-full` the same section renders as one line per entrypoint, expanded
-  only where a router's service is not healthy, because the full tree runs to
-  some seventy lines on `lrz_cc` and would bury the login banner. The
-  orphaned-router block is identical in both — it holds the findings, and a
-  finding is never the part to shorten. See
-  [Traefik wiring](#traefik-wiring) below for what "as configured" means and
-  for the optional (currently dormant) live cross-check against Traefik
-  itself.
+  entrypoint, each with its routers, their middlewares, and the service they
+  point at. The branches flow into as many columns as the terminal allows, in
+  the order the Traefik service's own arguments declare them — the four every
+  cluster has (`dashboard`, `ping`, `default`, `https`) before this cluster's
+  per-vhost ones. Routers whose entrypoint does not exist get their own block
+  below, at full width, since a tree keyed by entrypoint would otherwise drop
+  them silently. See [Traefik wiring](#traefik-wiring) below for what "as
+  configured" means and for the optional (currently dormant) live cross-check
+  against Traefik itself.
 
 The panel itself opens no database or broker connection and holds no
 credentials. Its only privilege is the Docker socket: the Docker section
@@ -138,11 +137,11 @@ its own entry point — plus the combined command:
 
 | Command | Sections | Use |
 |---------|----------|-----|
-| `status-full` | server + docker + health + traefik | The full panel (default). The wiring renders in summary form here — see below. |
+| `status-full` | server + docker + health + traefik | The full panel (default). |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
 | `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `·` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
 | `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
-| `status-traefik` | traefik only | Traefik's entrypoint → router → middleware → service wiring, **as configured**, as a full tree. The same section inside `status-full` summarises; this is the command for reading the wiring itself. |
+| `status-traefik` | traefik only | Traefik's entrypoint → router → middleware → service wiring, **as configured** — the same block `status-full` shows, without the rest of the panel. |
 
 Each section only collects the data it needs: `status-docker` never touches
 the system collectors, `status-server` never opens the Docker socket, and
@@ -157,10 +156,8 @@ but runs no `exec` and reaches no network beyond Docker unless the optional
 accepts `--sections` with any comma-separated subset to pick explicitly, e.g.
 `--sections docker,traefik` for the two Docker-facing blocks alone.
 
-Which form the wiring takes follows from the selection rather than from a
-flag: asked for on its own it is the point of the run and gets the tree; asked
-for beside other sections it is one block of a panel and summarises. So
-`status-full --sections traefik` renders exactly what `status-traefik` does.
+The wiring block is the same either way — one rendering, flowed into columns
+— so nothing is visible in `status-traefik` that a login does not also show.
 
 Any of the five works in the profile.d snippet (see *Running it at login*) —
 e.g. call `status-docker` or `status-health` on Docker Swarm nodes,
@@ -185,7 +182,7 @@ a placeholder instead of erroring.
 
 | Option        | Default | Description |
 |---------------|---------|-------------|
-| `--sections`  | *(per command)* | Comma-separated sections to render: `server`, `docker`, `health`, `traefik`. On `status-full` the default is all four; the dedicated commands fix their own section. Selecting `traefik` alone gives the full wiring tree, selecting it beside others gives the summary — see [Commands](#commands-sections). |
+| `--sections`  | *(per command)* | Comma-separated sections to render: `server`, `docker`, `health`, `traefik`. On `status-full` the default is all four; the dedicated commands fix their own section. The wiring block renders identically however it is selected. |
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
 | `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
@@ -511,24 +508,40 @@ under all of them; an entrypoint with no attached router reads `— no
 router`, which is a finding (a published port nothing serves), not an
 absence.
 
-### The summary form
+### Layout and order
 
-Inside `status-full` — or any run that selects `traefik` beside other
-sections — each entrypoint collapses to one line carrying the number of
-routers on it and the worst verdict among their services:
+The entrypoint branches flow into as many columns as the terminal allows —
+the same `Columns` arrangement CLUSTER HEALTH uses, three at 190 columns, one
+at 60. Stacked vertically they run to some seventy lines on `lrz_cc` while two
+thirds of the width stays empty. The orphaned-router block stays full width
+below them: its lines are the longest in the section, and it is what you read
+first. Each entrypoint's head line carries the worst verdict among its
+routers, so a wall of branches still says at a glance which one to open.
 
-```
-  https  :443                    — no router
-  login_lmu_de  :2009            6 router   ✗
-  portalmgmt  :2020              5 router   ✅
-```
+Entrypoints appear **in the order the Traefik service's arguments declare
+them**, not by port. The Ansible role lists the four every cluster has —
+`dashboard`, `ping`, `default`, `https` — before appending this cluster's
+per-vhost ones, and that grouping is more useful than the numeric order, which
+would put `https` (443) first and `dashboard` (8082) last and scatter the four.
 
-Routers whose service is `⚠️`, `💀` or `✗` are still drawn out in full
-underneath their entrypoint, so the summary names what is wrong rather than
-only that something is. `·` is shown in the head line but never expands: it
-means Docker was not measured at all, which is one condition for the whole
-panel rather than a finding about any single router — expanding on it would
-print every branch in full, which is what the summary exists to avoid.
+### Entrypoints that are supposed to look empty
+
+`--ping.entryPoint=ping` makes Traefik answer `/ping` on that entrypoint
+itself, with no router involved. It is read from the same arguments, and that
+entrypoint reads `— Traefik's own health check` instead of `— no router`, so
+the one port that is *meant* to carry nothing does not read as a finding.
+Every other empty entrypoint still does — `https :443` on `lrz_cc` genuinely
+has nothing behind it.
+
+### Services the file provider declares
+
+A router can point at a service defined in the dynamic YAML rather than in
+Swarm — `account-api` → `account-api-placeholder` →
+`http://user-account.internal` is the live example. Those services are read
+along with the routers, and the upstream URL is shown in place of a Docker
+verdict, with a `·`: nothing about that target was measured. Matching them
+against Swarm service names instead reported `✗ no such service` for something
+that was never supposed to be a Swarm service.
 
 ### What "as configured" means, and its limit
 

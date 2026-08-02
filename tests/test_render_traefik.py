@@ -27,10 +27,10 @@ def _branch_heads(out: str, router: str) -> int:
     Counting bare name occurrences cannot tell one branch from two: a router
     under a *single* entrypoint already prints its name twice, on the ``└─
     router`` line and on the ``└─ → service`` line below it. Only the branch
-    head is counted here, so the assertion fails if a router that belongs
-    under several entrypoints is drawn under one.
+    head is counted, and by substring rather than per line — the entrypoints
+    render side by side, so one line can carry two branches.
     """
-    return sum(1 for line in out.splitlines() if line.strip().startswith(f"└─ {router}"))
+    return out.count(f"\u2514\u2500 {router}")
 
 
 def _wired():
@@ -68,9 +68,11 @@ def test_entrypoints_appear_with_their_port():
     assert "2020" in out
 
 
-def test_entrypoints_are_ordered_by_port():
-    out = _render(_wired())
-    assert out.index(":443") < out.index(":2006") < out.index(":2020")
+def test_entrypoints_keep_the_order_the_collector_gives_them():
+    """Declaration order, not port order: the parser preserves the arguments'
+    own grouping and the renderer must not undo it."""
+    out = _render(_wired(), width=60)
+    assert out.index(":2006") < out.index(":2020") < out.index(":443")
 
 
 def test_a_router_on_two_entrypoints_appears_under_both():
@@ -310,46 +312,19 @@ def test_file_provider_error_is_shown_as_a_warning_above_the_tree():
     assert tree_idx > warning_idx
 
 
-def _render_compact(info, swarm=None, width=120):
-    console = Console(width=width, force_terminal=False, color_system=None)
-    with console.capture() as capture:
-        console.print(traefik_section(info, Config(), swarm, compact=True))
-    return capture.get()
+def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
+    """Stacked vertically they run to some seventy lines on lrz_cc while two
+    thirds of the terminal stay empty — the same arrangement CLUSTER HEALTH
+    uses."""
+    wide = _render(_wired(), width=200)
+    narrow = _render(_wired(), width=40)
+    assert len(wide.splitlines()) < len(narrow.splitlines())
+    # Side by side, one line carries two entrypoint heads.
+    assert any("kafbat" in line and "portalmgmt" in line for line in wide.splitlines())
 
 
-def test_compact_renders_one_line_per_entrypoint_not_a_branch():
-    """The full tree is ~70 lines on lrz_cc, which is a debugging view rather
-    than a login banner."""
-    swarm = SwarmInfo(reachable=True, enabled=True, services=[
-        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
-                      tasks=[ServiceTask("srv-01", "running")]),
-    ])
-    out = _render_compact(_wired(), swarm=swarm)
-    assert _branch_heads(out, "kafbat-ui") == 0
-    assert "1 router" in out
-    assert icons.OK in out
-    # Two entrypoints carry the router, one carries none — and the empty one
-    # is still named, since a published port nothing serves is a finding.
-    assert "no router" in out
-
-
-def test_compact_expands_only_the_routers_that_are_not_healthy():
-    """A summary that says ⚠️ without naming which router is not actionable;
-    expanding the healthy ones is what the full tree is for."""
-    info = _wired()
-    info.routers.append(TraefikRouter(
-        name="broken", entrypoints=["portalmgmt"],
-        rule="PathPrefix(`/gone`)", service="gone"))
-    swarm = SwarmInfo(reachable=True, enabled=True, services=[
-        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
-                      tasks=[ServiceTask("srv-01", "running")]),
-    ])
-    out = _render_compact(info, swarm=swarm)
-    assert _branch_heads(out, "broken") == 1
-    assert _branch_heads(out, "kafbat-ui") == 0
-
-
-def test_compact_shows_the_worst_verdict_of_an_entrypoint():
+def test_an_entrypoint_head_carries_the_worst_verdict_below_it():
+    """A wall of branches has to say at a glance which one to read first."""
     info = _wired()
     info.routers.append(TraefikRouter(
         name="broken", entrypoints=["portalmgmt"], service="gone"))
@@ -357,30 +332,48 @@ def test_compact_shows_the_worst_verdict_of_an_entrypoint():
         ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
                       tasks=[ServiceTask("srv-01", "running")]),
     ])
-    out = _render_compact(info, swarm=swarm)
-    portalmgmt = [ln for ln in out.splitlines() if "portalmgmt" in ln][0]
-    assert icons.FAILED in portalmgmt
-    kafbat = [ln for ln in out.splitlines() if ln.strip().startswith("kafbat ")][0]
-    assert icons.OK in kafbat
+    out = _render(info, swarm=swarm, width=60)
+    heads = [ln for ln in out.splitlines() if ":2020" in ln]
+    assert icons.FAILED in heads[0]
 
 
-def test_compact_never_expands_on_an_unmeasured_docker():
-    """`·` is one condition for the whole panel, not a finding about any single
-    router — expanding on it would print every branch in full, which is exactly
-    what the summary exists to avoid."""
-    out = _render_compact(_wired(), swarm=None)
-    assert _branch_heads(out, "kafbat-ui") == 0
-    assert icons.UNKNOWN in out
-
-
-def test_compact_keeps_the_orphan_block_whole():
-    """The orphan block holds the findings, and a finding is never the part to
-    shorten."""
+def test_the_ping_entrypoint_is_not_reported_as_an_unserved_port():
+    """`--ping.entryPoint=ping` makes Traefik answer /ping there itself. It is
+    the one entrypoint that is supposed to look empty."""
     info = _wired()
-    info.routers.append(TraefikRouter(
-        name="image_api", entrypoints=["websecure"],
-        rule="Host(`www.portal.uni-muenchen.de`)", service="image_api"))
-    out = _render_compact(info)
-    assert "ORPHANED" in out
-    assert "websecure" in out
-    assert "Host(`www.portal.uni-muenchen.de`)" in out
+    info.entrypoints.append(TraefikEntrypoint(name="ping", address=":8080", port=8080))
+    info.ping_entrypoint = "ping"
+    out = _render(info, width=60)
+    ping_line = [ln for ln in out.splitlines() if ln.startswith("ping  :8080")][0]
+    assert "health check" in ping_line
+    assert "no router" not in ping_line
+
+
+def test_an_entrypoint_that_is_not_the_ping_one_still_reads_as_a_finding():
+    info = _wired()
+    info.ping_entrypoint = "ping"
+    out = _render(info, width=60)
+    https_line = [ln for ln in out.splitlines() if ":443" in ln][0]
+    assert "no router" in https_line
+
+
+def test_a_file_provider_service_is_not_reported_as_a_missing_docker_service():
+    """`account-api-placeholder` is declared in the file provider and never in
+    Swarm. Matching it against Swarm service names reports a service missing
+    that was never supposed to be there."""
+    info = TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="login_lmu_de", address=":2009",
+                                       port=2009)],
+        routers=[TraefikRouter(name="account-api", entrypoints=["login_lmu_de"],
+                               rule="PathPrefix(`/api`)",
+                               service="account-api-placeholder", source="file")],
+        services={"account-api-placeholder": TraefikServiceRef(
+            name="account-api-placeholder", source="file",
+            upstreams=["http://user-account.internal"])},
+    )
+    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=True, services=[]),
+                  width=100)
+    assert "no such service" not in out
+    assert "http://user-account.internal" in out
+    assert icons.UNKNOWN in out

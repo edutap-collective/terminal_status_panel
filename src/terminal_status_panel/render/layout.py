@@ -63,10 +63,9 @@ def health_block(data: PanelData, cfg: Config) -> RenderableType:
     return health_section(data.health, cfg)
 
 
-def traefik_block(data: PanelData, cfg: Config,
-                  compact: bool = False) -> RenderableType:
+def traefik_block(data: PanelData, cfg: Config) -> RenderableType:
     """The TRAEFIK WIRING block."""
-    return traefik_section(data.traefik, cfg, data.swarm, compact=compact)
+    return traefik_section(data.traefik, cfg, data.swarm)
 
 
 _SECTION_BUILDERS = {
@@ -79,19 +78,14 @@ _SECTION_BUILDERS = {
 
 def build_layout(data: PanelData, cfg: Config,
                  sections: tuple[str, ...] = SECTIONS) -> Group:
-    known = [name for name in sections if name in _SECTION_BUILDERS]
-    # The wiring tree is a debugging view. Asked for on its own it is the whole
-    # point of the run and gets the full tree; asked for beside other sections
-    # it is one block of a panel, and summarises.
-    compact = len(known) > 1
     parts: list[RenderableType] = []
-    for name in known:
+    for name in sections:
+        builder = _SECTION_BUILDERS.get(name)
+        if builder is None:
+            continue
         if parts:
             parts.append(Text(""))
-        if name == "traefik":
-            parts.append(traefik_block(data, cfg, compact=compact))
-            continue
-        parts.append(_SECTION_BUILDERS[name](data, cfg))
+        parts.append(builder(data, cfg))
     parts.append(Rule(style="dim blue"))
     parts.append(_footer())
     return Group(*parts)

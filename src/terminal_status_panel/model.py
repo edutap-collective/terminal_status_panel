@@ -198,6 +198,10 @@ class TraefikServiceRef:
     scheme: str | None = None
     internal: bool = False  # api@internal / ping@internal
     docker_service: str | None = None  # the Swarm service backing it, when known
+    source: str = "swarm"  # swarm | file
+    # Where a file-provider service sends traffic. Docker knows nothing about
+    # these, so they are shown rather than measured.
+    upstreams: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -223,6 +227,10 @@ class TraefikInfo:
     middlewares: dict[str, TraefikMiddleware] = field(default_factory=dict)
     services: dict[str, TraefikServiceRef] = field(default_factory=dict)
     api_consulted: bool = False
+    # The entrypoint Traefik answers its own health check on. It carries no
+    # router by design, which is the one case where "— no router" is not a
+    # finding.
+    ping_entrypoint: str | None = None
     error: str | None = None
     # A partial failure: the labels were read but the file provider was not.
     # Distinct from `error`, which means nothing could be read at all.
