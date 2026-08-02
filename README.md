@@ -30,7 +30,7 @@ out in five tiers:
   not. Each row also
   carries a **Working** cell right after the service name: an icon plus the
   row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
-  Three rules keep that cell from over-claiming:
+  Four rules keep that cell from over-claiming:
 
   - a service scaled to zero replicas renders `· 0/0`, not `💀` — that is a
     decision, not an outage;
@@ -48,9 +48,10 @@ out in five tiers:
     column makes — and the same fallback applies when the probe found no
     member of that service on this node, or the kind is not listed in
     `health.enabled`. Withholding the cluster's claim does not withhold
-    Docker's, so such a row still renders `💀 0/3` when nothing runs;
+    Docker's, so such a row still renders `💀 0/3` when nothing runs and
+    nothing is still starting;
   - a service whose tasks are still starting (not yet in running state) renders
-    `⚠️` in place of `💀`, since a deploy in progress is not the same as a
+    `⚠️ 0/n` in place of `💀`, since a deploy in progress is not the same as a
     measured outage.
 
   A global-mode service (Traefik here) reports no replica count, so the
@@ -69,11 +70,11 @@ out in five tiers:
   state) does not raise this warning; not measured is not a failure.
 
   Columns are otherwise the nodes (alphabetical), plus a description column.
-  A node cell holding a single task keeps the bare glyph, ✅ or 💀 — the
+  A node cell holding a single task keeps the bare glyph, ✅, ⚠️, or 💀 — the
   overwhelming majority of cells, since most rows place one task per node —
   and from two tasks up it carries the count right after the glyph, with no
-  space in between: `✅2` when all of them run, `⚠️1/2` when some do, `💀0/2`
-  when none do. (Grouping can put more than one task on the same node — after
+  space in between: `✅2` when all of them run, `⚠️1/2` when some do (or when
+  all are starting), `💀0/2` when none run and none are starting. (Grouping can put more than one task on the same node — after
   ordinal stripping merges two originally separate services into one row,
   both can land on the same node, and that node's cell counts both.) See
   [Icon vocabulary](#icon-vocabulary) for what each glyph means — the Working

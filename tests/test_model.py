@@ -126,8 +126,8 @@ def test_the_states_docker_passes_through_before_running_are_starting():
     """Not running yet is not the same as measured broken."""
     from terminal_status_panel.model import ServiceTask
 
-    for state in ("new", "pending", "assigned", "accepted", "preparing",
-                  "ready", "starting"):
+    for state in ("new", "allocated", "pending", "assigned", "accepted",
+                  "preparing", "ready", "starting"):
         task = ServiceTask(node="srv-01", state=state)
         assert task.starting is True, state
         assert task.running is False, state

@@ -116,8 +116,8 @@ def _combined_icon(replica: str, cluster: str) -> str:
         replica \\ cluster   ✅    ·     ⚠️    💀    ✗
         ✅ (n/n)             ✅    ·     ⚠️    💀    ✗
         · (0/0)              ✅    ·     ⚠️    💀    ✗
-        ⚠️ (1..n-1 / n)      ⚠️    ⚠️    ⚠️    💀    ✗
-        💀 (0/n)             💀    💀    💀    💀    ✗
+        ⚠️ (0/n or 1..n-1/n) ⚠️    ⚠️    ⚠️    💀    ✗
+        💀 (0/n not starting)💀    💀    💀    💀    ✗
     """
     if replica in (icons.DEAD, icons.WARN) and _SEVERITY[replica] > _SEVERITY[cluster]:
         return replica
