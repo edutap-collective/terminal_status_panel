@@ -27,10 +27,10 @@ def _branch_heads(out: str, router: str) -> int:
     Counting bare name occurrences cannot tell one branch from two: a router
     under a *single* entrypoint already prints its name twice, on the ``└─
     router`` line and on the ``└─ → service`` line below it. Only the branch
-    head is counted here, so the assertion fails if a router that belongs
-    under several entrypoints is drawn under one.
+    head is counted, and by substring rather than per line — the entrypoints
+    render side by side, so one line can carry two branches.
     """
-    return sum(1 for line in out.splitlines() if line.strip().startswith(f"└─ {router}"))
+    return out.count(f"\u2514\u2500 {router}")
 
 
 def _wired():
@@ -68,9 +68,11 @@ def test_entrypoints_appear_with_their_port():
     assert "2020" in out
 
 
-def test_entrypoints_are_ordered_by_port():
-    out = _render(_wired())
-    assert out.index(":443") < out.index(":2006") < out.index(":2020")
+def test_entrypoints_keep_the_order_the_collector_gives_them():
+    """Declaration order, not port order: the parser preserves the arguments'
+    own grouping and the renderer must not undo it."""
+    out = _render(_wired(), width=60)
+    assert out.index(":2006") < out.index(":2020") < out.index(":443")
 
 
 def test_a_router_on_two_entrypoints_appears_under_both():
@@ -308,3 +310,114 @@ def test_file_provider_error_is_shown_as_a_warning_above_the_tree():
     # The tree still renders beneath the warning.
     tree_idx = next(i for i, ln in enumerate(lines) if "kafbat-ui" in ln)
     assert tree_idx > warning_idx
+
+
+def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
+    """Stacked vertically they run to some seventy lines on lrz_cc while two
+    thirds of the terminal stay empty — the same arrangement CLUSTER HEALTH
+    uses."""
+    wide = _render(_wired(), width=200)
+    narrow = _render(_wired(), width=40)
+    assert len(wide.splitlines()) < len(narrow.splitlines())
+    # Side by side, one line carries two entrypoint heads.
+    assert any("kafbat" in line and "portalmgmt" in line for line in wide.splitlines())
+
+
+def test_an_entrypoint_head_carries_the_worst_verdict_below_it():
+    """A wall of branches has to say at a glance which one to read first."""
+    info = _wired()
+    info.routers.append(TraefikRouter(
+        name="broken", entrypoints=["portalmgmt"], service="gone"))
+    swarm = SwarmInfo(reachable=True, enabled=True, services=[
+        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                      tasks=[ServiceTask("srv-01", "running")]),
+    ])
+    out = _render(info, swarm=swarm, width=60)
+    heads = [ln for ln in out.splitlines() if ":2020" in ln]
+    assert icons.FAILED in heads[0]
+
+
+def test_the_ping_entrypoint_is_not_reported_as_an_unserved_port():
+    """`--ping.entryPoint=ping` makes Traefik answer /ping there itself. It is
+    the one entrypoint that is supposed to look empty."""
+    info = _wired()
+    info.entrypoints.append(TraefikEntrypoint(name="ping", address=":8080", port=8080))
+    info.ping_entrypoint = "ping"
+    out = _render(info, width=60)
+    ping_line = [ln for ln in out.splitlines() if ln.startswith("ping  :8080")][0]
+    assert "health check" in ping_line
+    assert "no router" not in ping_line
+
+
+def test_an_entrypoint_that_is_not_the_ping_one_still_reads_as_a_finding():
+    info = _wired()
+    info.ping_entrypoint = "ping"
+    out = _render(info, width=60)
+    https_line = [ln for ln in out.splitlines() if ":443" in ln][0]
+    assert "no router" in https_line
+
+
+def test_a_file_provider_service_is_not_reported_as_a_missing_docker_service():
+    """`account-api-placeholder` is declared in the file provider and never in
+    Swarm. Matching it against Swarm service names reports a service missing
+    that was never supposed to be there."""
+    info = TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="login_lmu_de", address=":2009",
+                                       port=2009)],
+        routers=[TraefikRouter(name="account-api", entrypoints=["login_lmu_de"],
+                               rule="PathPrefix(`/api`)",
+                               service="account-api-placeholder", source="file")],
+        services={"account-api-placeholder": TraefikServiceRef(
+            name="account-api-placeholder", source="file",
+            upstreams=["http://user-account.internal"])},
+    )
+    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=True, services=[]),
+                  width=100)
+    assert "no such service" not in out
+    assert "http://user-account.internal" in out
+    assert icons.UNKNOWN in out
+
+
+def test_an_orphaned_router_names_the_service_carrying_the_label():
+    """The block says which router and which entrypoint, but the label lives on
+    a Docker service — without its name you cannot go and fix it."""
+    info = _wired()
+    info.routers.append(TraefikRouter(
+        name="image_api", entrypoints=["websecure"],
+        rule="Host(`www.portal.uni-muenchen.de`)", service="image_api",
+        origin="edutap_production_image_api"))
+    out = _render(info, width=120)
+    assert "edutap_production_image_api" in out
+
+
+def test_an_orphaned_router_without_an_origin_says_nothing_extra():
+    """`origin` is optional. An absent one must not render as an empty pair of
+    brackets pretending to be an answer."""
+    info = _wired()
+    info.routers.append(TraefikRouter(name="nameless", entrypoints=["websecure"]))
+    out = _render(info, width=120)
+    assert "()" not in out
+
+
+def test_a_router_naming_an_unknown_middleware_is_marked():
+    """A typo in a middleware reference otherwise reads exactly like a
+    reference that resolved."""
+    info = _wired()
+    info.routers[0].middlewares = ["image_api_stripprefix"]
+    out = _render(info, width=120)
+    assert "no such middleware" in out
+    assert icons.FAILED in out
+
+
+def test_a_middleware_reference_with_a_provider_suffix_still_resolves():
+    """Traefik writes `name@provider` when a router references a middleware
+    from another provider; the name before the @ is the one we parsed."""
+    from terminal_status_panel.model import TraefikMiddleware
+
+    info = _wired()
+    info.middlewares["strip"] = TraefikMiddleware(name="strip", kind="stripprefix")
+    info.routers[0].middlewares = ["strip@swarm"]
+    out = _render(info, width=120)
+    assert "no such middleware" not in out
+    assert "stripprefix" in out

@@ -8,6 +8,7 @@ it silently — and the cluster has one today.
 
 from __future__ import annotations
 
+from rich.columns import Columns
 from rich.console import Group, RenderableType
 from rich.text import Text
 
@@ -16,7 +17,7 @@ from ..config import Config
 from ..model import SwarmInfo, TraefikInfo, TraefikRouter
 from . import icons
 from .panels import section
-from .verdict import service_verdict
+from .verdict import service_verdict, severity, verdict_icon
 
 _INTERNAL_SUFFIX = "@internal"
 
@@ -25,8 +26,15 @@ def _subhead(title: str) -> Text:
     return Text(title, style="bold cyan")
 
 
-def _service_line(router: TraefikRouter, info: TraefikInfo,
-                  swarm: SwarmInfo | None) -> Text:
+def _service_state(router: TraefikRouter, info: TraefikInfo,
+                   swarm: SwarmInfo | None) -> tuple[str, Text]:
+    """This router's service, as a verdict glyph and as a rendered line.
+
+    The glyph is empty when the line makes no claim at all — Traefik's own
+    endpoints. The summary form needs the severity without the line, and
+    deriving it a second time, or reading it back out of the rendered text,
+    is how the two would come to disagree.
+    """
     name = router.service or router.name
     ref = info.services.get(name)
     line = Text(f"     └─ → {name}")
@@ -36,7 +44,16 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
         line.append(f" :{ref.port}")
     if name.endswith(_INTERNAL_SUFFIX):
         # Traefik's own endpoint: nothing was measured, so nothing is claimed.
-        return line
+        return "", line
+    if ref and ref.source == "file":
+        # Declared in the file provider, not in Swarm. Docker cannot see where
+        # this one points, so the target is shown and no verdict is given —
+        # matching it against Swarm service names would report a service that
+        # was never supposed to be there as missing.
+        for url in ref.upstreams:
+            line.append(f"  {url}", style="dim")
+        line.append(f"  {icons.UNKNOWN}", style="dim")
+        return icons.UNKNOWN, line
     if swarm is None or not swarm.reachable or not swarm.enabled:
         # Nobody looked at Docker, or the look came back empty-handed: no
         # client (`swarm is None`), no answer from the daemon
@@ -45,21 +62,25 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
         # service). Claiming the service does not exist would be asserting what
         # was never measured — show the neutral dot, no count.
         line.append(f"  {icons.UNKNOWN}", style="dim")
-        return line
+        return icons.UNKNOWN, line
     docker_name = ref.docker_service if ref else None
     matching = [s for s in swarm.services if s.name == docker_name]
     if not matching:
         line.append(f"  {icons.FAILED} no such service", style="red")
-        return line
+        return icons.FAILED, line
     line.append("  ")
     # Same preference as DOCKER INFOS: ``_node_map`` swallows a failed node
     # listing, so an empty node list beside a non-zero count is reachable, and
     # counting only the list would give a global-mode service a second, softer
     # verdict here than the one the other section shows.
-    line.append_text(
-        service_verdict(matching, node_count=swarm.node_count or len(swarm.nodes))
-    )
-    return line
+    node_count = swarm.node_count or len(swarm.nodes)
+    line.append_text(service_verdict(matching, node_count=node_count))
+    return verdict_icon(matching, node_count=node_count), line
+
+
+def _service_line(router: TraefikRouter, info: TraefikInfo,
+                  swarm: SwarmInfo | None) -> Text:
+    return _service_state(router, info, swarm)[1]
 
 
 def _router_lines(router: TraefikRouter, info: TraefikInfo,
@@ -76,26 +97,56 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         head.append(f"  {icons.DEAD} rejected by Traefik", style="red")
     parts: list[RenderableType] = [head]
     for name in router.middlewares:
-        mw = info.middlewares.get(name)
-        kind = f" ({mw.kind})" if mw and mw.kind else ""
+        # Traefik appends `@provider` when a router references a middleware
+        # from another provider; we parsed the bare name.
+        bare = name.split("@", 1)[0]
+        mw = info.middlewares.get(bare)
+        if mw is None:
+            # A reference to something that was never declared. Rendering it
+            # like a resolved one makes a typo read as working wiring.
+            parts.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware",
+                              style="red"))
+            continue
+        kind = f" ({mw.kind})" if mw.kind else ""
         parts.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
     parts.append(_service_line(router, info, swarm))
     return Group(*parts)
 
 
-def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) -> Group:
-    head = Text(f"{entrypoint.name}  {entrypoint.address}", style="bold cyan")
-    # A router naming no entrypoint is attached to all of them by Traefik
-    # (see unknown_entrypoints) — without this it would render in none.
+def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
+    """The routers on this entrypoint, internal ones last.
+
+    A router naming no entrypoint is attached to all of them by Traefik (see
+    ``unknown_entrypoints``) — without that clause it would render in none.
+    The sort keeps ``ping-router``, which hangs on six of nine entrypoints,
+    from leading every branch.
+    """
     attached = [
         r for r in info.routers if not r.entrypoints or entrypoint.name in r.entrypoints
     ]
-    if not attached:
-        # A published port nothing serves is a finding, not an absence.
-        head.append("   — no router", style="dim")
-        return Group(head)
-    # Internal routers last: ping-router hangs on six of nine entrypoints.
     attached.sort(key=lambda r: (r.source != "swarm", r.name))
+    return attached
+
+
+def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) -> Group:
+    head = Text(f"{entrypoint.name}  {entrypoint.address}", style="bold cyan")
+    attached = _attached(entrypoint, info)
+    if not attached:
+        if entrypoint.name == info.ping_entrypoint:
+            # `--ping.entryPoint=…`: Traefik answers /ping here itself. The one
+            # entrypoint that is supposed to carry no router.
+            head.append("   — Traefik's own health check", style="dim")
+        else:
+            # A published port nothing serves is a finding, not an absence.
+            head.append("   — no router", style="dim")
+        return Group(head)
+    worst = max(
+        (_service_state(r, info, swarm)[0] for r in attached), key=severity, default=""
+    )
+    if worst:
+        # The column head carries the worst verdict below it, so a wall of
+        # branches still says at a glance which one to read first.
+        head.append(f"   {worst}")
     return Group(head, *[_router_lines(r, info, swarm) for r in attached])
 
 
@@ -137,6 +188,10 @@ def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
                 " — none could be read",
                 style="yellow",
             )
+        if router.origin:
+            # The label lives on a Docker service (or in a config); naming the
+            # router alone tells you what is broken but not where to fix it.
+            head.append(f"   [{router.origin}]", style="dim")
         parts.append(head)
         if router.rule:
             parts.append(Text(f"     {router.rule}", style="dim"))
@@ -146,7 +201,14 @@ def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
 
 def traefik_section(info: TraefikInfo | None, cfg: Config,
                     swarm: SwarmInfo | None = None) -> RenderableType:
-    """The TRAEFIK WIRING block."""
+    """The TRAEFIK WIRING block.
+
+    The entrypoint branches flow into as many columns as the width allows, the
+    same arrangement CLUSTER HEALTH uses: stacked vertically they run to some
+    seventy lines while two thirds of the terminal stay empty. The orphan block
+    stays full width below them — its lines are the longest in the section, and
+    it holds the findings.
+    """
     data = info or TraefikInfo()
     if data.error:
         return section("TRAEFIK WIRING",
@@ -177,9 +239,11 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
             style="dim",
         ))
         parts.append(Text(""))
-    ordered = sorted(data.entrypoints, key=lambda ep: (ep.port is None, ep.port))
-    for entrypoint in ordered:
-        parts.append(_entrypoint_block(entrypoint, data, swarm))
+    if data.entrypoints:
+        # Declaration order, which the collector preserves: the four
+        # entrypoints every cluster has come before this cluster's own.
+        blocks = [_entrypoint_block(ep, data, swarm) for ep in data.entrypoints]
+        parts.append(Columns(blocks, padding=(0, 4), expand=False))
         parts.append(Text(""))
     orphans = _orphan_block(data, swarm)
     if orphans is not None:

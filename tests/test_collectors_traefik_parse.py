@@ -48,9 +48,33 @@ def test_ports_are_parsed_from_the_address():
     assert by_name["https"].port == 443
 
 
-def test_entrypoints_are_ordered_by_port():
-    ports = [ep.port for ep in parse.parse_entrypoints(ARGS)]
-    assert ports == sorted(ports)
+def test_entrypoints_keep_the_order_the_arguments_declare_them_in():
+    """The role lists the four every cluster has before this cluster's own, and
+    that grouping is worth more than the port number: sorted by port, `https`
+    (443) would lead and `dashboard` (8082) would trail, scattering the four."""
+    names = [ep.name for ep in parse.parse_entrypoints(ARGS)]
+    assert names[:4] == ["dashboard", "ping", "default", "https"]
+    assert names[4:] == [
+        "login_lmu_de", "portalmgmt", "www_portal_uni_muenchen_de",
+        "db-ui", "kafbat",
+    ]
+
+
+def test_an_entrypoint_declared_twice_appears_once():
+    """Several arguments carry the same entrypoint name; only `.address`
+    creates it, but a repeated address must not double the column."""
+    args = ["--entrypoints.https.address=:443", "--entryPoints.https.address=:443"]
+    assert [ep.name for ep in parse.parse_entrypoints(args)] == ["https"]
+
+
+def test_the_ping_entrypoint_is_read_from_the_arguments():
+    """It carries no router by design — without knowing which one it is, the
+    panel reports Traefik's own health endpoint as an unserved port."""
+    assert parse.parse_ping_entrypoint(ARGS) == "ping"
+
+
+def test_no_ping_argument_means_no_ping_entrypoint():
+    assert parse.parse_ping_entrypoint(["--entrypoints.https.address=:443"]) is None
 
 
 def test_non_address_arguments_do_not_create_entrypoints():
@@ -252,14 +276,14 @@ tls:
 
 
 def test_file_routers_are_marked_as_coming_from_the_file_provider():
-    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="traefik_dynamic_yml_v2")
+    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="traefik_dynamic_yml_v2")
     assert {r.name for r in routers} == {"api", "ping-router"}
     assert all(r.source == "file" for r in routers)
     assert all(r.origin == "traefik_dynamic_yml_v2" for r in routers)
 
 
 def test_a_single_entrypoint_string_becomes_a_list():
-    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
     api = [r for r in routers if r.name == "api"][0]
     assert api.entrypoints == ["dashboard"]
     assert api.service == "api@internal"
@@ -268,7 +292,7 @@ def test_a_single_entrypoint_string_becomes_a_list():
 def test_the_capitalised_entrypoints_key_is_also_read():
     """The file provider accepts entryPoints as well as entrypoints, and this
     fixture uses both — one per router."""
-    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
     ping = [r for r in routers if r.name == "ping-router"][0]
     assert ping.entrypoints == [
         "login_lmu_de", "portalmgmt", "www_portal_uni_muenchen_de",
@@ -277,27 +301,27 @@ def test_the_capitalised_entrypoints_key_is_also_read():
 
 
 def test_a_quoted_tls_string_counts_as_true():
-    routers, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
     assert all(r.tls for r in routers)
 
 
 def test_malformed_yaml_yields_nothing_rather_than_raising():
-    assert parse.parse_dynamic_yaml("http: [unclosed", origin="x") == ([], {})
+    assert parse.parse_dynamic_yaml("http: [unclosed", origin="x") == ([], {}, {})
 
 
 def test_yaml_without_an_http_section_yields_nothing():
-    assert parse.parse_dynamic_yaml("tls:\n  stores: {}\n", origin="x") == ([], {})
+    assert parse.parse_dynamic_yaml("tls:\n  stores: {}\n", origin="x") == ([], {}, {})
 
 
 def test_routers_as_a_list_instead_of_a_mapping_yields_nothing():
     """http.routers is documented as a mapping of name -> spec. If it comes
     back as a list instead, .items() must not be called on it."""
-    assert parse.parse_dynamic_yaml("http:\n  routers:\n  - a\n  - b\n", origin="x") == ([], {})
+    assert parse.parse_dynamic_yaml("http:\n  routers:\n  - a\n  - b\n", origin="x") == ([], {}, {})
 
 
 def test_middlewares_as_a_list_instead_of_a_mapping_yields_nothing():
     """Same shape problem as routers, but for http.middlewares."""
-    routers, middlewares = parse.parse_dynamic_yaml(
+    routers, middlewares, _ = parse.parse_dynamic_yaml(
         "http:\n  middlewares:\n  - a\n  - b\n", origin="x"
     )
     assert (routers, middlewares) == ([], {})
@@ -316,19 +340,19 @@ http:
 
 
 def test_a_middleware_keeps_its_name_and_first_configured_key_as_kind():
-    _, middlewares = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    _, middlewares, _ = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
     mw = middlewares["image_api_stripprefix"]
     assert mw.name == "image_api_stripprefix"
     assert mw.kind == "stripprefix"
 
 
 def test_a_middleware_with_an_empty_spec_has_no_kind_rather_than_crashing():
-    _, middlewares = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    _, middlewares, _ = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
     assert middlewares["empty_middleware"].kind is None
 
 
 def test_a_middleware_with_a_null_spec_has_no_kind_rather_than_crashing():
-    _, middlewares = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    _, middlewares, _ = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
     assert middlewares["null_middleware"].kind is None
 
 
@@ -384,3 +408,40 @@ def test_a_payload_of_the_wrong_shape_does_not_raise():
     (`test_fetch_accepted_returns_none_when_the_payload_cannot_be_read`)."""
     assert parse.parse_api_rawdata({"routers": ["kafbat-ui@swarm"]}) == set()
     assert parse.parse_api_rawdata(None) == set()
+
+
+DYNAMIC_YML_WITH_SERVICES = """
+http:
+  routers:
+    account-api:
+      rule: "PathPrefix(`/api`)"
+      entryPoints: [login_lmu_de]
+      service: account-api-placeholder
+      tls: {}
+  services:
+    account-api-placeholder:
+      loadBalancer:
+        servers: [{ url: "http://user-account.internal" }]
+"""
+
+
+def test_file_provider_services_are_read_with_their_upstreams():
+    """`account-api-placeholder` exists only here, never in Swarm. Read from
+    labels alone the router looks like it points at nothing, and the panel
+    reports a missing service it never looked for."""
+    _, _, services = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_SERVICES, origin="x")
+    ref = services["account-api-placeholder"]
+    assert ref.source == "file"
+    assert ref.upstreams == ["http://user-account.internal"]
+    assert ref.docker_service is None
+
+
+def test_a_service_without_a_load_balancer_still_parses():
+    text = "http:\n  services:\n    s:\n      weighted: {}\n"
+    _, _, services = parse.parse_dynamic_yaml(text, origin="x")
+    assert services["s"].upstreams == []
+
+
+def test_services_as_a_list_instead_of_a_mapping_yields_nothing():
+    text = "http:\n  services:\n  - a\n  - b\n"
+    assert parse.parse_dynamic_yaml(text, origin="x") == ([], {}, {})

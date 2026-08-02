@@ -15,7 +15,6 @@ from terminal_status_panel.model import (
     TraefikInfo,
     TraefikMiddleware,
     TraefikRouter,
-    TraefikServiceRef,
 )
 
 
@@ -99,12 +98,6 @@ def test_a_router_defaults_to_unconsulted_rather_than_accepted():
     assert router.middlewares == []
 
 
-def test_a_service_reference_may_be_internal():
-    ref = TraefikServiceRef(name="api@internal", internal=True)
-    assert ref.internal is True
-    assert ref.port is None
-
-
 def test_a_middleware_keeps_its_kind_and_detail():
     mw = TraefikMiddleware(name="image_api_stripprefix", kind="stripprefix",
                            detail="prefixes=/wallet/image-api")
@@ -127,3 +120,22 @@ def test_panel_data_carries_traefik():
     assert PanelData().traefik is None
     info = TraefikInfo(reachable=True)
     assert PanelData(traefik=info).traefik.reachable is True
+
+
+def test_the_states_docker_passes_through_before_running_are_starting():
+    """Not running yet is not the same as measured broken."""
+    from terminal_status_panel.model import ServiceTask
+
+    for state in ("new", "allocated", "pending", "assigned", "accepted",
+                  "preparing", "ready", "starting"):
+        task = ServiceTask(node="srv-01", state=state)
+        assert task.starting is True, state
+        assert task.running is False, state
+
+
+def test_running_and_failed_are_not_starting():
+    from terminal_status_panel.model import ServiceTask
+
+    assert ServiceTask(node="srv-01", state="running").starting is False
+    assert ServiceTask(node="srv-01", state="failed").starting is False
+    assert ServiceTask(node="srv-01", state="shutdown").starting is False

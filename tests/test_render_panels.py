@@ -576,3 +576,14 @@ def test_bugsink_is_infrastructure():
     service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
     bugsink_at = _line_index(out, lambda ln: ln.strip().startswith("bugsink"))
     assert infra_at < bugsink_at < service_at
+
+
+def test_a_single_starting_task_renders_as_degraded_not_dead():
+    """It is on its way up. 💀 would say we measured it broken."""
+    services = [ServiceStatus("s", 0, 1, tasks=[ServiceTask("srv-01", "preparing")])]
+    assert "⚠️" in panels._node_cell(services, "srv-01").plain
+
+
+def test_a_single_failed_task_still_renders_as_dead():
+    services = [ServiceStatus("s", 0, 1, tasks=[ServiceTask("srv-01", "failed")])]
+    assert "💀" in panels._node_cell(services, "srv-01").plain

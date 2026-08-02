@@ -66,13 +66,15 @@ def _counts(services: list[ServiceStatus], node_count: int) -> tuple[int, int]:
     return running, sum(_desired(s, node_count) for s in services)
 
 
-def _replica_icon(running: int, desired: int) -> str:
+def _replica_icon(running: int, desired: int, starting: int = 0) -> str:
     if desired == 0:
         # Scaled to zero is a decision, not an outage. Rendering it as broken
         # would train people to ignore this column.
         return icons.UNKNOWN
     if running == 0:
-        return icons.DEAD
+        # Nothing runs -- but a task on its way up has not been measured
+        # broken, and a deploy in progress must not read like an outage.
+        return icons.WARN if starting else icons.DEAD
     if running < desired:
         return icons.WARN
     return icons.OK
@@ -114,12 +116,47 @@ def _combined_icon(replica: str, cluster: str) -> str:
         replica \\ cluster   ✅    ·     ⚠️    💀    ✗
         ✅ (n/n)             ✅    ·     ⚠️    💀    ✗
         · (0/0)              ✅    ·     ⚠️    💀    ✗
-        ⚠️ (1..n-1 / n)      ⚠️    ⚠️    ⚠️    💀    ✗
-        💀 (0/n)             💀    💀    💀    💀    ✗
+        ⚠️ (0/n or 1..n-1/n) ⚠️    ⚠️    ⚠️    💀    ✗
+        💀 (0/n not starting)💀    💀    💀    💀    ✗
     """
     if replica in (icons.DEAD, icons.WARN) and _SEVERITY[replica] > _SEVERITY[cluster]:
         return replica
     return cluster
+
+
+def verdict_icon(
+    services: list[ServiceStatus],
+    *,
+    kind: str | None = None,
+    cluster: ClusterService | None = None,
+    node_count: int = 0,
+) -> str:
+    """The verdict glyph alone, for callers that summarise rather than tabulate.
+
+    Exists so that a caller needing only the severity does not re-derive it or,
+    worse, read it back out of the rendered cell: the two would drift, and this
+    project has already been bitten once by the same rule living in two places.
+    """
+    if not services:
+        return ""
+    running, desired = _counts(services, node_count)
+    starting = sum(1 for s in services for t in s.tasks if t.starting)
+    replica = _replica_icon(running, desired, starting)
+    if kind is None:
+        return replica
+    if cluster is None:
+        # A clustered service with no verdict: the health section did not run,
+        # or this kind is not enabled. "Five brokers are running" is not the
+        # claim this column makes, so the cluster side contributes nothing —
+        # but _combined_icon still lets a replica state more severe than
+        # "unobserved" through, which is what renders ``💀 0/3`` here.
+        return _combined_icon(replica, icons.UNKNOWN)
+    return _combined_icon(replica, _cluster_icon(cluster))
+
+
+def severity(icon: str) -> int:
+    """How much a glyph claims. Unknown glyphs rank lowest, claiming nothing."""
+    return _SEVERITY.get(icon, -1)
 
 
 def service_verdict(
@@ -132,17 +169,6 @@ def service_verdict(
     """The ``Working`` cell for one row: an icon and a running/desired count."""
     if not services:
         return Text("")
+    icon = verdict_icon(services, kind=kind, cluster=cluster, node_count=node_count)
     running, desired = _counts(services, node_count)
-    replica = _replica_icon(running, desired)
-    if kind is None:
-        icon = replica
-    elif cluster is None:
-        # A clustered service with no verdict: the health section did not run,
-        # or this kind is not enabled. "Five brokers are running" is not the
-        # claim this column makes, so the cluster side contributes nothing —
-        # but _combined_icon still lets a replica state more severe than
-        # "unobserved" through, which is what renders ``💀 0/3`` here.
-        icon = _combined_icon(replica, icons.UNKNOWN)
-    else:
-        icon = _combined_icon(replica, _cluster_icon(cluster))
     return Text(f"{icon} {running}/{desired}", style=_STYLES.get(icon, ""))

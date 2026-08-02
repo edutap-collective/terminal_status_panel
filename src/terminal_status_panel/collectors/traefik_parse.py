@@ -30,21 +30,49 @@ def _port_of(address: str) -> int | None:
 
 
 def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
-    """Entrypoints from the Traefik service's command arguments, by port."""
+    """Entrypoints from the Traefik service's command arguments, in the order
+    the arguments declare them.
+
+    Declaration order is the deployment's own grouping and reads better than
+    the port number: the Ansible role lists the four entrypoints every cluster
+    has — ``dashboard``, ``ping``, ``default``, ``https`` — before the per-vhost
+    ones it appends for this cluster, so that grouping survives into the panel.
+    Sorting by port would interleave them (``https`` at 443 first, ``dashboard``
+    at 8082 last) and scatter what belongs together.
+    """
     found: list[TraefikEntrypoint] = []
+    seen: set[str] = set()
     for arg in args or []:
         match = _ENTRYPOINT_ADDRESS.match(arg.strip())
         if not match:
             continue
+        name = match.group("name")
+        if name in seen:
+            continue
+        seen.add(name)
         address = match.group("address")
         found.append(
-            TraefikEntrypoint(
-                name=match.group("name"), address=address, port=_port_of(address)
-            )
+            TraefikEntrypoint(name=name, address=address, port=_port_of(address))
         )
-    # A port-less entrypoint sorts last rather than crashing the comparison.
-    found.sort(key=lambda ep: (ep.port is None, ep.port or 0, ep.name))
     return found
+
+
+_PING_ENTRYPOINT = re.compile(r"^--ping\.entrypoint=(?P<name>.+)$", re.IGNORECASE)
+
+
+def parse_ping_entrypoint(args: list[str]) -> str | None:
+    """The entrypoint Traefik answers its own health check on, if configured.
+
+    ``--ping=true --ping.entryPoint=ping`` makes Traefik serve ``/ping`` on
+    that entrypoint itself, without a router. Rendering it as ``— no router``
+    is true but reads as a finding, and this is the one entrypoint that is
+    *supposed* to look empty.
+    """
+    for arg in args or []:
+        match = _PING_ENTRYPOINT.match(arg.strip())
+        if match:
+            return match.group("name").strip() or None
+    return None
 
 
 # Same trap as the entrypoint arguments above: Traefik reads its label keys
@@ -140,24 +168,47 @@ def _as_list(value: object) -> list[str]:
     return [str(item) for item in value]
 
 
+def _upstreams(spec: object) -> list[str]:
+    """The URLs a file-provider service load-balances over."""
+    if not isinstance(spec, dict):
+        return []
+    balancer = spec.get("loadBalancer", spec.get("loadbalancer"))
+    if not isinstance(balancer, dict):
+        return []
+    servers = balancer.get("servers")
+    if not isinstance(servers, list):
+        return []
+    urls = []
+    for server in servers:
+        url = server.get("url") if isinstance(server, dict) else None
+        if isinstance(url, str) and url:
+            urls.append(url)
+    return urls
+
+
 def parse_dynamic_yaml(
     text: str, origin: str
-) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware]]:
-    """Routers and middlewares from a file-provider config.
+) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware], dict[str, TraefikServiceRef]]:
+    """Routers, middlewares and services from a file-provider config.
 
     The api and ping-router entries live only here. Without them the dashboard
     entrypoint looks empty and the /_traefik_ping_ path every webfe health
     check depends on is invisible.
+
+    The services matter for the same reason in reverse: ``account-api`` points
+    at ``account-api-placeholder``, which is declared here and not in Swarm at
+    all. Read only from labels, it looks like a router pointing at nothing —
+    the panel would report a missing service it had never looked for.
     """
     try:
         data = yaml.safe_load(text) or {}
     except Exception:
-        return [], {}
+        return [], {}, {}
     if not isinstance(data, dict):
-        return [], {}
+        return [], {}, {}
     http = data.get("http") or {}
     if not isinstance(http, dict):
-        return [], {}
+        return [], {}, {}
 
     raw_routers = http.get("routers") or {}
     if not isinstance(raw_routers, dict):
@@ -190,7 +241,18 @@ def parse_dynamic_yaml(
         kind = next(iter(spec), None) if isinstance(spec, dict) else None
         middlewares[str(name)] = TraefikMiddleware(name=str(name), kind=kind)
 
-    return routers, middlewares
+    raw_services = http.get("services") or {}
+    if not isinstance(raw_services, dict):
+        raw_services = {}
+    services: dict[str, TraefikServiceRef] = {}
+    for name, spec in sorted(raw_services.items()):
+        # No docker_service: this one is not backed by Swarm, and claiming a
+        # name that will never match is how it came to read "no such service".
+        services[str(name)] = TraefikServiceRef(
+            name=str(name), source="file", upstreams=_upstreams(spec)
+        )
+
+    return routers, middlewares, services
 
 
 def parse_api_rawdata(payload: dict) -> set[str]:

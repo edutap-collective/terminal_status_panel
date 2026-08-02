@@ -66,11 +66,13 @@ def test_traefik_is_a_known_section():
     assert "traefik" in SECTIONS
 
 
-def test_traefik_is_not_in_the_default_full_panel():
-    """Nine entrypoints would bury the login banner."""
+def test_traefik_is_in_the_default_full_panel():
+    """It renders there in summary form — the tree would bury the banner, but
+    leaving the wiring out of the panel people actually see hides the findings
+    it exists to surface."""
     from terminal_status_panel import cli
 
-    assert "traefik" not in cli.DEFAULT_SECTIONS
+    assert "traefik" in cli.DEFAULT_SECTIONS
 
 
 def test_docker_section_receives_the_health_data(monkeypatch):
@@ -85,3 +87,48 @@ def test_docker_section_receives_the_health_data(monkeypatch):
     health = HealthInfo(clusters_probed=True)
     layout.docker_section(PanelData(swarm=SwarmInfo(reachable=True), health=health), Config())
     assert seen["health"] is health
+
+
+def _traefik_data():
+    from terminal_status_panel.model import (
+        ServiceStatus,
+        ServiceTask,
+        TraefikEntrypoint,
+        TraefikInfo,
+        TraefikRouter,
+        TraefikServiceRef,
+    )
+
+    return PanelData(
+        swarm=SwarmInfo(reachable=True, enabled=True, services=[
+            ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                          tasks=[ServiceTask("srv-01", "running")]),
+        ]),
+        traefik=TraefikInfo(
+            reachable=True,
+            entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020",
+                                           port=2020)],
+            routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"],
+                                   rule="PathPrefix(`/portale/kafka-ui`)",
+                                   service="kafbat-ui")],
+            services={"kafbat-ui": TraefikServiceRef(
+                name="kafbat-ui", port=8080, scheme="http",
+                docker_service="kafbat-ui_kafbat-ui")},
+        ),
+    )
+
+
+def _render_sections(sections):
+    console = Console(width=120, force_terminal=True, color_system=None, record=True)
+    console.print(build_layout(_traefik_data(), Config(), sections))
+    return console.export_text()
+
+
+def test_the_wiring_renders_the_same_whether_it_is_alone_or_not():
+    """One rendering, flowed into columns — so the block a login shows is the
+    block `status-traefik` shows, and nothing is only visible in one of them."""
+    alone = _render_sections(("traefik",))
+    beside = _render_sections(("docker", "traefik"))
+    assert alone.count("\u2514\u2500 kafbat-ui") == 1
+    assert beside.count("\u2514\u2500 kafbat-ui") == 1
+    assert "TRAEFIK WIRING" in beside

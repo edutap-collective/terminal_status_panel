@@ -379,10 +379,17 @@ def _node_cell(services, node_full: str) -> Text:
         return Text(" ")
     running = sum(1 for t in tasks if t.running)
     if len(tasks) == 1:
-        return Text(_OK) if running else Text(_DEAD, style="red")
+        if running:
+            return Text(_OK)
+        # Not running yet is not the same as measured broken.
+        if tasks[0].starting:
+            return Text(_WARN, style="yellow")
+        return Text(_DEAD, style="red")
     if running == len(tasks):
         return Text(f"{_OK}{len(tasks)}")
     if running == 0:
+        if all(t.starting for t in tasks):
+            return Text(f"{_WARN}0/{len(tasks)}", style="yellow")
         return Text(f"{_DEAD}0/{len(tasks)}", style="red")
     return Text(f"{_WARN}{running}/{len(tasks)}", style="yellow")
 
