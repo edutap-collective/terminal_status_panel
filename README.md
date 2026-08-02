@@ -50,9 +50,13 @@ out in five tiers:
     `health.enabled`. Withholding the cluster's claim does not withhold
     Docker's, so such a row still renders `💀 0/3` when nothing runs and
     nothing is still starting;
-  - a service whose tasks are still starting (not yet in running state) renders
-    `⚠️ 0/n` in place of `💀`, since a deploy in progress is not the same as a
-    measured outage.
+  - a service where at least one task is still starting (not yet in running
+    state) renders `⚠️` in the **Working** cell's icon in place of `💀`, since
+    a deploy in progress is not the same as a measured outage — a single
+    starting task renders the bare icon `⚠️`, and a row with no running tasks
+    but some still starting renders `⚠️ 0/n`. This differs from the node cell,
+    which only shows `⚠️ 0/N` when *all* tasks on that node are starting; a
+    node cell with a mix of starting and failed tasks still shows `💀 0/N`.
 
   A global-mode service (Traefik here) reports no replica count, so the
   denominator is the number of tasks Swarm actually scheduled — the same one
@@ -73,8 +77,9 @@ out in five tiers:
   A node cell holding a single task keeps the bare glyph, ✅, ⚠️, or 💀 — the
   overwhelming majority of cells, since most rows place one task per node —
   and from two tasks up it carries the count right after the glyph, with no
-  space in between: `✅2` when all of them run, `⚠️1/2` when some do (or when
-  all are starting), `💀0/2` when none run and none are starting. (Grouping can put more than one task on the same node — after
+  space in between: `✅N` when all run, `⚠️X/N` when some run, `⚠️0/N` when none
+  run and *all* are in a starting state, `💀0/N` when none run and at least one
+  has failed or entered another non-starting state. (Grouping can put more than one task on the same node — after
   ordinal stripping merges two originally separate services into one row,
   both can land on the same node, and that node's cell counts both.) See
   [Icon vocabulary](#icon-vocabulary) for what each glyph means — the Working
