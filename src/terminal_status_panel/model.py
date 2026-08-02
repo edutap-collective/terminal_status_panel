@@ -196,7 +196,6 @@ class TraefikServiceRef:
     name: str
     port: int | None = None
     scheme: str | None = None
-    internal: bool = False  # api@internal / ping@internal
     docker_service: str | None = None  # the Swarm service backing it, when known
     source: str = "swarm"  # swarm | file
     # Where a file-provider service sends traffic. Docker knows nothing about

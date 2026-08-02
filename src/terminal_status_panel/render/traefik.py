@@ -97,8 +97,17 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         head.append(f"  {icons.DEAD} rejected by Traefik", style="red")
     parts: list[RenderableType] = [head]
     for name in router.middlewares:
-        mw = info.middlewares.get(name)
-        kind = f" ({mw.kind})" if mw and mw.kind else ""
+        # Traefik appends `@provider` when a router references a middleware
+        # from another provider; we parsed the bare name.
+        bare = name.split("@", 1)[0]
+        mw = info.middlewares.get(bare)
+        if mw is None:
+            # A reference to something that was never declared. Rendering it
+            # like a resolved one makes a typo read as working wiring.
+            parts.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware",
+                              style="red"))
+            continue
+        kind = f" ({mw.kind})" if mw.kind else ""
         parts.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
     parts.append(_service_line(router, info, swarm))
     return Group(*parts)
@@ -179,6 +188,10 @@ def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
                 " — none could be read",
                 style="yellow",
             )
+        if router.origin:
+            # The label lives on a Docker service (or in a config); naming the
+            # router alone tells you what is broken but not where to fix it.
+            head.append(f"   [{router.origin}]", style="dim")
         parts.append(head)
         if router.rule:
             parts.append(Text(f"     {router.rule}", style="dim"))

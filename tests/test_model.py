@@ -15,7 +15,6 @@ from terminal_status_panel.model import (
     TraefikInfo,
     TraefikMiddleware,
     TraefikRouter,
-    TraefikServiceRef,
 )
 
 
@@ -97,12 +96,6 @@ def test_a_router_defaults_to_unconsulted_rather_than_accepted():
     assert router.source == "swarm"
     assert router.entrypoints == []
     assert router.middlewares == []
-
-
-def test_a_service_reference_may_be_internal():
-    ref = TraefikServiceRef(name="api@internal", internal=True)
-    assert ref.internal is True
-    assert ref.port is None
 
 
 def test_a_middleware_keeps_its_kind_and_detail():

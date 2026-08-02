@@ -377,3 +377,47 @@ def test_a_file_provider_service_is_not_reported_as_a_missing_docker_service():
     assert "no such service" not in out
     assert "http://user-account.internal" in out
     assert icons.UNKNOWN in out
+
+
+def test_an_orphaned_router_names_the_service_carrying_the_label():
+    """The block says which router and which entrypoint, but the label lives on
+    a Docker service — without its name you cannot go and fix it."""
+    info = _wired()
+    info.routers.append(TraefikRouter(
+        name="image_api", entrypoints=["websecure"],
+        rule="Host(`www.portal.uni-muenchen.de`)", service="image_api",
+        origin="edutap_production_image_api"))
+    out = _render(info, width=120)
+    assert "edutap_production_image_api" in out
+
+
+def test_an_orphaned_router_without_an_origin_says_nothing_extra():
+    """`origin` is optional. An absent one must not render as an empty pair of
+    brackets pretending to be an answer."""
+    info = _wired()
+    info.routers.append(TraefikRouter(name="nameless", entrypoints=["websecure"]))
+    out = _render(info, width=120)
+    assert "()" not in out
+
+
+def test_a_router_naming_an_unknown_middleware_is_marked():
+    """A typo in a middleware reference otherwise reads exactly like a
+    reference that resolved."""
+    info = _wired()
+    info.routers[0].middlewares = ["image_api_stripprefix"]
+    out = _render(info, width=120)
+    assert "no such middleware" in out
+    assert icons.FAILED in out
+
+
+def test_a_middleware_reference_with_a_provider_suffix_still_resolves():
+    """Traefik writes `name@provider` when a router references a middleware
+    from another provider; the name before the @ is the one we parsed."""
+    from terminal_status_panel.model import TraefikMiddleware
+
+    info = _wired()
+    info.middlewares["strip"] = TraefikMiddleware(name="strip", kind="stripprefix")
+    info.routers[0].middlewares = ["strip@swarm"]
+    out = _render(info, width=120)
+    assert "no such middleware" not in out
+    assert "stripprefix" in out
