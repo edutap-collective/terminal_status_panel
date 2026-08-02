@@ -120,3 +120,22 @@ def test_panel_data_carries_traefik():
     assert PanelData().traefik is None
     info = TraefikInfo(reachable=True)
     assert PanelData(traefik=info).traefik.reachable is True
+
+
+def test_the_states_docker_passes_through_before_running_are_starting():
+    """Not running yet is not the same as measured broken."""
+    from terminal_status_panel.model import ServiceTask
+
+    for state in ("new", "pending", "assigned", "accepted", "preparing",
+                  "ready", "starting"):
+        task = ServiceTask(node="srv-01", state=state)
+        assert task.starting is True, state
+        assert task.running is False, state
+
+
+def test_running_and_failed_are_not_starting():
+    from terminal_status_panel.model import ServiceTask
+
+    assert ServiceTask(node="srv-01", state="running").starting is False
+    assert ServiceTask(node="srv-01", state="failed").starting is False
+    assert ServiceTask(node="srv-01", state="shutdown").starting is False

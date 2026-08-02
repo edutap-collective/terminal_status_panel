@@ -56,9 +56,19 @@ class ServiceTask:
     node: str | None  # hostname running the task, or None when unassigned
     state: str  # actual task state: running / preparing / failed / ...
 
+    # The states Docker walks through before `running`. A task in one of them
+    # has not been measured yet -- rendering it as 💀 claims a failure that
+    # nobody observed.
+    _STARTING = frozenset({"new", "pending", "assigned", "accepted",
+                           "preparing", "ready", "starting"})
+
     @property
     def running(self) -> bool:
         return self.state == "running"
+
+    @property
+    def starting(self) -> bool:
+        return self.state in self._STARTING
 
 
 @dataclass

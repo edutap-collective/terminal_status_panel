@@ -66,13 +66,15 @@ def _counts(services: list[ServiceStatus], node_count: int) -> tuple[int, int]:
     return running, sum(_desired(s, node_count) for s in services)
 
 
-def _replica_icon(running: int, desired: int) -> str:
+def _replica_icon(running: int, desired: int, starting: int = 0) -> str:
     if desired == 0:
         # Scaled to zero is a decision, not an outage. Rendering it as broken
         # would train people to ignore this column.
         return icons.UNKNOWN
     if running == 0:
-        return icons.DEAD
+        # Nothing runs -- but a task on its way up has not been measured
+        # broken, and a deploy in progress must not read like an outage.
+        return icons.WARN if starting else icons.DEAD
     if running < desired:
         return icons.WARN
     return icons.OK
@@ -138,7 +140,8 @@ def verdict_icon(
     if not services:
         return ""
     running, desired = _counts(services, node_count)
-    replica = _replica_icon(running, desired)
+    starting = sum(1 for s in services for t in s.tasks if t.starting)
+    replica = _replica_icon(running, desired, starting)
     if kind is None:
         return replica
     if cluster is None:

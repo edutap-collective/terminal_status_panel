@@ -224,3 +224,17 @@ def test_no_member_data_shows_ok():
     """Quorum holds and there is no member list at all: nothing to warn about."""
     no_members = ClusterService(kind="rustfs", quorum_ok=True, members=[])
     assert _cell([_svc(5, 5)], kind="rustfs", cluster=no_members) == f"{icons.OK} 5/5"
+
+
+def test_a_service_whose_tasks_are_all_starting_is_degraded_not_dead():
+    """0/3 with three containers coming up is a deploy in progress, not an
+    outage. The count stays honest either way."""
+    tasks = [ServiceTask(f"srv-0{i}", "preparing") for i in (1, 2, 3)]
+    services = [ServiceStatus("s", 0, 3, tasks=tasks)]
+    assert service_verdict(services).plain == "⚠️ 0/3"
+
+
+def test_a_service_whose_tasks_failed_is_still_dead():
+    tasks = [ServiceTask(f"srv-0{i}", "failed") for i in (1, 2, 3)]
+    services = [ServiceStatus("s", 0, 3, tasks=tasks)]
+    assert service_verdict(services).plain == "💀 0/3"

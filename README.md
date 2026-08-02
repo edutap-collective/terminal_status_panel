@@ -48,7 +48,10 @@ out in five tiers:
     column makes — and the same fallback applies when the probe found no
     member of that service on this node, or the kind is not listed in
     `health.enabled`. Withholding the cluster's claim does not withhold
-    Docker's, so such a row still renders `💀 0/3` when nothing runs.
+    Docker's, so such a row still renders `💀 0/3` when nothing runs;
+  - a service whose tasks are still starting (not yet in running state) renders
+    `⚠️` in place of `💀`, since a deploy in progress is not the same as a
+    measured outage.
 
   A global-mode service (Traefik here) reports no replica count, so the
   denominator is the number of tasks Swarm actually scheduled — the same one
