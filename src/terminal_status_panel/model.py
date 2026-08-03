@@ -165,8 +165,14 @@ class PeerReachability:
         from a peer that is simply gone — there both counters stand still. The
         distinction decides where to look: a packet filter and a key mismatch
         both produce this, a dead host does not.
+
+        Both counters must be present. A missing one means the transport could
+        not be read (the TCP fallback, or a malformed dump), and answering from
+        that would turn absent data into a diagnosis.
         """
-        return bool(self.tx_bytes and not self.rx_bytes)
+        if self.rx_bytes is None or self.tx_bytes is None:
+            return False
+        return self.tx_bytes > 0 and self.rx_bytes == 0
 
 
 @dataclass

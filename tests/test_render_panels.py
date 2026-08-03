@@ -650,3 +650,29 @@ def test_down_node_without_matching_peer_is_not_annotated():
     swarm = _swarm_with("node-c", reachable=False)
     output = _text(panels.services_section(swarm, Config(), HealthInfo(peers_probed=True)))
     assert "wg:" not in output
+
+
+def test_tcp_fallback_peer_makes_no_tunnel_claim():
+    """The TCP fallback probes port 2377. Its "ok" says nothing about the
+    tunnel, so it must not surface as "(wg: ok)"."""
+    swarm = _swarm_with("node-c", reachable=False)
+    health = HealthInfo(
+        peers=[PeerReachability(name="node-c", method="tcp", ok=True, detail="tcp/2377")],
+        peers_probed=True,
+    )
+    output = _text(panels.services_section(swarm, Config(), health))
+    assert "wg:" not in output
+
+
+def test_stale_handshake_is_not_reported_as_none():
+    """peer.ok is False for a stale handshake too — but "no handshake" would be
+    the wrong word for one that merely aged out."""
+    swarm = _swarm_with("node-c", reachable=False)
+    health = HealthInfo(
+        peers=[_peer("wg-node-c.example.net", False, detail="5:00",
+                     rx_bytes=1024, tx_bytes=2048)],
+        peers_probed=True,
+    )
+    output = _text(panels.services_section(swarm, Config(), health))
+    assert "no handshake" not in output
+    assert "5:00" in output

@@ -360,8 +360,14 @@ def _peer_for_node(node_name: str,
     bare hostname (``node-c``), the tunnel is named from the hosts file
     (``wg-node-c.example.net``). Substring matching bridges that without
     a mapping table that would need maintaining. No match means no claim.
+
+    Only WireGuard peers qualify. The TCP fallback's ``ok`` means "port 2377
+    accepted a connection" and says nothing about a tunnel — reading it as one
+    would produce a confident "(wg: ok)" from a probe that never looked.
     """
     for peer in peers or ():
+        if peer.method != "wireguard":
+            continue
         if node_name and node_name in peer.name:
             return peer
     return None
@@ -384,7 +390,11 @@ def _node_tunnel_note(node: SwarmNode,
         return None
     if peer.ok:
         return Text(" (wg: ok)", style="dim")
-    reason = "no handshake"
+    # ``ok`` is False for a handshake that never happened *and* for one that
+    # merely aged past the staleness threshold. Calling the second "no
+    # handshake" would misname it, so the age speaks for itself where there
+    # is one; the parser writes "never" when there is not.
+    reason = "no handshake" if peer.detail == "never" else f"last handshake {peer.detail}"
     if peer.one_way:
         reason += ", one-way"
     return Text(f" (wg: {reason})", style="red")
