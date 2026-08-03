@@ -136,7 +136,7 @@ class ClusterService:
     """State of one clustered infrastructure service as seen from this node."""
 
     kind: str  # postgres | mongodb | kafka | glusterfs | rustfs
-    name: str | None = None  # PostgreSQL-18, lrz_app, cluster id, volume name
+    name: str | None = None  # stack name, cluster id, volume name
     applicable: bool = True  # False when this node runs no member
     reachable: bool = False
     leader: str | None = None  # primary / controller leader; None when leaderless

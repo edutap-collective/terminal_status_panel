@@ -92,7 +92,7 @@ def test_updates_panel_unsupported():
 
 
 def test_services_section_merges_per_node_replicas():
-    N1, N2, N3 = "lmzvd06-ccc-01", "lmzvd06-ccn-01", "lmzvd06-ccn-02"
+    N1, N2, N3 = "swarm01-mgr-01", "swarm01-wrk-01", "swarm01-wrk-02"
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=3,
         nodes=[SwarmNode(N1, reachable=True, role="manager", leader=True),
@@ -131,7 +131,7 @@ def test_services_section_merges_per_node_replicas():
     assert "DOCKER INFOS" in out
     assert "Infrastruktur" in out and "Service" in out and "Container (ohne Stack)" in out
     assert "Description" in out
-    assert "ccc-01" in out  # short node header
+    assert "mgr-01" in out  # short node header
 
     # kafka collapses to ONE row; per-node service names are gone.
     assert "kafka" in out
@@ -496,13 +496,13 @@ def test_tasks_of_several_services_in_one_row_are_counted_together():
     assert panels._node_cell(services, "srv-01").plain == f"{panels._OK}2"
 
 
-NODES = ["lmzvd06-ccc-01", "lmzvd06-ccn-01"]
+NODES = ["swarm01-mgr-01", "swarm01-wrk-01"]
 
 
 def test_an_ordinal_suffix_is_stripped():
     assert (
-        panels._base_service_name("edutap_production_heidi_connector_1", NODES)
-        == "edutap_production_heidi_connector"
+        panels._base_service_name("mystack_connector_1", NODES)
+        == "mystack_connector"
     )
 
 
@@ -511,7 +511,7 @@ def test_ordinal_stripping_survives_more_than_one_digit():
 
 
 def test_a_node_suffix_is_still_stripped():
-    assert panels._base_service_name("kafka_kafka-lmzvd06-ccc-01", NODES) == "kafka_kafka"
+    assert panels._base_service_name("kafka_kafka-swarm01-mgr-01", NODES) == "kafka_kafka"
 
 
 def test_a_hyphen_before_digits_is_left_alone():
@@ -534,7 +534,7 @@ def test_a_name_that_is_only_an_ordinal_is_left_alone():
 def test_ordinal_instances_collapse_into_one_row():
     """Three pinned instances render as one sub-row summing their replicas.
 
-    The stack also runs another service (as edutap_production does with
+    The stack also runs another service (as mystack does with
     thirteen, in production) so it renders as a stack header plus sub-rows
     rather than collapsing to a single stack-named row — that single-service
     collapse is a distinct, pre-existing case with its own tests."""
@@ -543,7 +543,7 @@ def test_ordinal_instances_collapse_into_one_row():
         nodes=[SwarmNode(n, reachable=True, state="ready", availability="active")
                for n in ("srv-01", "srv-02", "srv-03")],
         services=[
-            ServiceStatus(f"edutap_heidi_connector_{i}", 1, 1, stack="edutap",
+            ServiceStatus(f"edutap_connector_{i}", 1, 1, stack="edutap",
                           tasks=[ServiceTask(f"srv-0{i}", "running")])
             for i in (1, 2, 3)
         ] + [
@@ -552,10 +552,10 @@ def test_ordinal_instances_collapse_into_one_row():
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
-    assert "heidi_connector" in out
-    assert "heidi_connector_1" not in out
+    assert "connector" in out
+    assert "connector_1" not in out
     assert f"{icons.OK} 3/3" in out
-    matches = [ln for ln in out.splitlines() if ln.strip().startswith("heidi_connector")]
+    matches = [ln for ln in out.splitlines() if ln.strip().startswith("connector")]
     assert len(matches) == 1
 
 

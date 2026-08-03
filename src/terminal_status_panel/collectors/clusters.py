@@ -9,7 +9,7 @@ credentials — its only privilege is the Docker socket it already uses for the
 DOCKER INFOS section.
 
 A node that runs no member of a service is *not applicable*, not broken: no
-MongoDB on lrz_cc and no Kafka on vzd-app are the normal case.
+A cluster without MongoDB, or one without Kafka, is the normal case.
 
 The probes run concurrently, one budget task each, and share a single
 ``ContainerIndex`` so the Docker daemon is asked for its container list once
@@ -255,7 +255,7 @@ def locate_member(index: ContainerIndex, kind: str, patterns: tuple[str, ...]):
 
 
 def _node_from_member(name: str) -> str | None:
-    """``pg18-lmzvd06-ccn-02`` -> ``lmzvd06-ccn-02``."""
+    """``pg18-node-b`` -> ``node-b``."""
     stripped = _PG_NAME_PREFIX.sub("", name)
     return stripped or None
 
@@ -409,7 +409,7 @@ KAFKA_COMMAND = [
 
 
 def _kafka_endpoint_host(entry: dict) -> str:
-    """``CONTROLLER://kafka-lmzvd06-ccn-01:9093`` -> ``kafka-lmzvd06-ccn-01``."""
+    """``CONTROLLER://kafka-node-a:9093`` -> ``kafka-node-a``."""
     endpoints = entry.get("endpoints") or []
     raw = endpoints[0] if endpoints else str(entry.get("id", "?"))
     without_scheme = raw.split("://", 1)[-1]

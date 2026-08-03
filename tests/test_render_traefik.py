@@ -90,8 +90,8 @@ def test_an_orphaned_router_gets_its_own_block_naming_the_entrypoint():
     info = _wired()
     info.routers.append(TraefikRouter(
         name="image_api", entrypoints=["websecure"],
-        rule="Host(`www.portal.uni-muenchen.de`)", service="image_api",
-        origin="edutap_production_image_api"))
+        rule="Host(`www.example.net`)", service="image_api",
+        origin="mystack_image_api"))
     out = _render(info)
     assert "ORPHANED" in out
     assert "image_api" in out
@@ -313,7 +313,7 @@ def test_file_provider_error_is_shown_as_a_warning_above_the_tree():
 
 
 def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
-    """Stacked vertically they run to some seventy lines on lrz_cc while two
+    """Stacked vertically they run to some seventy lines on cluster-a while two
     thirds of the terminal stay empty — the same arrangement CLUSTER HEALTH
     uses."""
     wide = _render(_wired(), width=200)
@@ -363,9 +363,9 @@ def test_a_file_provider_service_is_not_reported_as_a_missing_docker_service():
     that was never supposed to be there."""
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="login_lmu_de", address=":2009",
+        entrypoints=[TraefikEntrypoint(name="login_example_net", address=":2009",
                                        port=2009)],
-        routers=[TraefikRouter(name="account-api", entrypoints=["login_lmu_de"],
+        routers=[TraefikRouter(name="account-api", entrypoints=["login_example_net"],
                                rule="PathPrefix(`/api`)",
                                service="account-api-placeholder", source="file")],
         services={"account-api-placeholder": TraefikServiceRef(
@@ -385,10 +385,10 @@ def test_an_orphaned_router_names_the_service_carrying_the_label():
     info = _wired()
     info.routers.append(TraefikRouter(
         name="image_api", entrypoints=["websecure"],
-        rule="Host(`www.portal.uni-muenchen.de`)", service="image_api",
-        origin="edutap_production_image_api"))
+        rule="Host(`www.example.net`)", service="image_api",
+        origin="mystack_image_api"))
     out = _render(info, width=120)
-    assert "edutap_production_image_api" in out
+    assert "mystack_image_api" in out
 
 
 def test_an_orphaned_router_without_an_origin_says_nothing_extra():

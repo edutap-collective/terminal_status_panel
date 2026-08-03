@@ -71,7 +71,7 @@ def _mounted_config_names(service) -> set[str]:
     """The Docker configs this service actually mounts.
 
     Swarm keeps every generation of a config — ``traefik_dynamic_yml_v1``
-    through ``_v4`` all exist on ``lrz_cc`` — and only the ones named in the
+    through ``_v4`` may all exist — and only the ones named in the
     service spec are the ones Traefik reads. Selecting by name prefix instead
     parses the superseded generations too, which is how the panel came to show
     ``ping-router`` four times per entrypoint and to invent orphans out of

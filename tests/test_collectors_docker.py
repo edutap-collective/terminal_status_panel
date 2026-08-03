@@ -113,7 +113,7 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
     ]
     services = [
         _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="PostgreSQL-18",
-                     description="PostgreSQL Datenbank, Version 18"),
+                     description="PostgreSQL database, version 18"),
         _FakeService("kafka", desired=2, tasks=[("n2", "running"), ("n3", "failed")],
                      stack="kafka"),
         _FakeService("registry", desired=1, tasks=[(None, "pending")]),  # unassigned
@@ -128,7 +128,7 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
 
     pg = next(s for s in result.services if s.name == "pg")
     assert pg.stack == "PostgreSQL-18"
-    assert pg.description == "PostgreSQL Datenbank, Version 18"
+    assert pg.description == "PostgreSQL database, version 18"
     assert [(t.node, t.state) for t in pg.tasks] == [("srv-ccc-01", "running")]
 
     kafka = next(s for s in result.services if s.name == "kafka")

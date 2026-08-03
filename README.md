@@ -18,8 +18,8 @@ out in five tiers:
   one row named after the stack, a stack with several shows a header plus one
   sub-row per service (stack prefix and node name stripped). A trailing
   `_<digits>` is stripped the same way, so ordinal instances collapse too — a
-  service deployed as `heidi_connector_1`, `_2`, `_3` (one pinned instance per
-  node, each with its own secrets) renders as a single `heidi_connector` row.
+  service deployed as `connector_1`, `_2`, `_3` (one pinned instance per
+  node, each with its own secrets) renders as a single `connector` row.
   That stripping is unconditional, and it has an accepted cost: if one
   instance is later removed from the deployment — or scaled to zero — its
   row just folds into the remaining two, and the panel reads `✅ 2/2` with
@@ -285,7 +285,7 @@ wireguard = 1.0
 dns = 2.5
 
 [[health.dns.expect]]
-name = "login.lmu.de"
+name = "login.example.net"
 addresses = ["10.9.9.9"]
 ```
 
@@ -319,14 +319,13 @@ for a container that stopped mid-listing, which the panel would have shown as
 a failed check. Only RustFS needs a container's full attributes (for
 `RUSTFS_VOLUMES`), and it inspects only the one container it matched.
 
-Measured on production nodes on 2026-07-31: on `lmzvd06-ccc-01` (5-node
-Swarm), the whole section takes **3.25 s** end to end, within the 5 s default
-budget, with individual probe costs of PostgreSQL `pg_autoctl show state`
-0.13 s, Kafka `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not
-optimisable), GlusterFS `gluster … --xml` 0.10 s, and RustFS `/health`
-~0.2 s. The `lrz_cc` cluster that node belongs to runs no MongoDB, so that
-figure — `db.hello()` 0.95 s — was measured separately, on
-`lmzvd06-internet-app-1`.
+Measured on a production manager of a five-node Swarm: the whole section
+takes **3.25 s** end to end, within the 5 s default budget, with individual
+probe costs of PostgreSQL `pg_autoctl show state` 0.13 s, Kafka
+`kafka-metadata-quorum.sh` 2.6 s (JVM startup, not optimisable), GlusterFS
+`gluster … --xml` 0.10 s, and RustFS `/health` ~0.2 s. That cluster runs no
+MongoDB, so its figure — `db.hello()` 0.95 s — was measured separately on
+another cluster.
 
 ### How the timeouts are enforced
 
@@ -493,7 +492,7 @@ deployment.
 
 **Only the config generations the Traefik service actually mounts are read.**
 Swarm keeps every generation of a config — `traefik_dynamic_yml_v1` through
-`_v4` all exist on `lrz_cc` — but only the ones named in the service spec are
+`_v4` may all still exist — but only the ones named in the service spec are
 the ones Traefik has loaded. Selecting by name instead showed `ping-router`
 four times on every entrypoint and turned entrypoints that were removed two
 revisions ago into orphaned-router findings. Where the Traefik service cannot
@@ -521,7 +520,8 @@ absence.
 
 The entrypoint branches flow into as many columns as the terminal allows —
 the same `Columns` arrangement CLUSTER HEALTH uses, three at 190 columns, one
-at 60. Stacked vertically they run to some seventy lines on `lrz_cc` while two
+at 60. Stacked vertically they run to some seventy lines on a mid-sized
+cluster while two
 thirds of the width stays empty. The orphaned-router block stays full width
 below them: its lines are the longest in the section, and it is what you read
 first. Each entrypoint's head line carries the worst verdict among its
@@ -539,8 +539,8 @@ would put `https` (443) first and `dashboard` (8082) last and scatter the four.
 itself, with no router involved. It is read from the same arguments, and that
 entrypoint reads `— Traefik's own health check` instead of `— no router`, so
 the one port that is *meant* to carry nothing does not read as a finding.
-Every other empty entrypoint still does — `https :443` on `lrz_cc` genuinely
-has nothing behind it.
+Every other empty entrypoint still does — an internal `https :443` with
+nothing routed to it genuinely has nothing behind it.
 
 ### Services the file provider declares
 
@@ -560,10 +560,10 @@ entrypoint that does not exist, still appears here exactly as declared**,
 because nothing in this reading path asks Traefik whether it actually
 accepted it. The real case on this cluster: the `image_api` router's label
 names the entrypoint `websecure` (Traefik's own common naming convention for
-a TLS entrypoint), but this cluster's nine entrypoints are named `dashboard`,
-`ping`, `default`, `https`, `login_lmu_de`, `portalmgmt`,
-`www_portal_uni_muenchen_de`, `db-ui` and `kafbat` — no `websecure` among
-them, so the router is wired to a port that plainly doesn't exist. Since a
+a TLS entrypoint), but that cluster's nine entrypoints are named `dashboard`,
+`ping`, `default`, `https`, `login_example_net`, `portal_example_net`,
+`www_example_net`, `db-ui` and `kafbat` — no `websecure` among them, so the
+router is wired to a port that plainly doesn't exist. Since a
 tree keyed by entrypoint has no branch to put such a router under, it would
 otherwise vanish from the panel silently. Instead it gets its own
 **ORPHANED ROUTERS** block, listing the router, the entrypoint name(s) it
@@ -716,7 +716,7 @@ services:
     image: postgres:18
     deploy:
       labels:
-        lmu.service.description: "PostgreSQL Datenbank, Version 18"
+        lmu.service.description: "PostgreSQL database, version 18"
 ```
 
 Change the read label key via `docker.description_label` in the config.

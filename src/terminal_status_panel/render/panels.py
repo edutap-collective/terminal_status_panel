@@ -45,8 +45,8 @@ _CPU_CRITICAL = 90.0
 # Name of the synthetic stack collecting infrastructure admin UIs.
 INFRA_UI_STACK = "infra-uis"
 
-# Ordinal instances of one service: heidi_connector must run as
-# heidi_connector_1, _2, … because each pinned instance needs its own secrets.
+# Ordinal instances of one service: a connector pinned per node must run as
+# connector_1, _2, … because each instance needs its own secrets.
 # Underscore only — with '-<digits>' a stack named PostgreSQL-18 whose service
 # carries the same name would be mutilated to PostgreSQL-18_PostgreSQL.
 # The price: two unrelated services whose names differ only in a trailing
@@ -314,7 +314,7 @@ def _nodes_inline(nodes, mark_leader: bool = False, peers=None) -> Text:
 
 def _short_node_names(nodes) -> list[tuple[str, str]]:
     """Return (full, short) node names in alphabetical order, stripping a shared
-    hostname prefix up to the last '-' (e.g. 'lmzvd06-ccc-01' -> 'ccc-01')."""
+    hostname prefix up to the last '-' (e.g. 'host01-node-a' -> 'node-a')."""
     ordered = sorted(nodes, key=lambda n: n.name)
     names = [n.name for n in ordered]
     prefix = ""
@@ -449,9 +449,9 @@ def _node_cell(services, node_full: str) -> Text:
 
 def _base_service_name(name: str, node_names) -> str:
     """Strip a trailing '-<node hostname>' / '_<node hostname>' so per-node
-    replicas collapse (kafka_kafka-lmzvd06-ccc-01 -> kafka_kafka), then a
+    replicas collapse (kafka_kafka-node-a -> kafka_kafka), then a
     trailing '_<digits>' so ordinal instances collapse
-    (edutap_heidi_connector_1 -> edutap_heidi_connector)."""
+    (mystack_connector_1 -> mystack_connector)."""
     for nn in sorted(node_names, key=len, reverse=True):
         if nn and name.endswith(nn) and len(name) > len(nn) + 1:
             base = name[: -len(nn)].rstrip("-_")

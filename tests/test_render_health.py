@@ -54,18 +54,18 @@ def test_healthy_cluster_shows_leader_and_members():
     health = HealthInfo(clusters_probed=True, clusters=[
         ClusterService(
             kind="postgres", name="PostgreSQL-18", reachable=True,
-            leader="pg18-lmzvd06-ccn-02", quorum_ok=True,
+            leader="pg18-swarm01-wrk-02", quorum_ok=True,
             members=[
-                ClusterMember(name="pg18-lmzvd06-ccn-02", node="lmzvd06-ccn-02",
+                ClusterMember(name="pg18-swarm01-wrk-02", node="swarm01-wrk-02",
                               role="primary", healthy=True),
-                ClusterMember(name="pg18-lmzvd06-ccn-03", node="lmzvd06-ccn-03",
+                ClusterMember(name="pg18-swarm01-wrk-03", node="swarm01-wrk-03",
                               role="secondary", healthy=True),
             ],
         )
     ])
     output = _render(health)
     assert "PostgreSQL-18" in output
-    assert "lmzvd06-ccn-02" in output
+    assert "swarm01-wrk-02" in output
     assert "primary" in output
     assert "✅" in output
 
@@ -83,7 +83,7 @@ def test_not_applicable_service_renders_na_and_no_failure_icon():
 def test_unobservable_member_health_renders_a_neutral_dot():
     health = HealthInfo(clusters_probed=True, clusters=[
         ClusterService(
-            kind="mongodb", name="lrz_app", reachable=True, quorum_ok=True,
+            kind="mongodb", name="app_db", reachable=True, quorum_ok=True,
             members=[ClusterMember(name="mongodb-4:27017", role="member", healthy=None)],
         )
     ])

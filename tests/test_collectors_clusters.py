@@ -6,11 +6,11 @@ from terminal_status_panel.model import ClusterService
 PG_STATE = """\
                Name |  Node |                Host:Port |       TLI: LSN |   Connection |      Reported State |      Assigned State
 --------------------+-------+--------------------------+----------------+--------------+---------------------+--------------------
-pg18-lmzvd06-ccn-02 |     1 | pg18-lmzvd06-ccn-02:5432 |   1: 0/75243B8 |   read-write |             primary |             primary
-pg18-lmzvd06-ccn-03 |     2 | pg18-lmzvd06-ccn-03:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
-pg18-lmzvd06-ccn-04 |     3 | pg18-lmzvd06-ccn-04:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
-pg18-lmzvd06-ccc-01 |     4 | pg18-lmzvd06-ccc-01:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
-pg18-lmzvd06-ccn-01 |     5 | pg18-lmzvd06-ccn-01:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
+pg18-swarm01-wrk-02 |     1 | pg18-swarm01-wrk-02:5432 |   1: 0/75243B8 |   read-write |             primary |             primary
+pg18-swarm01-wrk-03 |     2 | pg18-swarm01-wrk-03:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
+pg18-swarm01-wrk-04 |     3 | pg18-swarm01-wrk-04:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
+pg18-swarm01-mgr-01 |     4 | pg18-swarm01-mgr-01:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
+pg18-swarm01-wrk-01 |     5 | pg18-swarm01-wrk-01:5432 |   1: 0/75243B8 |    read-only |           secondary |           secondary
 """
 
 
@@ -120,14 +120,14 @@ def test_a_sparsely_listed_container_is_still_matched_by_name():
     """A sparse listing carries "Names", and docker-py's .name is then None."""
     class _SparseContainer:
         name = None
-        attrs = {"Names": ["/PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc"]}
+        attrs = {"Names": ["/PostgreSQL-18_pg-swarm01-mgr-01.1.abc"]}
 
     index = clusters.ContainerIndex(_CountingClient([_SparseContainer()]))
     assert clusters.find_container(index, ("_pg-",)) is not None
 
 
 def test_find_container_matches_substring_case_insensitively():
-    target = _FakeContainer("PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc")
+    target = _FakeContainer("PostgreSQL-18_pg-swarm01-mgr-01.1.abc")
     client = _index([_FakeContainer("traefik_traefik.1.x"), target])
     assert clusters.find_container(client, ("_pg-",)) is target
 
@@ -156,7 +156,7 @@ def test_parse_pg_state_finds_primary_and_all_members():
     service = clusters.parse_pg_state(PG_STATE)
     assert service.kind == "postgres"
     assert service.reachable is True
-    assert service.leader == "pg18-lmzvd06-ccn-02"
+    assert service.leader == "pg18-swarm01-wrk-02"
     assert len(service.members) == 5
     assert service.quorum_ok is True
 
@@ -164,7 +164,7 @@ def test_parse_pg_state_finds_primary_and_all_members():
 def test_parse_pg_state_derives_node_names_and_lsn():
     service = clusters.parse_pg_state(PG_STATE)
     primary = service.members[0]
-    assert primary.node == "lmzvd06-ccn-02"
+    assert primary.node == "swarm01-wrk-02"
     assert primary.role == "primary"
     assert primary.healthy is True
     assert primary.detail == "0/75243B8"
@@ -173,20 +173,20 @@ def test_parse_pg_state_derives_node_names_and_lsn():
 
 def test_parse_pg_state_marks_a_secondary_whose_lsn_lags():
     lagging = PG_STATE.replace(
-        "pg18-lmzvd06-ccn-03:5432 |   1: 0/75243B8", "pg18-lmzvd06-ccn-03:5432 |   1: 0/7000000"
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8", "pg18-swarm01-wrk-03:5432 |   1: 0/7000000"
     )
     service = clusters.parse_pg_state(lagging)
-    behind = [m for m in service.members if m.name == "pg18-lmzvd06-ccn-03"][0]
+    behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
     assert behind.warning == "lag"
 
 
 def test_parse_pg_state_marks_a_member_in_transition():
     moving = PG_STATE.replace(
-        "|           secondary |           secondary\npg18-lmzvd06-ccn-04",
-        "|           secondary |             primary\npg18-lmzvd06-ccn-04",
+        "|           secondary |           secondary\npg18-swarm01-wrk-04",
+        "|           secondary |             primary\npg18-swarm01-wrk-04",
     )
     service = clusters.parse_pg_state(moving)
-    moving_member = [m for m in service.members if m.name == "pg18-lmzvd06-ccn-03"][0]
+    moving_member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
     assert moving_member.warning == "→ primary"
 
 
@@ -211,9 +211,9 @@ def test_unparsed_pg_output_claims_nothing_instead_of_a_broken_quorum():
 def test_a_second_matching_container_is_made_visible():
     """A pg16 -> pg18 migration puts two clusters on one node; showing only
     one without a hint would be a silently narrowed view."""
-    other = _FakeContainer("PostgreSQL-16_pg-lmzvd06-ccc-01.1.old")
+    other = _FakeContainer("PostgreSQL-16_pg-swarm01-mgr-01.1.old")
     first = _FakeContainer(
-        "PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc", exec_result=(0, PG_STATE.encode())
+        "PostgreSQL-18_pg-swarm01-mgr-01.1.abc", exec_result=(0, PG_STATE.encode())
     )
     service = clusters.probe_postgres(_index([first, other]))
     assert "+1 more container" in (service.detail or "")
@@ -227,16 +227,16 @@ def test_probe_postgres_is_not_applicable_without_a_local_container():
 
 def test_probe_postgres_runs_pg_autoctl_and_parses_it():
     container = _FakeContainer(
-        "PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc", exec_result=(0, PG_STATE.encode())
+        "PostgreSQL-18_pg-swarm01-mgr-01.1.abc", exec_result=(0, PG_STATE.encode())
     )
     service = clusters.probe_postgres(_index([container]))
     assert container.commands == [["pg_autoctl", "show", "state"]]
-    assert service.leader == "pg18-lmzvd06-ccn-02"
+    assert service.leader == "pg18-swarm01-wrk-02"
 
 
 def test_probe_postgres_reports_an_exec_failure_as_error():
     container = _FakeContainer(
-        "PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc", exec_result=(1, b"connection refused")
+        "PostgreSQL-18_pg-swarm01-mgr-01.1.abc", exec_result=(1, b"connection refused")
     )
     service = clusters.probe_postgres(_index([container]))
     assert service.applicable is True
@@ -284,20 +284,20 @@ def test_probe_cluster_never_raises():
 
 
 MONGO_HELLO = (
-    '{"set":"lrz_app","me":"mongodb-lmzvd06-internet-app-1:27017",'
-    '"primary":"mongodb-lmzvd06-internet-app-2:27017","isPrimary":false,'
-    '"hosts":["mongodb-lmzvd06-internet-app-1:27017","mongodb-lmzvd06-internet-app-2:27017",'
-    '"mongodb-lmzvd06-internet-app-3:27017","mongodb-lmzvd06-internet-app-4:27017",'
-    '"mongodb-lmzvd06-internet-app-5:27017"]}\n'
+    '{"set":"app_db","me":"mongodb-swarm02-app-1:27017",'
+    '"primary":"mongodb-swarm02-app-2:27017","isPrimary":false,'
+    '"hosts":["mongodb-swarm02-app-1:27017","mongodb-swarm02-app-2:27017",'
+    '"mongodb-swarm02-app-3:27017","mongodb-swarm02-app-4:27017",'
+    '"mongodb-swarm02-app-5:27017"]}\n'
 )
 
 
 def test_parse_mongo_hello_reads_set_name_and_primary():
     service = clusters.parse_mongo_hello(MONGO_HELLO)
     assert service.kind == "mongodb"
-    assert service.name == "lrz_app"
+    assert service.name == "app_db"
     assert service.reachable is True
-    assert service.leader == "mongodb-lmzvd06-internet-app-2:27017"
+    assert service.leader == "mongodb-swarm02-app-2:27017"
     assert service.quorum_ok is True
     assert len(service.members) == 5
 
@@ -306,17 +306,17 @@ def test_parse_mongo_hello_only_claims_health_where_it_has_evidence():
     service = clusters.parse_mongo_hello(MONGO_HELLO)
     by_name = {member.name: member for member in service.members}
     # We just talked to this one, and the set agrees on the primary.
-    assert by_name["mongodb-lmzvd06-internet-app-1:27017"].healthy is True
-    assert by_name["mongodb-lmzvd06-internet-app-2:27017"].healthy is True
-    assert by_name["mongodb-lmzvd06-internet-app-2:27017"].role == "primary"
+    assert by_name["mongodb-swarm02-app-1:27017"].healthy is True
+    assert by_name["mongodb-swarm02-app-2:27017"].healthy is True
+    assert by_name["mongodb-swarm02-app-2:27017"].role == "primary"
     # db.hello() says nothing about the state of the others.
-    assert by_name["mongodb-lmzvd06-internet-app-4:27017"].healthy is None
-    assert by_name["mongodb-lmzvd06-internet-app-4:27017"].role == "member"
+    assert by_name["mongodb-swarm02-app-4:27017"].healthy is None
+    assert by_name["mongodb-swarm02-app-4:27017"].role == "member"
 
 
 def test_parse_mongo_hello_without_a_primary_has_no_quorum():
     service = clusters.parse_mongo_hello(MONGO_HELLO.replace(
-        '"primary":"mongodb-lmzvd06-internet-app-2:27017",', ""
+        '"primary":"mongodb-swarm02-app-2:27017",', ""
     ))
     assert service.leader is None
     assert service.quorum_ok is False
@@ -336,14 +336,14 @@ def test_probe_mongodb_is_not_applicable_without_a_local_container():
 
 def test_probe_mongodb_runs_mongosh_unauthenticated():
     container = _FakeContainer(
-        "mongodb_lmzvd06-internet-app-1.1.abc", exec_result=(0, MONGO_HELLO.encode())
+        "mongodb_swarm02-app-1.1.abc", exec_result=(0, MONGO_HELLO.encode())
     )
     service = clusters.probe_mongodb(_index([container]))
     command = container.commands[0]
     assert command[0] == "mongosh"
     assert "--quiet" in command
     assert not any("-u" == part or "--username" in part for part in command)
-    assert service.name == "lrz_app"
+    assert service.name == "app_db"
 
 
 def test_probe_mongodb_reports_docker_api_failure_as_error():
@@ -370,7 +370,7 @@ LeaderEpoch:            2
 HighWatermark:          173016
 MaxFollowerLag:         0
 MaxFollowerLagTimeMs:   296
-CurrentVoters:          [{"id": 0, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccc-01:9093"]}, {"id": 1, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-01:9093"]}, {"id": 2, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-02:9093"]}, {"id": 3, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-03:9093"]}, {"id": 4, "endpoints": ["CONTROLLER://kafka-lmzvd06-ccn-04:9093"]}]
+CurrentVoters:          [{"id": 0, "endpoints": ["CONTROLLER://kafka-swarm01-mgr-01:9093"]}, {"id": 1, "endpoints": ["CONTROLLER://kafka-swarm01-wrk-01:9093"]}, {"id": 2, "endpoints": ["CONTROLLER://kafka-swarm01-wrk-02:9093"]}, {"id": 3, "endpoints": ["CONTROLLER://kafka-swarm01-wrk-03:9093"]}, {"id": 4, "endpoints": ["CONTROLLER://kafka-swarm01-wrk-04:9093"]}]
 CurrentObservers:       []
 """
 
@@ -379,7 +379,7 @@ def test_parse_kafka_quorum_maps_the_leader_id_to_its_endpoint_host():
     service = clusters.parse_kafka_quorum(KAFKA_QUORUM)
     assert service.kind == "kafka"
     assert service.reachable is True
-    assert service.leader == "kafka-lmzvd06-ccn-01"
+    assert service.leader == "kafka-swarm01-wrk-01"
     assert service.quorum_ok is True
     assert service.name == "Jucv8gBrQg-WOxKNTIAPVw"
 
@@ -388,9 +388,9 @@ def test_parse_kafka_quorum_lists_voters_with_the_leader_marked():
     service = clusters.parse_kafka_quorum(KAFKA_QUORUM)
     assert len(service.members) == 5
     by_name = {member.name: member for member in service.members}
-    assert by_name["kafka-lmzvd06-ccn-01"].role == "leader"
-    assert by_name["kafka-lmzvd06-ccc-01"].role == "voter"
-    assert by_name["kafka-lmzvd06-ccc-01"].healthy is True
+    assert by_name["kafka-swarm01-wrk-01"].role == "leader"
+    assert by_name["kafka-swarm01-mgr-01"].role == "voter"
+    assert by_name["kafka-swarm01-mgr-01"].healthy is True
 
 
 def test_parse_kafka_quorum_carries_follower_lag_as_service_detail():
@@ -427,13 +427,13 @@ def test_unparsed_kafka_output_claims_nothing_instead_of_a_broken_quorum():
 
 def test_probe_kafka_uses_the_absolute_tool_path_and_the_mounted_client_properties():
     container = _FakeContainer(
-        "kafka_kafka-lmzvd06-ccc-01.1.abc", exec_result=(0, KAFKA_QUORUM.encode())
+        "kafka_kafka-swarm01-mgr-01.1.abc", exec_result=(0, KAFKA_QUORUM.encode())
     )
     service = clusters.probe_kafka(_index([container]))
     command = container.commands[0]
     assert command[0] == "/opt/kafka/bin/kafka-metadata-quorum.sh"
     assert "/client.properties" in command
-    assert service.leader == "kafka-lmzvd06-ccn-01"
+    assert service.leader == "kafka-swarm01-wrk-01"
 
 
 def test_probe_kafka_is_not_applicable_without_a_local_broker():
@@ -463,9 +463,9 @@ GLUSTER_PEERS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cliOutput>
   <opRet>0</opRet>
   <peerStatus>
-    <peer><uuid>e309</uuid><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+    <peer><uuid>e309</uuid><hostname>wg-swarm01-wrk-01.example.net</hostname>
       <connected>1</connected><stateStr>Peer in Cluster</stateStr></peer>
-    <peer><uuid>f72d</uuid><hostname>wg-lmzvd06-ccn-02.srv.mwn.de</hostname>
+    <peer><uuid>f72d</uuid><hostname>wg-swarm01-wrk-02.example.net</hostname>
       <connected>0</connected><stateStr>Peer in Cluster</stateStr></peer>
   </peerStatus>
 </cliOutput>
@@ -477,13 +477,13 @@ GLUSTER_VOLUME = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <volStatus><volumes><volume>
     <volName>shared</volName>
     <nodeCount>4</nodeCount>
-    <node><hostname>wg-lmzvd06-ccc-01.srv.mwn.de</hostname>
+    <node><hostname>wg-swarm01-mgr-01.example.net</hostname>
       <path>/data/glusterfs/brick1/shared</path><status>1</status></node>
-    <node><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+    <node><hostname>wg-swarm01-wrk-01.example.net</hostname>
       <path>/data/glusterfs/brick1/shared</path><status>0</status></node>
     <node><hostname>Self-heal Daemon</hostname><path>localhost</path><status>1</status></node>
     <node><hostname>Self-heal Daemon</hostname>
-      <path>wg-lmzvd06-ccn-01.srv.mwn.de</path><status>1</status></node>
+      <path>wg-swarm01-wrk-01.example.net</path><status>1</status></node>
   </volume></volumes></volStatus>
 </cliOutput>
 """
@@ -506,15 +506,15 @@ def test_parse_gluster_reports_volume_name_and_is_leaderless():
 def test_parse_gluster_marks_a_disconnected_peer_and_an_offline_brick():
     service = clusters.parse_gluster(GLUSTER_PEERS, GLUSTER_VOLUME)
     by_key = {(member.role, member.name): member for member in service.members}
-    assert by_key[("peer", "wg-lmzvd06-ccn-01.srv.mwn.de")].healthy is True
-    assert by_key[("peer", "wg-lmzvd06-ccn-02.srv.mwn.de")].healthy is False
-    assert by_key[("brick", "wg-lmzvd06-ccn-01.srv.mwn.de")].healthy is False
+    assert by_key[("peer", "wg-swarm01-wrk-01.example.net")].healthy is True
+    assert by_key[("peer", "wg-swarm01-wrk-02.example.net")].healthy is False
+    assert by_key[("brick", "wg-swarm01-wrk-01.example.net")].healthy is False
 
 
 def test_parse_gluster_has_no_quorum_when_most_peers_are_disconnected():
     two_down = GLUSTER_PEERS.replace(
-        "<hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>\n      <connected>1</connected>",
-        "<hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>\n      <connected>0</connected>",
+        "<hostname>wg-swarm01-wrk-01.example.net</hostname>\n      <connected>1</connected>",
+        "<hostname>wg-swarm01-wrk-01.example.net</hostname>\n      <connected>0</connected>",
     )
     assert clusters.parse_gluster(two_down, GLUSTER_VOLUME).quorum_ok is False
 
@@ -530,20 +530,20 @@ GLUSTER_VOLUME_MULTI = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?
   <volume>
     <volName>shared</volName>
     <nodeCount>4</nodeCount>
-    <node><hostname>wg-lmzvd06-ccc-01.srv.mwn.de</hostname>
+    <node><hostname>wg-swarm01-mgr-01.example.net</hostname>
       <path>/data/glusterfs/brick1/shared</path><status>1</status></node>
-    <node><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+    <node><hostname>wg-swarm01-wrk-01.example.net</hostname>
       <path>/data/glusterfs/brick1/shared</path><status>0</status></node>
     <node><hostname>Self-heal Daemon</hostname><path>localhost</path><status>1</status></node>
     <node><hostname>Self-heal Daemon</hostname>
-      <path>wg-lmzvd06-ccn-01.srv.mwn.de</path><status>1</status></node>
+      <path>wg-swarm01-wrk-01.example.net</path><status>1</status></node>
   </volume>
   <volume>
     <volName>backup</volName>
     <nodeCount>2</nodeCount>
-    <node><hostname>wg-lmzvd06-ccc-01.srv.mwn.de</hostname>
+    <node><hostname>wg-swarm01-mgr-01.example.net</hostname>
       <path>/data/glusterfs/brick1/backup</path><status>1</status></node>
-    <node><hostname>wg-lmzvd06-ccn-01.srv.mwn.de</hostname>
+    <node><hostname>wg-swarm01-wrk-01.example.net</hostname>
       <path>/data/glusterfs/brick1/backup</path><status>1</status></node>
   </volume>
   </volumes></volStatus>
@@ -871,7 +871,7 @@ class _SwarmClient(_FakeClient):
 
 
 def test_locate_member_returns_the_container_when_one_runs():
-    target = _FakeContainer("PostgreSQL-18_pg-lmzvd06-ccc-01.1.abc")
+    target = _FakeContainer("PostgreSQL-18_pg-swarm01-mgr-01.1.abc")
     container, verdict, _ = clusters.locate_member(
         _index([target]), "postgres", clusters.POSTGRES_PATTERNS
     )
@@ -882,9 +882,9 @@ def test_locate_member_returns_the_container_when_one_runs():
 def test_a_crash_looping_service_is_an_error_not_not_applicable():
     """No container runs, but Swarm still wants a task here — the live RustFS case:
     a replicated service pinned to this hostname by a placement constraint."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
-                                                       hostname="lmzvd06-ccc-01")])
+                                                       hostname="swarm01-mgr-01")])
     container, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert container is None
     assert verdict.applicable is True
@@ -892,25 +892,25 @@ def test_a_crash_looping_service_is_an_error_not_not_applicable():
 
 
 def test_a_service_pinned_to_another_hostname_is_still_not_applicable():
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
-                                                       hostname="lmzvd06-ccn-01")])
+                                                       hostname="swarm01-wrk-01")])
     _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
     assert verdict.error is None
 
 
 def test_no_matching_service_at_all_is_not_applicable():
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[_FakeSwarmService("something_else", replicas=1,
-                                                       hostname="lmzvd06-ccc-01")])
+                                                       hostname="swarm01-mgr-01")])
     _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
 
 
 def test_a_global_mode_service_is_wanted_on_every_node():
     """Global mode has no placement constraint to check — Swarm runs it everywhere."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", global_mode=True)])
     _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is True
@@ -919,9 +919,9 @@ def test_a_global_mode_service_is_wanted_on_every_node():
 
 def test_a_replicated_service_with_zero_replicas_is_not_applicable():
     """Swarm wants nothing running, even if pinned here."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=0,
-                                                       hostname="lmzvd06-ccc-01")])
+                                                       hostname="swarm01-mgr-01")])
     _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is False
 
@@ -931,7 +931,7 @@ def test_an_unpinned_replicated_service_is_not_applicable():
     we cannot claim Swarm wants it *here* without over-claiming. A crash loop of an
     unpinned service is therefore not flagged by this check (DOCKER INFOS still
     shows it correctly, via the Swarm service list)."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
                                                        hostname=None)])
     _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
@@ -942,9 +942,9 @@ def test_an_unpinned_replicated_service_is_not_applicable():
 def test_a_placement_constraint_without_spaces_is_still_recognised():
     service = _FakeSwarmService("rustfs_rustfs-x", replicas=1)
     service.attrs["Spec"]["TaskTemplate"]["Placement"] = {
-        "Constraints": ["node.hostname==lmzvd06-ccc-01"]
+        "Constraints": ["node.hostname==swarm01-mgr-01"]
     }
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[service])
     _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
     assert verdict.applicable is True
@@ -963,9 +963,9 @@ def test_a_swarm_query_failure_degrades_to_not_applicable():
 
 
 def test_probe_rustfs_reports_a_crash_loop_as_an_error():
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="lmzvd06-ccc-01",
+    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
                           services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
-                                                       hostname="lmzvd06-ccc-01")])
+                                                       hostname="swarm01-mgr-01")])
     service = clusters.probe_rustfs(clusters.ContainerIndex(client))
     assert service.kind == "rustfs"
     assert "no running container" in service.error
@@ -999,10 +999,10 @@ def test_probe_rustfs_minority_endpoints_healthy_loses_quorum():
 
 
 def test_kind_for_service_matches_the_real_service_names():
-    assert clusters.kind_for_service("PostgreSQL-18_pg-lmzvd06-ccc-01") == "postgres"
-    assert clusters.kind_for_service("mongodb_lmzvd06-internet-app-1") == "mongodb"
-    assert clusters.kind_for_service("kafka_kafka-lmzvd06-ccc-01") == "kafka"
-    assert clusters.kind_for_service("rustfs_rustfs-lmzvd06-ccn-01") == "rustfs"
+    assert clusters.kind_for_service("PostgreSQL-18_pg-swarm01-mgr-01") == "postgres"
+    assert clusters.kind_for_service("mongodb_swarm02-app-1") == "mongodb"
+    assert clusters.kind_for_service("kafka_kafka-swarm01-mgr-01") == "kafka"
+    assert clusters.kind_for_service("rustfs_rustfs-swarm01-wrk-01") == "rustfs"
 
 
 def test_kind_for_service_does_not_match_the_admin_uis():
@@ -1022,7 +1022,7 @@ def test_kind_for_service_does_not_match_a_ui_inside_a_cluster_stack():
 
 
 def test_kind_for_service_returns_none_for_ordinary_services():
-    assert clusters.kind_for_service("edutap_production_backend") is None
+    assert clusters.kind_for_service("mystack_backend") is None
     assert clusters.kind_for_service("traefik_traefik") is None
 
 

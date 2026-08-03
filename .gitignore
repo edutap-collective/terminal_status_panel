@@ -10,6 +10,11 @@
 # translation related
 *.mo
 
+# Internal design notes and implementation plans. They describe a concrete
+# deployment -- node names, entrypoints, measurements -- and belong wherever
+# that deployment is administered, not in a public package.
+docs/superpowers/
+
 # tools related
 build/
 .coverage

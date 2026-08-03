@@ -93,14 +93,14 @@ enabled = ["postgres", "glusterfs"]
 def test_dns_expectations_are_parsed(tmp_path):
     path = _write(tmp_path, """
 [[health.dns.expect]]
-name = "login.lmu.de"
+name = "login.example.net"
 addresses = ["10.9.9.9"]
 
 [[health.dns.expect]]
-name = "www.portal.uni-muenchen.de"
+name = "www.example.net"
 """)
     expectations = load_config(path).health.dns_expect
-    assert [e.name for e in expectations] == ["login.lmu.de", "www.portal.uni-muenchen.de"]
+    assert [e.name for e in expectations] == ["login.example.net", "www.example.net"]
     assert expectations[0].addresses == ["10.9.9.9"]
     assert expectations[1].addresses == []
 
