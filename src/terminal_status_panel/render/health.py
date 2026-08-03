@@ -24,8 +24,10 @@ from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from ..collectors.network import mixed_endpoint_families
 from ..config import Config
-from ..model import ClusterService, HealthInfo
+from ..model import ClusterService, HealthInfo, PeerReachability
+from .bars import format_bytes
 from .icons import DEAD, FAILED, OK, TRUNCATED, UNKNOWN, WARN
 from .panels import section
 
@@ -144,6 +146,22 @@ def _peer_method_label(health: HealthInfo) -> str:
     return "wg" if methods.pop() == "wireguard" else "tcp"
 
 
+def _peer_traffic(peer: PeerReachability) -> Text:
+    """``↑2.0 KB ↓1.0 KB``, and the word that names the fault when it is one.
+
+    The TCP fallback has no counters; it must render blank rather than claim a
+    zero it never measured.
+    """
+    if peer.rx_bytes is None or peer.tx_bytes is None:
+        return Text("")
+    traffic = Text(f"↑{format_bytes(peer.tx_bytes)} ↓{format_bytes(peer.rx_bytes)}", style="dim")
+    if peer.one_way:
+        # Sent but never received: the packets leave and nothing answers.
+        # A dead peer looks different — there both counters stand still.
+        traffic.append("  one-way", style="red")
+    return traffic
+
+
 def _peers_body(health: HealthInfo) -> RenderableType:
     if "peers" in health.truncated:
         return Text(f"{TRUNCATED} time budget exceeded", style="dim")
@@ -156,12 +174,24 @@ def _peers_body(health: HealthInfo) -> RenderableType:
     table = Table.grid(padding=(0, 2))
     table.add_column()
     table.add_column()
+    table.add_column()
     for peer in health.peers:
         table.add_row(
             Text(f"{OK if peer.ok else WARN} {peer.name}"),
             Text(peer.detail or "", style="dim"),
+            _peer_traffic(peer),
         )
-    return table
+    families = mixed_endpoint_families(health.peers)
+    if families is None:
+        return table
+    # Not an error on its own — but it is the precondition under which a
+    # tunnel that depends on conntrack stops working, so it earns a line
+    # before it costs anyone an afternoon.
+    spread = ", ".join(f"{count}× {family}" for family, count in sorted(families.items()))
+    return Group(
+        table,
+        Text(f"{UNKNOWN} mixed endpoint families: {spread}", style="yellow"),
+    )
 
 
 def _dns_body(health: HealthInfo) -> RenderableType:
