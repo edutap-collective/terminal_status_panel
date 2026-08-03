@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import docker
 
+from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
 from ..model import ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
 
 STACK_LABEL = "com.docker.stack.namespace"
@@ -102,7 +103,10 @@ def _swarm_services(client, critical: set[str], description_label: str,
                 desired_replicas=_desired_count(svc),
                 critical=svc.name in critical,
                 stack=labels.get(STACK_LABEL),
-                description=labels.get(description_label),
+                # The configured key wins; the legacy key is the fallback, so a
+                # service carrying both is not pinned to its older text.
+                description=(labels.get(description_label)
+                             or labels.get(LEGACY_DESCRIPTION_LABEL)),
                 tasks=tasks,
                 unassigned=unassigned,
             )
@@ -125,7 +129,7 @@ def _container_services(client, critical: set[str]) -> list[ServiceStatus]:
 
 
 def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
-                   description_label: str = "lmu.service.description") -> SwarmInfo:
+                   description_label: str = DEFAULT_DESCRIPTION_LABEL) -> SwarmInfo:
     """Return Swarm/service health; never raises."""
     critical_set = set(critical or [])
     try:
