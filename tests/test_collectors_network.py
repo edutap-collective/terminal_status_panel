@@ -103,3 +103,75 @@ def test_collect_peers_never_raises(monkeypatch):
     monkeypatch.setattr(network.subprocess, "run", lambda *a, **k: 1 / 0)
     monkeypatch.setattr(network.socket, "create_connection", lambda *a, **k: 1 / 0)
     assert network.collect_peers(["x.example"], timeout=1.0)[0].ok is False
+
+
+# --- Transfer counters, endpoint family, one-way signature ------------------
+#
+# A peer with no handshake whose "sent" counter keeps growing while "received"
+# stays at zero is a different fault from a peer that has gone quiet, and it
+# calls for a different search. The parser has to keep the two apart.
+
+def test_transfer_counters_are_parsed():
+    peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
+    assert peers[0].rx_bytes == 1
+    assert peers[0].tx_bytes == 2
+
+
+def test_one_way_traffic_is_flagged():
+    """We send, nothing comes back: a packet filter or a key mismatch."""
+    row = ["wg0", "peerX", "(none)", "10.1.0.9:51820", "10.9.0.9/32", "0", "0", "174080", "off"]
+    peer = network.parse_wg_dump("\t".join(row), now=1000.0, hosts=HOSTS)[0]
+    assert peer.one_way is True
+    assert peer.ok is False
+
+
+def test_a_silent_peer_is_not_one_way():
+    """Both counters at zero: the peer or the route is gone. Different search."""
+    row = ["wg0", "peerY", "(none)", "10.1.0.9:51820", "10.9.0.9/32", "0", "0", "0", "off"]
+    peer = network.parse_wg_dump("\t".join(row), now=1000.0, hosts=HOSTS)[0]
+    assert peer.one_way is False
+
+
+def test_a_healthy_peer_is_not_one_way():
+    peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
+    assert peers[0].one_way is False
+
+
+def test_endpoint_family_ipv4():
+    peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
+    assert peers[0].endpoint == "10.1.0.1:51820"
+    assert peers[0].family == "IPv4"
+
+
+def test_endpoint_family_ipv6():
+    row = ["wg0", "peerZ", "(none)", "[2001:4ca0:4f06:1::aa3:3954]:51194",
+           "10.9.0.4/32", "1000", "1", "2", "off"]
+    peer = network.parse_wg_dump("\t".join(row), now=1000.0, hosts=HOSTS)[0]
+    assert peer.family == "IPv6"
+
+
+def test_a_peer_without_endpoint_has_no_family():
+    """"(none)" means never resolved. No grounds to claim IPv4."""
+    peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
+    assert peers[2].endpoint is None
+    assert peers[2].family is None
+
+
+def test_mixed_families_are_detected():
+    """An endpoint named by hostname is resolved once, when the interface comes
+    up. Nodes started at different times can land on different families -- and
+    two families can never be each other's conntrack reply."""
+    dump = "\n".join(
+        "\t".join(row)
+        for row in [
+            ["wg0", "p1", "(none)", "10.1.0.1:51194", "10.9.0.1/32", "1000", "1", "2", "off"],
+            ["wg0", "p2", "(none)", "[2001:db8::1]:51194", "10.9.0.2/32", "1000", "1", "2", "off"],
+        ]
+    )
+    peers = network.parse_wg_dump(dump, now=1000.0, hosts=HOSTS)
+    assert network.mixed_endpoint_families(peers) == {"IPv4": 1, "IPv6": 1}
+
+
+def test_uniform_families_report_no_mix():
+    peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
+    assert network.mixed_endpoint_families(peers) is None

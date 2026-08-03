@@ -139,3 +139,20 @@ def test_running_and_failed_are_not_starting():
     assert ServiceTask(node="srv-01", state="running").starting is False
     assert ServiceTask(node="srv-01", state="failed").starting is False
     assert ServiceTask(node="srv-01", state="shutdown").starting is False
+
+
+# --- one_way must not fire on missing data ----------------------------------
+
+def test_one_way_needs_both_counters():
+    """A parse failure leaves a counter at None. Reporting "one-way" from that
+    would turn missing data into a diagnosis."""
+    from terminal_status_panel.model import PeerReachability
+
+    partial = PeerReachability(name="p", method="wireguard", rx_bytes=None, tx_bytes=100)
+    assert partial.one_way is False
+
+    partial = PeerReachability(name="p", method="wireguard", rx_bytes=0, tx_bytes=None)
+    assert partial.one_way is False
+
+    real = PeerReachability(name="p", method="wireguard", rx_bytes=0, tx_bytes=100)
+    assert real.one_way is True

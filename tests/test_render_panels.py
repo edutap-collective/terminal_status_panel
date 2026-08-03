@@ -587,3 +587,92 @@ def test_a_single_starting_task_renders_as_degraded_not_dead():
 def test_a_single_failed_task_still_renders_as_dead():
     services = [ServiceStatus("s", 0, 1, tasks=[ServiceTask("srv-01", "failed")])]
     assert "💀" in panels._node_cell(services, "srv-01").plain
+
+
+# --- Swarm nodes held against the WireGuard tunnel --------------------------
+#
+# A down node with a healthy tunnel means Docker; one without a handshake means
+# the network. Pairing them saves the reader a jump between two sections.
+
+from terminal_status_panel.model import PeerReachability  # noqa: E402
+
+
+def _swarm_with(node_name, reachable):
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        nodes=[
+            SwarmNode(name="node-a", reachable=True, state="ready", availability="active"),
+            SwarmNode(name=node_name, reachable=reachable,
+                      state="ready" if reachable else "down", availability="active"),
+        ],
+    )
+
+
+def _peer(name, ok, **kw):
+    return PeerReachability(name=name, method="wireguard", ok=ok, **kw)
+
+
+def test_down_node_without_handshake_points_at_the_network():
+    swarm = _swarm_with("node-c", reachable=False)
+    health = HealthInfo(
+        peers=[_peer("wg-node-c.example.net", False, detail="never",
+                     rx_bytes=0, tx_bytes=174080)],
+        peers_probed=True,
+    )
+    output = _text(panels.services_section(swarm, Config(), health))
+    assert "wg: no handshake" in output
+
+
+def test_down_node_with_healthy_tunnel_points_at_docker():
+    swarm = _swarm_with("node-c", reachable=False)
+    health = HealthInfo(
+        peers=[_peer("wg-node-c.example.net", True, detail="0:10",
+                     rx_bytes=1024, tx_bytes=2048)],
+        peers_probed=True,
+    )
+    output = _text(panels.services_section(swarm, Config(), health))
+    assert "wg: ok" in output
+
+
+def test_healthy_node_gets_no_annotation():
+    """The line is crowded. The note appears only where it explains something."""
+    swarm = _swarm_with("node-c", reachable=True)
+    health = HealthInfo(peers=[_peer("wg-node-c.example.net", True, detail="0:10")],
+                        peers_probed=True)
+    output = _text(panels.services_section(swarm, Config(), health))
+    assert "wg:" not in output
+
+
+def test_down_node_without_matching_peer_is_not_annotated():
+    """No peer data, no claim about the tunnel."""
+    swarm = _swarm_with("node-c", reachable=False)
+    output = _text(panels.services_section(swarm, Config(), HealthInfo(peers_probed=True)))
+    assert "wg:" not in output
+
+
+def test_tcp_fallback_peer_makes_no_tunnel_claim():
+    """The TCP fallback probes port 2377. Its "ok" says nothing about the
+    tunnel, so it must not surface as "(wg: ok)"."""
+    swarm = _swarm_with("node-c", reachable=False)
+    health = HealthInfo(
+        peers=[PeerReachability(name="node-c", method="tcp", ok=True, detail="tcp/2377")],
+        peers_probed=True,
+    )
+    output = _text(panels.services_section(swarm, Config(), health))
+    assert "wg:" not in output
+
+
+def test_stale_handshake_is_not_reported_as_none():
+    """peer.ok is False for a stale handshake too — but "no handshake" would be
+    the wrong word for one that merely aged out."""
+    swarm = _swarm_with("node-c", reachable=False)
+    health = HealthInfo(
+        peers=[_peer("wg-node-c.example.net", False, detail="5:00",
+                     rx_bytes=1024, tx_bytes=2048)],
+        peers_probed=True,
+    )
+    output = _text(panels.services_section(swarm, Config(), health))
+    assert "no handshake" not in output
+    assert "5:00" in output

@@ -10,6 +10,7 @@ being made.
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 import subprocess
 import time
@@ -26,6 +27,51 @@ WG_PEER_FIELDS = 9
 def _format_age(seconds: float) -> str:
     minutes, remainder = divmod(int(max(0, seconds)), 60)
     return f"{minutes}:{remainder:02d}"
+
+
+def _endpoint_family(endpoint: str) -> tuple[str | None, str | None]:
+    """Split ``host:port`` into (endpoint, "IPv4"|"IPv6").
+
+    A configuration may name its endpoints by *hostname*, which WireGuard
+    resolves once, when the interface comes up — so the family a peer ends up on
+    depends on the resolver at that moment. Nodes started at different times can
+    therefore disagree, and two families can never be each other's conntrack
+    reply. That is worth showing, so the family is derived rather than discarded.
+
+    ``(none)`` means WireGuard has not resolved the peer at all; claiming IPv4
+    for that would invent a fact.
+    """
+    raw = endpoint.strip()
+    if not raw or raw == "(none)":
+        return None, None
+    host = raw.rsplit("[", 1)[-1].split("]", 1)[0] if raw.startswith("[") else raw.rsplit(":", 1)[0]
+    try:
+        family = f"IPv{ipaddress.ip_address(host).version}"
+    except ValueError:
+        family = None  # a name, not an address: nothing to classify
+    return raw, family
+
+
+def _to_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def mixed_endpoint_families(peers: list[PeerReachability]) -> dict[str, int] | None:
+    """``{"IPv4": 2, "IPv6": 2}`` when peers disagree on the family, else None.
+
+    A disagreement is not itself a fault, but it is the precondition for a
+    subtle one: where the host firewall has no explicit rule for the tunnel's
+    transport port, the handshake only ever passes as a conntrack reply — and a
+    reply cannot cross address families. Peers still unresolved hold no opinion.
+    """
+    counts: dict[str, int] = {}
+    for peer in peers:
+        if peer.family:
+            counts[peer.family] = counts.get(peer.family, 0) + 1
+    return counts if len(counts) > 1 else None
 
 
 def _key_label(public_key: str) -> str:
@@ -56,6 +102,8 @@ def parse_wg_dump(dump: str, now: float, hosts: dict[str, set[str]]) -> list[Pee
         if len(fields) != WG_PEER_FIELDS:
             continue
         public_key, allowed_ips, handshake = fields[1], fields[4], fields[5]
+        endpoint, family = _endpoint_family(fields[3])
+        rx_bytes, tx_bytes = _to_int(fields[6]), _to_int(fields[7])
         if allowed_ips.strip() in ("", "(none)"):
             tunnel_ip = ""
         else:
@@ -75,6 +123,10 @@ def parse_wg_dump(dump: str, now: float, hosts: dict[str, set[str]]) -> list[Pee
                 method="wireguard",
                 ok=ok,
                 detail=detail,
+                rx_bytes=rx_bytes,
+                tx_bytes=tx_bytes,
+                endpoint=endpoint,
+                family=family,
             )
         )
     return peers

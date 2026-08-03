@@ -23,9 +23,11 @@ from ..config import Config, Thresholds
 from ..model import (
     ClusterService,
     HealthInfo,
+    PeerReachability,
     ResourceUsage,
     ServiceStatus,
     SwarmInfo,
+    SwarmNode,
     SystemInfo,
     UpdateInfo,
 )
@@ -289,21 +291,24 @@ def _node_health(node) -> Text:
     return Text(_OK)
 
 
-def _node_inline(node, mark_leader: bool = False) -> Text:
+def _node_inline(node, mark_leader: bool = False, peers=None) -> Text:
     line = Text.assemble((node.name, "bold"), " ") + _node_health(node)
+    note = _node_tunnel_note(node, peers)
+    if note is not None:
+        line.append_text(note)
     if mark_leader and node.leader:
         line.append(" (leader)", style="dim")
     return line
 
 
-def _nodes_inline(nodes, mark_leader: bool = False) -> Text:
+def _nodes_inline(nodes, mark_leader: bool = False, peers=None) -> Text:
     if not nodes:
         return Text("n/a", style="dim")
     line = Text()
     for i, node in enumerate(sorted(nodes, key=lambda n: n.name)):
         if i:
             line.append("   ")
-        line.append_text(_node_inline(node, mark_leader=mark_leader))
+        line.append_text(_node_inline(node, mark_leader=mark_leader, peers=peers))
     return line
 
 
@@ -347,7 +352,55 @@ def _node_capacity(nodes) -> Text | None:
     return note
 
 
-def _swarm_body(swarm: SwarmInfo) -> RenderableType:
+def _peer_for_node(node_name: str,
+                   peers: list[PeerReachability] | None) -> PeerReachability | None:
+    """Match a Swarm node to its WireGuard peer by name.
+
+    The two collectors name the same machine differently: Swarm reports the
+    bare hostname (``node-c``), the tunnel is named from the hosts file
+    (``wg-node-c.example.net``). Substring matching bridges that without
+    a mapping table that would need maintaining. No match means no claim.
+
+    Only WireGuard peers qualify. The TCP fallback's ``ok`` means "port 2377
+    accepted a connection" and says nothing about a tunnel — reading it as one
+    would produce a confident "(wg: ok)" from a probe that never looked.
+    """
+    for peer in peers or ():
+        if peer.method != "wireguard":
+            continue
+        if node_name and node_name in peer.name:
+            return peer
+    return None
+
+
+def _node_tunnel_note(node: SwarmNode,
+                      peers: list[PeerReachability] | None) -> Text | None:
+    """Why a node is down: the tunnel, or Docker above it.
+
+    Only rendered for a node that is actually down — on a healthy line it would
+    be noise, and the line is already wide. A down node with a healthy tunnel
+    points at Docker; one without a handshake points at the network. That
+    distinction is the whole reason the two sections are held against each
+    other here rather than left for the reader to correlate by eye.
+    """
+    if node.reachable:
+        return None
+    peer = _peer_for_node(node.name, peers)
+    if peer is None:
+        return None
+    if peer.ok:
+        return Text(" (wg: ok)", style="dim")
+    # ``ok`` is False for a handshake that never happened *and* for one that
+    # merely aged past the staleness threshold. Calling the second "no
+    # handshake" would misname it, so the age speaks for itself where there
+    # is one; the parser writes "never" when there is not.
+    reason = "no handshake" if peer.detail == "never" else f"last handshake {peer.detail}"
+    if peer.one_way:
+        reason += ", one-way"
+    return Text(f" (wg: {reason})", style="red")
+
+
+def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
     n_stacks = len({s.stack for s in swarm.services if s.stack})
@@ -363,7 +416,7 @@ def _swarm_body(swarm: SwarmInfo) -> RenderableType:
         summary.append_text(capacity)
     summary.append(f"  ·  {len(swarm.services)} services  ·  {n_stacks} stacks")
     table.add_row("Swarm", summary)
-    table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True))
+    table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True, peers=peers))
     return table
 
 
@@ -579,7 +632,7 @@ def services_section(swarm: SwarmInfo | None, cfg: Config,
 
     body = Group(
         _subhead("SWARM"),
-        _swarm_body(swarm),
+        _swarm_body(swarm, health.peers if health else None),
         Text(""),
         _subhead("STACKS"),
         _stack_columns(swarm, cfg, health),

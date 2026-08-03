@@ -314,3 +314,55 @@ def test_a_failed_service_keeps_its_own_block():
     out = _render(health, width=150)
     assert "no running container" in out
     assert "n/a here" not in out
+
+
+# --- Transfer counters, one-way traffic, mixed endpoint families -----------
+
+def _wg(name, **kw):
+    base = dict(method="wireguard", ok=True, detail="0:10",
+                rx_bytes=1024, tx_bytes=2048, endpoint="10.0.0.1:51194", family="IPv4")
+    base.update(kw)
+    return PeerReachability(name=name, **base)
+
+
+def test_peer_transfer_is_shown():
+    output = _render(HealthInfo(peers=[_wg("wg-node-a")], peers_probed=True))
+    assert "1.0 KB" in output
+    assert "2.0 KB" in output
+
+
+def test_one_way_peer_is_called_out():
+    """We send, nothing comes back: a packet filter or a key mismatch. This has
+    to look different from a quiet peer, or the search starts in the wrong place."""
+    peer = _wg("wg-node-c", ok=False, detail="never", rx_bytes=0, tx_bytes=174080)
+    output = _render(HealthInfo(peers=[peer], peers_probed=True))
+    assert "one-way" in output
+
+
+def test_a_silent_peer_is_not_called_one_way():
+    peer = _wg("wg-node-d", ok=False, detail="never", rx_bytes=0, tx_bytes=0)
+    output = _render(HealthInfo(peers=[peer], peers_probed=True))
+    assert "one-way" not in output
+
+
+def test_mixed_address_families_are_warned_about():
+    peers = [
+        _wg("wg-node-a", family="IPv4"),
+        _wg("wg-node-b", family="IPv6", endpoint="[2001:db8::1]:51194"),
+    ]
+    output = _render(HealthInfo(peers=peers, peers_probed=True))
+    assert "mixed endpoint families" in output
+    assert "IPv4" in output and "IPv6" in output
+
+
+def test_uniform_families_produce_no_warning():
+    peers = [_wg("wg-node-a"), _wg("wg-node-b")]
+    output = _render(HealthInfo(peers=peers, peers_probed=True))
+    assert "mixed endpoint families" not in output
+
+
+def test_tcp_fallback_peers_show_no_transfer_columns():
+    """The TCP fallback has no counters -- it must not claim a zero."""
+    peer = PeerReachability(name="node-a", method="tcp", ok=True, detail="tcp/2377")
+    output = _render(HealthInfo(peers=[peer], peers_probed=True))
+    assert "0.0 B" not in output

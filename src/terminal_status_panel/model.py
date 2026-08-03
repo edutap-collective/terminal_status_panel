@@ -152,6 +152,27 @@ class PeerReachability:
     method: str  # wireguard | tcp
     ok: bool = False
     detail: str | None = None  # handshake age or probed port
+    rx_bytes: int | None = None  # None for the tcp fallback, which cannot know
+    tx_bytes: int | None = None
+    endpoint: str | None = None  # as WireGuard resolved it, host:port
+    family: str | None = None  # IPv4 | IPv6, derived from endpoint
+
+    @property
+    def one_way(self) -> bool:
+        """We send and nothing comes back.
+
+        The signature of a filtered or mis-keyed tunnel, and a different fault
+        from a peer that is simply gone — there both counters stand still. The
+        distinction decides where to look: a packet filter and a key mismatch
+        both produce this, a dead host does not.
+
+        Both counters must be present. A missing one means the transport could
+        not be read (the TCP fallback, or a malformed dump), and answering from
+        that would turn absent data into a diagnosis.
+        """
+        if self.rx_bytes is None or self.tx_bytes is None:
+            return False
+        return self.tx_bytes > 0 and self.rx_bytes == 0
 
 
 @dataclass
