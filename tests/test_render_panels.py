@@ -361,7 +361,7 @@ def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[ServiceStatus("edutap_admin_backend", 0, 3, stack="edutap")],
+        services=[ServiceStatus("mystack_admin_backend", 0, 3, stack="mystack")],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert f"{icons.DEAD} 0/3" in out
@@ -534,20 +534,20 @@ def test_a_name_that_is_only_an_ordinal_is_left_alone():
 def test_ordinal_instances_collapse_into_one_row():
     """Three pinned instances render as one sub-row summing their replicas.
 
-    The stack also runs another service (as mystack does with
-    thirteen, in production) so it renders as a stack header plus sub-rows
-    rather than collapsing to a single stack-named row — that single-service
-    collapse is a distinct, pre-existing case with its own tests."""
+    The stack deliberately runs a second, unrelated service as well, so it
+    renders as a stack header plus sub-rows rather than collapsing to a single
+    stack-named row — that single-service collapse is a distinct, pre-existing
+    case with its own tests."""
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=3,
         nodes=[SwarmNode(n, reachable=True, state="ready", availability="active")
                for n in ("srv-01", "srv-02", "srv-03")],
         services=[
-            ServiceStatus(f"edutap_connector_{i}", 1, 1, stack="edutap",
+            ServiceStatus(f"mystack_connector_{i}", 1, 1, stack="mystack",
                           tasks=[ServiceTask(f"srv-0{i}", "running")])
             for i in (1, 2, 3)
         ] + [
-            ServiceStatus("edutap_web", 1, 1, stack="edutap",
+            ServiceStatus("mystack_web", 1, 1, stack="mystack",
                           tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
