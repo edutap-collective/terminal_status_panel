@@ -220,3 +220,16 @@ def test_configured_label_wins_over_the_legacy_one(monkeypatch):
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
     assert result.services[0].description == "current"
+
+
+def test_an_empty_configured_label_is_still_the_answer(monkeypatch):
+    """Setting the key to "" is a deliberate "no description here". Treating it
+    as absent would resurrect the legacy text the service was migrated away
+    from — the opposite of what the migration was for."""
+    svc = _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="s",
+                       raw_labels={"status.description": "",
+                                   "lmu.service.description": "stale"})
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-a")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.services[0].description == ""

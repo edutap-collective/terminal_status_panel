@@ -105,8 +105,13 @@ def _swarm_services(client, critical: set[str], description_label: str,
                 stack=labels.get(STACK_LABEL),
                 # The configured key wins; the legacy key is the fallback, so a
                 # service carrying both is not pinned to its older text.
-                description=(labels.get(description_label)
-                             or labels.get(LEGACY_DESCRIPTION_LABEL)),
+                #
+                # Presence, not truthiness: a service that sets the configured
+                # key to "" is saying "no description here", and falling back
+                # would resurrect the very text it was migrated away from.
+                description=(labels[description_label]
+                             if description_label in labels
+                             else labels.get(LEGACY_DESCRIPTION_LABEL)),
                 tasks=tasks,
                 unassigned=unassigned,
             )

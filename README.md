@@ -725,7 +725,9 @@ Before this key was renamed it was `lmu.service.description`. That key is still
 read whenever the configured one is absent from a service, so an existing
 deployment keeps its descriptions without any change. Where a service carries
 both, the configured key wins — otherwise a service could be pinned to an older
-text it had been migrated away from.
+text it had been migrated away from. The rule is presence, not content: a
+service that sets the configured key to an empty string is saying "no
+description here", and the legacy key is not consulted.
 
 ## OS logos
 
