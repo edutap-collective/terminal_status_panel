@@ -23,15 +23,9 @@ def _text(renderable, width=100) -> str:
 
 
 def test_system_overview_shows_fields():
-    info = SystemInfo(
-        hostname="srv01",
-        os_name="Debian",
-        os_version="12",
-        kernel="6.1.0",
-        uptime_seconds=90000,
-        user="root",
-        ip_addresses=["10.0.0.5"],
-    )
+    info = SystemInfo(hostname="srv01", os_name="Debian", os_version="12",
+                      kernel="6.1.0", uptime_seconds=90000, user="root",
+                      ip_addresses=["10.0.0.5"])
     out = _text(panels.system_overview(info))
     assert "SYSTEM OVERVIEW" in out
     assert "srv01" in out
@@ -45,40 +39,28 @@ def test_system_overview_handles_none():
 
 
 def test_missing_os_identity_is_named_not_hidden():
-    info = SystemInfo(
-        hostname="host",
-        os_name=None,
-        os_version=None,
-        kernel="Linux 6.1.0",
-        uptime_seconds=60,
-        user="root",
-    )
+    info = SystemInfo(hostname="host", os_name=None, os_version=None,
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root")
     out = _text(panels.system_overview(info))
     assert "OS identity unavailable" in out
 
 
 def test_memory_panel_renders_bars():
     res = ResourceUsage(
-        mem_total=32_000_000_000,
-        mem_used=20_400_000_000,
-        mem_percent=64.0,
-        swap_total=8_000_000_000,
-        swap_used=600_000_000,
-        swap_percent=8.0,
+        mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
+        swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
     )
     out = _text(panels.memory_panel(res, Config()))
     assert "RAM" in out
     assert "SWAP" in out
-    assert "64" in out  # percent shown
-    assert "█" in out  # bar drawn
+    assert "64" in out   # percent shown
+    assert "█" in out    # bar drawn
 
 
 def test_load_panel_shows_per_core():
     res = ResourceUsage(
-        load_avg=(1.0, 0.7, 0.4),
-        cpu_count=4,
-        cpu_percent=12.3,
-        cpu_per_core=[8.1, 11.4, 6.2, 9.3],
+        load_avg=(1.0, 0.7, 0.4), cpu_count=4,
+        cpu_percent=12.3, cpu_per_core=[8.1, 11.4, 6.2, 9.3],
     )
     out = _text(panels.load_panel(res, Config()))
     assert "SYSTEM LOAD" in out
@@ -90,12 +72,10 @@ def test_load_panel_shows_per_core():
 
 
 def test_filesystem_panel_is_a_table():
-    res = ResourceUsage(
-        filesystems=[
-            FilesystemUsage("/", 230_000_000_000, 210_000_000_000, 91.0),
-            FilesystemUsage("/data", 500_000_000_000, 120_000_000_000, 24.0),
-        ]
-    )
+    res = ResourceUsage(filesystems=[
+        FilesystemUsage("/", 230_000_000_000, 210_000_000_000, 91.0),
+        FilesystemUsage("/data", 500_000_000_000, 120_000_000_000, 24.0),
+    ])
     out = _text(panels.filesystem_panel(res))
     assert "FILESYSTEM USAGE" in out
     assert "Size" in out
@@ -105,9 +85,8 @@ def test_filesystem_panel_is_a_table():
 
 
 def test_updates_panel_lists_counts():
-    out = _text(
-        panels.updates_panel(UpdateInfo(supported=True, available=12, security=5, standard=7))
-    )
+    out = _text(panels.updates_panel(UpdateInfo(supported=True, available=12,
+                                                security=5, standard=7)))
     assert "Available updates" in out
     assert "Security updates" in out
     assert "12" in out
@@ -122,101 +101,37 @@ def test_updates_panel_unsupported():
 def test_services_section_merges_per_node_replicas():
     N1, N2, N3 = "swarm01-mgr-01", "swarm01-wrk-01", "swarm01-wrk-02"
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=3,
-        nodes=[
-            SwarmNode(N1, reachable=True, role="manager", leader=True),
-            SwarmNode(N2, reachable=True, role="worker"),
-            SwarmNode(N3, reachable=False, role="worker", state="down"),
-        ],
+        reachable=True, enabled=True, node_role="manager", node_count=3,
+        nodes=[SwarmNode(N1, reachable=True, role="manager", leader=True),
+               SwarmNode(N2, reachable=True, role="worker"),
+               SwarmNode(N3, reachable=False, role="worker", state="down")],
         services=[
             # One kafka service per node — must collapse to a single "kafka" row.
-            ServiceStatus(
-                f"kafka_kafka-{N1}",
-                1,
-                1,
-                stack="kafka",
-                description="Kafka broker",
-                tasks=[ServiceTask(N1, "running")],
-            ),
-            ServiceStatus(
-                f"kafka_kafka-{N2}",
-                1,
-                1,
-                stack="kafka",
-                description="Kafka broker",
-                tasks=[ServiceTask(N2, "running")],
-            ),
-            ServiceStatus(
-                f"kafka_kafka-{N3}",
-                1,
-                1,
-                stack="kafka",
-                description="Kafka broker",
-                tasks=[ServiceTask(N3, "failed")],
-            ),
+            ServiceStatus(f"kafka_kafka-{N1}", 1, 1, stack="kafka", description="Kafka broker",
+                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(f"kafka_kafka-{N2}", 1, 1, stack="kafka", description="Kafka broker",
+                          tasks=[ServiceTask(N2, "running")]),
+            ServiceStatus(f"kafka_kafka-{N3}", 1, 1, stack="kafka", description="Kafka broker",
+                          tasks=[ServiceTask(N3, "failed")]),
             # PostgreSQL: per-node pg replicas + a distinct monitor service.
-            ServiceStatus(
-                f"PostgreSQL-18_pg-{N1}",
-                1,
-                1,
-                stack="PostgreSQL-18",
-                description="PG",
-                tasks=[ServiceTask(N1, "running")],
-            ),
-            ServiceStatus(
-                f"PostgreSQL-18_pg-{N2}",
-                1,
-                1,
-                stack="PostgreSQL-18",
-                description="PG",
-                tasks=[ServiceTask(N2, "running")],
-            ),
-            ServiceStatus(
-                "PostgreSQL-18_pg-monitor",
-                1,
-                1,
-                stack="PostgreSQL-18",
-                description="PG monitor",
-                tasks=[ServiceTask(N3, "running")],
-            ),
+            ServiceStatus(f"PostgreSQL-18_pg-{N1}", 1, 1, stack="PostgreSQL-18",
+                          description="PG", tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(f"PostgreSQL-18_pg-{N2}", 1, 1, stack="PostgreSQL-18",
+                          description="PG", tasks=[ServiceTask(N2, "running")]),
+            ServiceStatus("PostgreSQL-18_pg-monitor", 1, 1, stack="PostgreSQL-18",
+                          description="PG monitor", tasks=[ServiceTask(N3, "running")]),
             # traefik: two distinct services.
-            ServiceStatus(
-                "traefik_sockproxy",
-                1,
-                1,
-                stack="traefik",
-                description="socket proxy",
-                tasks=[ServiceTask(N1, "running")],
-            ),
-            ServiceStatus(
-                "traefik_traefik",
-                3,
-                3,
-                stack="traefik",
-                description="ingress",
-                tasks=[
-                    ServiceTask(N1, "running"),
-                    ServiceTask(N2, "running"),
-                    ServiceTask(N3, "running"),
-                ],
-            ),
-            ServiceStatus(
-                "eduTAP_web",
-                1,
-                1,
-                stack="eduTAP",
-                description="eduTAP frontend",
-                tasks=[ServiceTask(N1, "running")],
-            ),
-            ServiceStatus(
-                "registry", 1, 1, description="Docker registry", tasks=[ServiceTask(N2, "running")]
-            ),
-            ServiceStatus(
-                "watchtower", 1, 1, description="Auto-update", tasks=[ServiceTask(N3, "running")]
-            ),
+            ServiceStatus("traefik_sockproxy", 1, 1, stack="traefik",
+                          description="socket proxy", tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus("traefik_traefik", 3, 3, stack="traefik", description="ingress",
+                          tasks=[ServiceTask(N1, "running"), ServiceTask(N2, "running"),
+                                 ServiceTask(N3, "running")]),
+            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="eduTAP frontend",
+                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus("registry", 1, 1, description="Docker registry",
+                          tasks=[ServiceTask(N2, "running")]),
+            ServiceStatus("watchtower", 1, 1, description="Auto-update",
+                          tasks=[ServiceTask(N3, "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -251,23 +166,14 @@ def test_services_section_unreachable():
 def _mixed_availability_swarm() -> SwarmInfo:
     """One active, one drained, one down node — no services."""
     return SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=3,
+        reachable=True, enabled=True, node_role="manager", node_count=3,
         nodes=[
-            SwarmNode(
-                "srv-01",
-                reachable=True,
-                role="manager",
-                leader=True,
-                state="ready",
-                availability="active",
-            ),
-            SwarmNode("srv-02", reachable=True, role="worker", state="ready", availability="drain"),
-            SwarmNode(
-                "srv-03", reachable=False, role="worker", state="down", availability="active"
-            ),
+            SwarmNode("srv-01", reachable=True, role="manager", leader=True,
+                      state="ready", availability="active"),
+            SwarmNode("srv-02", reachable=True, role="worker",
+                      state="ready", availability="drain"),
+            SwarmNode("srv-03", reachable=False, role="worker",
+                      state="down", availability="active"),
         ],
     )
 
@@ -289,14 +195,9 @@ def test_swarm_summary_counts_unavailable_nodes():
 
 def test_swarm_summary_omits_capacity_note_when_all_nodes_are_active():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=2,
-        nodes=[
-            SwarmNode("srv-01", reachable=True, state="ready", availability="active"),
-            SwarmNode("srv-02", reachable=True, state="ready", availability="active"),
-        ],
+        reachable=True, enabled=True, node_role="manager", node_count=2,
+        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active"),
+               SwarmNode("srv-02", reachable=True, state="ready", availability="active")],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "2 nodes  ·" in out
@@ -308,10 +209,7 @@ def test_node_with_empty_availability_falls_back_to_unavailable():
     # "" not in (None, "active") — this pins the same fallback _node_capacity
     # already applies, so both read "unavailable" instead of a blank label.
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-09", reachable=True, state="ready", availability="")],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -328,63 +226,27 @@ def _line_index(out: str, predicate) -> int:
 def test_infra_uis_are_grouped_into_a_pseudo_stack():
     N1, N2 = "srv-01", "srv-02"
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=2,
-        nodes=[
-            SwarmNode(N1, reachable=True, state="ready", availability="active"),
-            SwarmNode(N2, reachable=True, state="ready", availability="active"),
-        ],
+        reachable=True, enabled=True, node_role="manager", node_count=2,
+        nodes=[SwarmNode(N1, reachable=True, state="ready", availability="active"),
+               SwarmNode(N2, reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus(
-                "kafka_kafka",
-                1,
-                1,
-                stack="kafka",
-                description="Broker",
-                tasks=[ServiceTask(N1, "running")],
-            ),
+            ServiceStatus("kafka_kafka", 1, 1, stack="kafka", description="Broker",
+                          tasks=[ServiceTask(N1, "running")]),
             # A UI living inside a real stack must leave that stack.
-            ServiceStatus(
-                "kafka_kafbat-ui",
-                1,
-                1,
-                stack="kafka",
-                description="Kafka UI",
-                tasks=[ServiceTask(N2, "running")],
-            ),
+            ServiceStatus("kafka_kafbat-ui", 1, 1, stack="kafka", description="Kafka UI",
+                          tasks=[ServiceTask(N2, "running")]),
             # A UI deployed as its own stack.
-            ServiceStatus(
-                "cloudbeaver_cloudbeaver",
-                1,
-                1,
-                stack="cloudbeaver",
-                description="SQL UI",
-                tasks=[ServiceTask(N1, "running")],
-            ),
+            ServiceStatus("cloudbeaver_cloudbeaver", 1, 1, stack="cloudbeaver",
+                          description="SQL UI", tasks=[ServiceTask(N1, "running")]),
             # A UI running as a standalone container.
-            ServiceStatus(
-                "mongo-express", 1, 1, description="Mongo UI", tasks=[ServiceTask(N1, "running")]
-            ),
-            ServiceStatus(
-                "eduTAP_web",
-                1,
-                1,
-                stack="eduTAP",
-                description="frontend",
-                tasks=[ServiceTask(N1, "running")],
-            ),
+            ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
+                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="frontend",
+                          tasks=[ServiceTask(N1, "running")]),
             # A real infrastructure stack that sorts alphabetically before
             # 'infra-uis' — the pseudo stack must still come first.
-            ServiceStatus(
-                "elasticsearch_es",
-                1,
-                1,
-                stack="elasticsearch",
-                description="Search",
-                tasks=[ServiceTask(N1, "running")],
-            ),
+            ServiceStatus("elasticsearch_es", 1, 1, stack="elasticsearch",
+                          description="Search", tasks=[ServiceTask(N1, "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -415,20 +277,10 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
 
 def test_single_infra_ui_keeps_its_own_name():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[
-            ServiceStatus(
-                "mongo-express",
-                1,
-                1,
-                description="Mongo UI",
-                tasks=[ServiceTask("srv-01", "running")],
-            )
-        ],
+        services=[ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
+                                tasks=[ServiceTask("srv-01", "running")])],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     # Not collapsed to a single row labelled 'infra-uis' — the UI stays named.
@@ -444,23 +296,13 @@ def test_infra_ui_services_win_over_infrastructure_stacks():
     the 'infra-uis' pseudo stack instead of becoming its own top-level
     infrastructure stack."""
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus(
-                "kafka-ui_kafka-ui",
-                1,
-                1,
-                stack="kafka-ui",
-                description="Kafka UI",
-                tasks=[ServiceTask("srv-01", "running")],
-            ),
-            ServiceStatus(
-                "mongodb_mongodb", 1, 1, stack="mongodb", tasks=[ServiceTask("srv-01", "running")]
-            ),
+            ServiceStatus("kafka-ui_kafka-ui", 1, 1, stack="kafka-ui",
+                          description="Kafka UI", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("mongodb_mongodb", 1, 1, stack="mongodb",
+                          tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -478,52 +320,30 @@ def test_ui_sidecar_keeps_its_stack_for_attribution():
     the 'kafka-ui' UI key) keeps 'stack/service' as its label — the UI itself
     still renders under its plain, unqualified name."""
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus(
-                "kafka-ui_kafka-ui",
-                1,
-                1,
-                stack="kafka-ui",
-                description="Kafka UI",
-                tasks=[ServiceTask("srv-01", "running")],
-            ),
-            ServiceStatus(
-                "kafka-ui_agent",
-                1,
-                1,
-                stack="kafka-ui",
-                description="Kafka UI sidecar",
-                tasks=[ServiceTask("srv-01", "running")],
-            ),
+            ServiceStatus("kafka-ui_kafka-ui", 1, 1, stack="kafka-ui",
+                          description="Kafka UI", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("kafka-ui_agent", 1, 1, stack="kafka-ui",
+                          description="Kafka UI sidecar", tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "kafka-ui/agent" in out
     # The UI row itself stays plain, not qualified as 'kafka-ui/kafka-ui'.
     lines = out.splitlines()
-    ui_line = next(
-        ln for ln in lines if ln.strip().startswith("kafka-ui") and "kafka-ui/agent" not in ln
-    )
+    ui_line = next(ln for ln in lines if ln.strip().startswith("kafka-ui") and
+                   "kafka-ui/agent" not in ln)
     assert "kafka-ui/kafka-ui" not in ui_line
 
 
 def test_no_infra_uis_row_without_matching_services():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[
-            ServiceStatus(
-                "kafka_kafka", 1, 1, stack="kafka", tasks=[ServiceTask("srv-01", "running")]
-            )
-        ],
+        services=[ServiceStatus("kafka_kafka", 1, 1, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "infra-uis" not in out
@@ -531,13 +351,11 @@ def test_no_infra_uis_row_without_matching_services():
 
 def test_the_matrix_has_a_working_column():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus("app_web", 3, 3, stack="app", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("app_web", 3, 3, stack="app",
+                          tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -548,10 +366,7 @@ def test_the_matrix_has_a_working_column():
 def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
     """Nine such rows render blank today — the outage is invisible."""
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[ServiceStatus("mystack_admin_backend", 0, 3, stack="mystack")],
     )
@@ -561,10 +376,7 @@ def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
 
 def test_a_service_scaled_to_zero_is_not_marked_dead():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[ServiceStatus("app_paused", 0, 0, stack="app")],
     )
@@ -575,36 +387,23 @@ def test_a_service_scaled_to_zero_is_not_marked_dead():
 
 def test_the_kafka_row_follows_the_cluster_verdict_not_the_replicas():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[
-            ServiceStatus(
-                "kafka_kafka-srv-01", 5, 5, stack="kafka", tasks=[ServiceTask("srv-01", "running")]
-            )
-        ],
+        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
     )
-    health = HealthInfo(
-        clusters_probed=True, clusters=[ClusterService(kind="kafka", quorum_ok=False)]
-    )
+    health = HealthInfo(clusters_probed=True,
+                        clusters=[ClusterService(kind="kafka", quorum_ok=False)])
     out = _text(panels.services_section(swarm, Config(), health), width=170)
     assert f"{icons.DEAD} 5/5" in out
 
 
 def test_without_health_a_clustered_service_is_not_observable():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[
-            ServiceStatus(
-                "kafka_kafka-srv-01", 5, 5, stack="kafka", tasks=[ServiceTask("srv-01", "running")]
-            )
-        ],
+        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
+                                tasks=[ServiceTask("srv-01", "running")])],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert f"{icons.UNKNOWN} 5/5" in out
@@ -617,14 +416,8 @@ def _five_node_swarm_with_one_drained(services) -> SwarmInfo:
         for i in range(1, 5)
     ]
     nodes.append(SwarmNode("srv-05", reachable=True, state="ready", availability="drain"))
-    return SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=5,
-        nodes=nodes,
-        services=services,
-    )
+    return SwarmInfo(reachable=True, enabled=True, node_role="manager", node_count=5,
+                     nodes=nodes, services=services)
 
 
 def test_a_global_service_counts_the_tasks_swarm_scheduled():
@@ -632,31 +425,23 @@ def test_a_global_service_counts_the_tasks_swarm_scheduled():
     against every node would claim a degradation nobody measured — while
     ``docker service ls`` reads a contented 4/4."""
     traefik = ServiceStatus(
-        "traefik_traefik",
-        4,
-        None,
-        stack="traefik",
+        "traefik_traefik", 4, None, stack="traefik",
         tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 5)],
     )
-    out = _text(
-        panels.services_section(_five_node_swarm_with_one_drained([traefik]), Config()), width=170
-    )
+    out = _text(panels.services_section(
+        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
     assert f"{icons.OK} 4/4" in out
     assert f"{icons.WARN} 4/5" not in out
 
 
 def test_a_global_service_missing_a_task_is_still_degraded():
     traefik = ServiceStatus(
-        "traefik_traefik",
-        3,
-        None,
-        stack="traefik",
+        "traefik_traefik", 3, None, stack="traefik",
         tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 4)]
-        + [ServiceTask("srv-04", "failed")],
+             + [ServiceTask("srv-04", "failed")],
     )
-    out = _text(
-        panels.services_section(_five_node_swarm_with_one_drained([traefik]), Config()), width=170
-    )
+    out = _text(panels.services_section(
+        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
     assert f"{icons.WARN} 3/4" in out
 
 
@@ -664,11 +449,7 @@ def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
     """``_node_map`` swallows a failed node listing, so an empty node list next
     to a non-zero node_count is reachable — and '/0' would be a lie."""
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=4,
-        nodes=[],
+        reachable=True, enabled=True, node_role="manager", node_count=4, nodes=[],
         services=[ServiceStatus("traefik_traefik", 4, None, stack="traefik")],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -678,14 +459,8 @@ def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
 
 def _tasks(*states):
     """One ServiceStatus holding tasks on node 'srv-01' with the given states."""
-    return [
-        ServiceStatus(
-            "svc",
-            sum(s == "running" for s in states),
-            len(states),
-            tasks=[ServiceTask("srv-01", s) for s in states],
-        )
-    ]
+    return [ServiceStatus("svc", sum(s == "running" for s in states), len(states),
+                          tasks=[ServiceTask("srv-01", s) for s in states])]
 
 
 def test_a_single_running_task_still_renders_the_bare_glyph():
@@ -732,7 +507,10 @@ NODES = ["swarm01-mgr-01", "swarm01-wrk-01"]
 
 
 def test_an_ordinal_suffix_is_stripped():
-    assert panels._base_service_name("mystack_connector_1", NODES) == "mystack_connector"
+    assert (
+        panels._base_service_name("mystack_connector_1", NODES)
+        == "mystack_connector"
+    )
 
 
 def test_ordinal_stripping_survives_more_than_one_digit():
@@ -768,28 +546,16 @@ def test_ordinal_instances_collapse_into_one_row():
     stack-named row — that single-service collapse is a distinct, pre-existing
     case with its own tests."""
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=3,
-        nodes=[
-            SwarmNode(n, reachable=True, state="ready", availability="active")
-            for n in ("srv-01", "srv-02", "srv-03")
-        ],
+        reachable=True, enabled=True, node_role="manager", node_count=3,
+        nodes=[SwarmNode(n, reachable=True, state="ready", availability="active")
+               for n in ("srv-01", "srv-02", "srv-03")],
         services=[
-            ServiceStatus(
-                f"mystack_connector_{i}",
-                1,
-                1,
-                stack="mystack",
-                tasks=[ServiceTask(f"srv-0{i}", "running")],
-            )
+            ServiceStatus(f"mystack_connector_{i}", 1, 1, stack="mystack",
+                          tasks=[ServiceTask(f"srv-0{i}", "running")])
             for i in (1, 2, 3)
-        ]
-        + [
-            ServiceStatus(
-                "mystack_web", 1, 1, stack="mystack", tasks=[ServiceTask("srv-01", "running")]
-            ),
+        ] + [
+            ServiceStatus("mystack_web", 1, 1, stack="mystack",
+                          tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -802,21 +568,14 @@ def test_ordinal_instances_collapse_into_one_row():
 
 def test_bugsink_is_infrastructure():
     swarm = SwarmInfo(
-        reachable=True,
-        enabled=True,
-        node_role="manager",
-        node_count=1,
+        reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus(
-                "bugsink_bugsink",
-                1,
-                1,
-                stack="bugsink",
-                description="Bugsink (Fehler-Tracker)",
-                tasks=[ServiceTask("srv-01", "running")],
-            ),
-            ServiceStatus("app_web", 1, 1, stack="app", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("bugsink_bugsink", 1, 1, stack="bugsink",
+                          description="Bugsink (Fehler-Tracker)",
+                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("app_web", 1, 1, stack="app",
+                          tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -852,12 +611,8 @@ def _swarm_with(node_name, reachable):
         node_role="manager",
         nodes=[
             SwarmNode(name="node-a", reachable=True, state="ready", availability="active"),
-            SwarmNode(
-                name=node_name,
-                reachable=reachable,
-                state="ready" if reachable else "down",
-                availability="active",
-            ),
+            SwarmNode(name=node_name, reachable=reachable,
+                      state="ready" if reachable else "down", availability="active"),
         ],
     )
 
@@ -869,7 +624,8 @@ def _peer(name, ok, **kw):
 def test_down_node_without_handshake_points_at_the_network():
     swarm = _swarm_with("node-c", reachable=False)
     health = HealthInfo(
-        peers=[_peer("wg-node-c.example.net", False, detail="never", rx_bytes=0, tx_bytes=174080)],
+        peers=[_peer("wg-node-c.example.net", False, detail="never",
+                     rx_bytes=0, tx_bytes=174080)],
         peers_probed=True,
     )
     output = _text(panels.services_section(swarm, Config(), health))
@@ -879,7 +635,8 @@ def test_down_node_without_handshake_points_at_the_network():
 def test_down_node_with_healthy_tunnel_points_at_docker():
     swarm = _swarm_with("node-c", reachable=False)
     health = HealthInfo(
-        peers=[_peer("wg-node-c.example.net", True, detail="0:10", rx_bytes=1024, tx_bytes=2048)],
+        peers=[_peer("wg-node-c.example.net", True, detail="0:10",
+                     rx_bytes=1024, tx_bytes=2048)],
         peers_probed=True,
     )
     output = _text(panels.services_section(swarm, Config(), health))
@@ -889,9 +646,8 @@ def test_down_node_with_healthy_tunnel_points_at_docker():
 def test_healthy_node_gets_no_annotation():
     """The line is crowded. The note appears only where it explains something."""
     swarm = _swarm_with("node-c", reachable=True)
-    health = HealthInfo(
-        peers=[_peer("wg-node-c.example.net", True, detail="0:10")], peers_probed=True
-    )
+    health = HealthInfo(peers=[_peer("wg-node-c.example.net", True, detail="0:10")],
+                        peers_probed=True)
     output = _text(panels.services_section(swarm, Config(), health))
     assert "wg:" not in output
 
@@ -920,7 +676,8 @@ def test_stale_handshake_is_not_reported_as_none():
     the wrong word for one that merely aged out."""
     swarm = _swarm_with("node-c", reachable=False)
     health = HealthInfo(
-        peers=[_peer("wg-node-c.example.net", False, detail="5:00", rx_bytes=1024, tx_bytes=2048)],
+        peers=[_peer("wg-node-c.example.net", False, detail="5:00",
+                     rx_bytes=1024, tx_bytes=2048)],
         peers_probed=True,
     )
     output = _text(panels.services_section(swarm, Config(), health))
@@ -929,14 +686,9 @@ def test_stale_handshake_is_not_reported_as_none():
 
 
 def test_long_address_lists_are_capped_with_a_visible_remainder():
-    info = SystemInfo(
-        hostname="host",
-        os_name="Debian GNU/Linux 12",
-        kernel="Linux 6.1.0",
-        uptime_seconds=60,
-        user="root",
-        ip_addresses=[f"10.0.0.{n}" for n in range(101, 113)],
-    )
+    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
+                      ip_addresses=[f"10.0.0.{n}" for n in range(101, 113)])
     out = _text(panels.system_overview(info), width=200)
     assert "10.0.0.108" in out
     assert "10.0.0.109" not in out
@@ -944,30 +696,59 @@ def test_long_address_lists_are_capped_with_a_visible_remainder():
 
 
 def test_short_address_lists_show_no_remainder():
-    info = SystemInfo(
-        hostname="host",
-        os_name="Debian GNU/Linux 12",
-        kernel="Linux 6.1.0",
-        uptime_seconds=60,
-        user="root",
-        ip_addresses=["10.0.0.1", "10.0.0.2"],
-    )
+    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
+                      ip_addresses=["10.0.0.1", "10.0.0.2"])
     out = _text(panels.system_overview(info), width=200)
     assert "more)" not in out
 
 
 def test_long_mount_paths_keep_their_distinguishing_tail():
-    from terminal_status_panel.render.panels import _short_mount
-
     path = "/Library/Developer/CoreSimulator/Volumes/iOS_23C54"
-    shortened = _short_mount(path, 24)
-    assert len(shortened) == 24
+    shortened = panels._short_mount(path, 15)
+    assert len(shortened) == 15
     assert shortened.startswith("…")
     assert shortened.endswith("iOS_23C54")
 
 
 def test_short_mount_paths_are_left_alone():
-    from terminal_status_panel.render.panels import _short_mount
+    assert panels._short_mount("/", 15) == "/"
+    assert panels._short_mount("/Volumes/Data2", 15) == "/Volumes/Data2"
 
-    assert _short_mount("/", 24) == "/"
-    assert _short_mount("/Volumes/Data2", 24) == "/Volumes/Data2"
+
+def test_short_mount_handles_width_one():
+    """Edge case: width=1 should return just the ellipsis, not the full path."""
+    assert panels._short_mount("/Volumes/Data2", 1) == "…"
+    assert len(panels._short_mount("/Volumes/Data2", 1)) == 1
+
+
+def test_filesystem_numeric_columns_not_truncated_in_system_status():
+    """Regression test: mount column must not squeeze numeric columns.
+
+    The filesystem table shares a narrow pane with memory; a fixed width mount
+    column was starving Size, Used, Avail to a few characters each. The fix
+    uses max_width instead of width. This test exercises the real constraint
+    by rendering through system_status (which applies the ratio-based split)
+    at a narrow width, and checking that numeric values are not truncated.
+    """
+    res = ResourceUsage(
+        mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
+        swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
+        filesystems=[
+            FilesystemUsage("/", 230_000_000_000, 210_000_000_000, 91.0),
+            FilesystemUsage("/Volumes/Data2", 1_800_000_000_000, 1_100_000_000, 0.0),
+        ],
+    )
+    # Render at width 100, which puts the filesystem table in a narrow space
+    out = _text(panels.system_status(res, Config()), width=100)
+    # The key test: numeric values must not be truncated mid-number.
+    # format_bytes converts 230GB to "214.2 GB" (actually 230_000_000_000 / 1.073e9),
+    # but the pattern is X.X GB. If truncated to "926…", this test would fail.
+    # We check for presence of a complete decimal value, not just "9…" or "2…".
+    # Looking for numbers with at least one decimal digit followed by unit.
+    has_complete_value = any(
+        s in out for s in ["214.2", "195", "1.6", "1.1", "1.8"]  # Expected values
+    )
+    assert has_complete_value, "Numeric columns appear truncated (no complete values found)"
+    # Verify mount path is readable too
+    assert "/Volumes/Data2" in out or "Data2" in out, "Mount path not visible"

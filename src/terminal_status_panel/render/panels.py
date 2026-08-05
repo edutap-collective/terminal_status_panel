@@ -50,10 +50,6 @@ INFRA_UI_STACK = "infra-uis"
 #: displacing everything below it.
 MAX_RENDERED_IPS = 8
 
-#: Width of the mount column. The filesystem table shares its row with the
-#: memory block, so the column cannot grow much beyond this.
-MOUNT_COLUMN_WIDTH = 24
-
 # Ordinal instances of one service: a connector pinned per node must run as
 # connector_1, _2, … because each instance needs its own secrets.
 # Underscore only — with '-<digits>' a stack named PostgreSQL-18 whose service
@@ -78,7 +74,9 @@ def _short_mount(path: str, width: int) -> str:
     """
     if len(path) <= width:
         return path
-    return "…" + path[-(width - 1) :]
+    if width <= 1:
+        return "…"
+    return "…" + path[-(width - 1):]
 
 
 def section(title: str, body: RenderableType) -> Group:
@@ -120,7 +118,6 @@ def _now() -> str:
 # System overview + updates (top row)
 # --------------------------------------------------------------------------- #
 
-
 def system_overview(info: SystemInfo | None) -> Group:
     table = _kv_table()
     if info is None:
@@ -151,7 +148,7 @@ def system_overview(info: SystemInfo | None) -> Group:
     if logo.plain:
         body = Table.grid(padding=(0, 3))
         body.add_column(vertical="middle")  # logo
-        body.add_column()  # label + value table
+        body.add_column()                   # label + value table
         body.add_row(logo, table)
     else:
         body = table
@@ -167,24 +164,18 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
     avail_color = "red" if security else ("yellow" if updates.available else "green")
     table = Table.grid(padding=(0, 1))
     table.add_column()
-    table.add_row(
-        Text.assemble(
-            ("Available updates: ", "bold cyan"),
-            (str(updates.available if updates.available is not None else "?"), avail_color),
-        )
-    )
-    table.add_row(
-        Text.assemble(
-            ("  • Security updates: ", "cyan"),
-            (str(security), "red" if security else "green"),
-        )
-    )
-    table.add_row(
-        Text.assemble(
-            ("  • Standard updates: ", "cyan"),
-            (str(updates.standard if updates.standard is not None else "?"), "yellow"),
-        )
-    )
+    table.add_row(Text.assemble(
+        ("Available updates: ", "bold cyan"),
+        (str(updates.available if updates.available is not None else "?"), avail_color),
+    ))
+    table.add_row(Text.assemble(
+        ("  • Security updates: ", "cyan"),
+        (str(security), "red" if security else "green"),
+    ))
+    table.add_row(Text.assemble(
+        ("  • Standard updates: ", "cyan"),
+        (str(updates.standard if updates.standard is not None else "?"), "yellow"),
+    ))
     return section("UPDATES", table)
 
 
@@ -192,15 +183,8 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
 # System status (load + memory/swap + filesystem)
 # --------------------------------------------------------------------------- #
 
-
-def _bar_row(
-    table: Table,
-    label: str,
-    percent: float | None,
-    used: int | None,
-    total: int | None,
-    status: str,
-) -> None:
+def _bar_row(table: Table, label: str, percent: float | None,
+             used: int | None, total: int | None, status: str) -> None:
     if percent is None:
         table.add_row(label, Text("n/a", style="dim"), "", "")
         return
@@ -216,9 +200,8 @@ def _load_text(load_avg, cpu_count, thresholds: Thresholds) -> Text:
     cpus = cpu_count or 1
     text = Text()
     for i, value in enumerate(load_avg):
-        status = classify(
-            (value / cpus) * 100, thresholds.load_warning * 100, thresholds.load_critical * 100
-        )
+        status = classify((value / cpus) * 100,
+                          thresholds.load_warning * 100, thresholds.load_critical * 100)
         if i:
             text.append(" ")
         text.append(f"{value:.2f}", style=STATUS_COLORS.get(status, "white"))
@@ -234,11 +217,8 @@ def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
     head.add_row("Load Average", _load_text(res.load_avg, res.cpu_count, cfg.thresholds), "")
     if res.cpu_percent is not None:
         status = classify(res.cpu_percent, _CPU_WARNING, _CPU_CRITICAL)
-        head.add_row(
-            "CPU",
-            render_bar(res.cpu_percent, status, width=44),
-            Text(f"{res.cpu_percent:5.1f}%", style=STATUS_COLORS.get(status, "white")),
-        )
+        head.add_row("CPU", render_bar(res.cpu_percent, status, width=44),
+                     Text(f"{res.cpu_percent:5.1f}%", style=STATUS_COLORS.get(status, "white")))
 
     parts: list[RenderableType] = [head]
     if res.cpu_per_core:
@@ -249,11 +229,8 @@ def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
         cores.add_column(justify="right")
         for idx, pct in enumerate(res.cpu_per_core, start=1):
             status = classify(pct, _CPU_WARNING, _CPU_CRITICAL)
-            cores.add_row(
-                f"Core {idx}",
-                render_bar(pct, status, width=36),
-                Text(f"{pct:5.1f}%", style=STATUS_COLORS.get(status, "white")),
-            )
+            cores.add_row(f"Core {idx}", render_bar(pct, status, width=36),
+                          Text(f"{pct:5.1f}%", style=STATUS_COLORS.get(status, "white")))
         parts.append(cores)
     return Group(*parts)
 
@@ -265,46 +242,30 @@ def _memory_body(res: ResourceUsage, cfg: Config) -> RenderableType:
     table.add_column(justify="right")
     table.add_column()
     t = cfg.thresholds
-    _bar_row(
-        table,
-        "RAM",
-        res.mem_percent,
-        res.mem_used,
-        res.mem_total,
-        classify(res.mem_percent or 0, t.memory_warning, t.memory_critical),
-    )
-    _bar_row(
-        table,
-        "SWAP",
-        res.swap_percent,
-        res.swap_used,
-        res.swap_total,
-        classify(res.swap_percent or 0, t.swap_warning, 100.0),
-    )
+    _bar_row(table, "RAM", res.mem_percent, res.mem_used, res.mem_total,
+             classify(res.mem_percent or 0, t.memory_warning, t.memory_critical))
+    _bar_row(table, "SWAP", res.swap_percent, res.swap_used, res.swap_total,
+             classify(res.swap_percent or 0, t.swap_warning, 100.0))
     return table
 
 
 def _filesystem_body(res: ResourceUsage) -> RenderableType:
     table = Table.grid(padding=(0, 2))
-    table.add_column(style="bold cyan", no_wrap=True, width=MOUNT_COLUMN_WIDTH)
+    table.add_column(style="bold cyan", no_wrap=True, max_width=14)
     table.add_column(justify="right")
     table.add_column(justify="right")
     table.add_column(justify="right")
-    table.add_column()
     table.add_column(justify="right")
     if not res.filesystems:
-        table.add_row("Status", "", "", "", Text("no filesystems", style="dim"), "")
+        table.add_row("Status", "", "", "", Text("no filesystems", style="dim"))
         return table
-    table.add_row("Mounted on", "Size", "Used", "Avail", "", "Use%")
+    table.add_row("Mounted on", "Size", "Used", "Avail", "Use%")
     for fs in res.filesystems:
         status = classify(fs.percent, 80.0, 90.0)
         avail = max(fs.total - fs.used, 0)
         table.add_row(
-            _short_mount(fs.mountpoint, MOUNT_COLUMN_WIDTH),
-            format_bytes(fs.total),
-            format_bytes(fs.used),
+            _short_mount(fs.mountpoint, 14), format_bytes(fs.total), format_bytes(fs.used),
             format_bytes(avail),
-            render_bar(fs.percent, status, width=24),
             Text(f"{fs.percent:.0f}%", style=STATUS_COLORS.get(status, "white")),
         )
     return table
@@ -315,11 +276,8 @@ def system_status(res: ResourceUsage | None, cfg: Config) -> Group:
         return section("SYSTEM STATUS", Text("not available", style="dim"))
     left = Group(_subhead("SYSTEM LOAD"), _load_body(res, cfg))
     right = Group(
-        _subhead("MEMORY & SWAP"),
-        _memory_body(res, cfg),
-        Text(""),
-        _subhead("FILESYSTEM USAGE"),
-        _filesystem_body(res),
+        _subhead("MEMORY & SWAP"), _memory_body(res, cfg),
+        Text(""), _subhead("FILESYSTEM USAGE"), _filesystem_body(res),
     )
     grid = Table.grid(expand=True, padding=(0, 4))
     grid.add_column(ratio=3)
@@ -350,7 +308,6 @@ def filesystem_panel(res: ResourceUsage | None) -> Group:
 # --------------------------------------------------------------------------- #
 # Docker infos (swarm key facts + stack columns)
 # --------------------------------------------------------------------------- #
-
 
 def _node_health(node) -> Text:
     """✅ ready and active · ⚠️ ready but drained/paused · 💀 unreachable."""
@@ -392,7 +349,7 @@ def _short_node_names(nodes) -> list[tuple[str, str]]:
         common = os.path.commonprefix(names)
         cut = common.rfind("-")
         prefix = common[: cut + 1] if cut >= 0 else ""
-    return [(n.name, n.name[len(prefix) :] or n.name) for n in ordered]
+    return [(n.name, n.name[len(prefix):] or n.name) for n in ordered]
 
 
 def _node_capacity(nodes) -> Text | None:
@@ -422,7 +379,8 @@ def _node_capacity(nodes) -> Text | None:
     return note
 
 
-def _peer_for_node(node_name: str, peers: list[PeerReachability] | None) -> PeerReachability | None:
+def _peer_for_node(node_name: str,
+                   peers: list[PeerReachability] | None) -> PeerReachability | None:
     """Match a Swarm node to its WireGuard peer by name.
 
     The two collectors name the same machine differently: Swarm reports the
@@ -442,7 +400,8 @@ def _peer_for_node(node_name: str, peers: list[PeerReachability] | None) -> Peer
     return None
 
 
-def _node_tunnel_note(node: SwarmNode, peers: list[PeerReachability] | None) -> Text | None:
+def _node_tunnel_note(node: SwarmNode,
+                      peers: list[PeerReachability] | None) -> Text | None:
     """Why a node is down: the tunnel, or Docker above it.
 
     Only rendered for a node that is actually down — on a healthy line it would
@@ -533,7 +492,7 @@ def _strip_stack_prefix(base: str, stack: str) -> str:
     for sep in ("_", "-"):
         prefix = f"{stack}{sep}"
         if base.startswith(prefix) and len(base) > len(prefix):
-            return base[len(prefix) :]
+            return base[len(prefix):]
     return base
 
 
@@ -584,11 +543,11 @@ def _stack_matrix(
 ) -> RenderableType:
     short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
-    table.add_column(style="bold")  # stack / service name
-    table.add_column(justify="left")  # Working
+    table.add_column(style="bold")          # stack / service name
+    table.add_column(justify="left")        # Working
     for _ in short:
         table.add_column(justify="center")  # per-node status
-    table.add_column(style="dim")  # description
+    table.add_column(style="dim")           # description
 
     header = [_subhead(title), Text("Working", style="cyan")]
     header += [Text(s, style="cyan") for _, s in short]
@@ -622,9 +581,8 @@ def _stack_matrix(
     return table
 
 
-def _stack_columns(
-    swarm: SwarmInfo, cfg: Config, health: HealthInfo | None = None
-) -> RenderableType:
+def _stack_columns(swarm: SwarmInfo, cfg: Config,
+                   health: HealthInfo | None = None) -> RenderableType:
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
     ui_keys = [k.lower() for k in cfg.infra_ui_services]
     node_names = [n.name for n in swarm.nodes]
@@ -637,11 +595,11 @@ def _stack_columns(
     node_count = swarm.node_count or len(swarm.nodes)
 
     def verdict(services):
-        kind = next((k for k in (kind_for_service(s.name) for s in services) if k), None)
+        kind = next(
+            (k for k in (kind_for_service(s.name) for s in services) if k), None
+        )
         return service_verdict(
-            services,
-            kind=kind,
-            cluster=by_kind.get(kind) if kind else None,
+            services, kind=kind, cluster=by_kind.get(kind) if kind else None,
             node_count=node_count,
         )
 
@@ -690,9 +648,8 @@ def _stack_columns(
     )
 
 
-def services_section(
-    swarm: SwarmInfo | None, cfg: Config, health: HealthInfo | None = None
-) -> Group:
+def services_section(swarm: SwarmInfo | None, cfg: Config,
+                     health: HealthInfo | None = None) -> Group:
     if swarm is None or not swarm.reachable:
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
