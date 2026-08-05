@@ -178,6 +178,11 @@ def _container_groups(client) -> dict[tuple[str | None, str], list]:
             continue
         project = labels.get(COMPOSE_PROJECT_LABEL)
         if project is None:
+            # The two kinds part here, and deliberately: a Compose container
+            # that exits non-zero belongs to a group it can be a shortfall
+            # against and stays visible, while a standalone one has no group
+            # to fall short of, so it is shown only while it lives -- else
+            # every one-off `docker run` ever left behind would pile up here.
             if _raw_state(container) not in _LIVE_STATES:
                 continue
             key = (None, container.name)
@@ -206,8 +211,14 @@ def _container_services(client, critical: set[str], description_label: str,
                 description=(labels[description_label]
                              if description_label in labels
                              else labels.get(LEGACY_DESCRIPTION_LABEL)),
-                tasks=[ServiceTask(node=node_name, state=state) for state in states]
-                if node_name else [],
+                # Always emitted, node or no node: the tasks are what carries
+                # the *state*, and the verdict reads `starting` off them to
+                # tell a container on its way up from a dead one. Withholding
+                # them off Swarm -- where `node_name` is None -- rendered every
+                # container inside its `start_period` as 💀 0/1. Without Swarm
+                # there are no node columns, so a task with no node changes
+                # nothing else.
+                tasks=[ServiceTask(node=node_name, state=state) for state in states],
             )
         )
     services.sort(key=lambda svc: (svc.stack or "", svc.name))

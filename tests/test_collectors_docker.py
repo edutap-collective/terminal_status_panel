@@ -1,5 +1,7 @@
 from terminal_status_panel.collectors import docker as docker_collector
 from terminal_status_panel.model import SwarmInfo
+from terminal_status_panel.render import icons
+from terminal_status_panel.render.verdict import service_verdict
 
 
 class _FakeService:
@@ -387,6 +389,14 @@ def test_an_unhealthy_container_does_not_count_as_running(monkeypatch):
 
 
 def test_a_starting_healthcheck_is_not_reported_as_failure(monkeypatch):
+    """`docker compose up` a service with a `start_period`, log in inside it.
+
+    Asserted on the *rendered* verdict, not on ``running_replicas``: that is 0
+    for a container on its way up and for a dead one alike, so an assertion on
+    it passes just as happily while the panel prints `💀 0/1`. Which is exactly
+    what it printed, for every host without Swarm, when the collector dropped
+    the task list and with it the only record of the starting state.
+    """
     client = _FakeClient(
         "inactive",
         containers=[_compose("portal", "web", health="starting")],
@@ -395,7 +405,10 @@ def test_a_starting_healthcheck_is_not_reported_as_failure(monkeypatch):
 
     result = docker_collector.collect_docker()
 
-    assert result.containers[0].running_replicas == 0
+    web = result.containers[0]
+    assert web.running_replicas == 0
+    assert service_verdict([web]).plain == f"{icons.WARN} 0/1"
+    assert icons.DEAD not in service_verdict([web]).plain
 
 
 def test_containers_are_placed_on_the_local_node_when_swarm_is_active(monkeypatch):
@@ -414,13 +427,20 @@ def test_containers_are_placed_on_the_local_node_when_swarm_is_active(monkeypatc
     assert web.tasks[0].running is True
 
 
-def test_containers_carry_no_tasks_without_swarm(monkeypatch):
+def test_containers_without_swarm_carry_tasks_with_no_node(monkeypatch):
+    """No Swarm means no node name -- not no task.
+
+    The task is where the state lives, and the verdict needs it. There are no
+    node columns to place it in either way, so ``node=None`` costs nothing.
+    """
     client = _FakeClient("inactive", containers=[_compose("portal", "web")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
 
     result = docker_collector.collect_docker()
 
-    assert result.containers[0].tasks == []
+    web = result.containers[0]
+    assert [t.node for t in web.tasks] == [None]
+    assert web.tasks[0].running is True
 
 
 def test_containers_use_the_same_description_label_as_services(monkeypatch):
