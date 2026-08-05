@@ -72,6 +72,51 @@ def test_the_macos_word_mark_is_bundled():
     assert logo_module.os_logo_by_key("macos").plain.strip() != ""
 
 
+def _resolvable_keys() -> set[str]:
+    """Every key ``_logo_name`` can return, from both of its two sources."""
+    keys = set(platform_defaults._LOGO_KEYS.values())
+    keys |= {logo for _, logo in logo_module._DISTRO_KEYS}
+    keys.add("linux")
+    return keys
+
+
+def test_every_resolvable_key_renders_a_logo_or_deliberately_renders_none():
+    """No key may lose its logo silently, and none may gain a false one.
+
+    Asserting the key string alone is what let five distributions ship with no
+    artwork *and* no fallback: ``_logo_name`` still answered "fedora", and the
+    logo column simply vanished. So this looks at what is rendered.
+    """
+    tux = logo_module.os_logo_by_key("linux").plain
+    assert tux.strip() != "", "the fallback itself must be bundled"
+
+    for key in sorted(_resolvable_keys()):
+        rendered = logo_module.logo_for_key(key).plain
+        if key in logo_module._LINUX_KEYS:
+            assert rendered.strip() != "", f"{key} renders no logo at all"
+        else:
+            # macOS and the BSDs: showing the penguin here would be a lie, so
+            # an absent logo is the correct answer and Tux is never borrowed.
+            assert rendered != tux, f"{key} must never render Tux"
+
+
+def test_a_distribution_without_bundled_artwork_falls_back_to_tux(monkeypatch):
+    """RHEL's mark is not redistributable; RHEL is still Linux."""
+    _on(monkeypatch, "Linux")
+    tux = logo_module.os_logo_by_key("linux").plain
+    for name in ("Red Hat Enterprise Linux 9.4 (Plow)",
+                 "Fedora Linux 40 (Workstation Edition)",
+                 "AlmaLinux 9.4 (Seafoam Ocelot)",
+                 "openSUSE Tumbleweed",
+                 "SUSE Linux Enterprise Server 15 SP6"):
+        assert logo_module.os_logo(name).plain == tux, name
+
+
+def test_freebsd_shows_nothing_rather_than_a_penguin(monkeypatch):
+    _on(monkeypatch, "FreeBSD")
+    assert logo_module.os_logo("FreeBSD 14.3-RELEASE").plain == ""
+
+
 def test_every_bundled_logo_records_its_provenance():
     """A public repository ships other people's marks; say where each came from."""
     import pathlib

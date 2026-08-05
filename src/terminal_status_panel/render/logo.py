@@ -32,6 +32,12 @@ _DISTRO_KEYS: tuple[tuple[str, str], ...] = (
     ("fedora", "fedora"),
 )
 
+#: Every key the distribution table can yield, plus the generic one. Tux is a
+#: true statement about each of them, so a key listed here whose own artwork is
+#: not bundled may borrow the penguin. Nothing else may: for macOS and the BSDs
+#: the penguin would be a lie, and there an absent logo is the correct answer.
+_LINUX_KEYS: frozenset[str] = frozenset({logo for _, logo in _DISTRO_KEYS} | {"linux"})
+
 
 def _logo_name(os_name: str | None) -> str:
     """Pick the logo stem: platform first, distribution second, Tux last.
@@ -60,6 +66,24 @@ def os_logo_by_key(key: str) -> Text:
         return Text("")
 
 
+def logo_for_key(key: str) -> Text:
+    """The logo actually shown for *key*: its own artwork, or Tux for a Linux
+    distribution whose mark could not be licensed.
+
+    Several distribution marks are deliberately not bundled (see
+    ``assets/logos/SOURCES.md``). Letting those keys render nothing would drop
+    the logo column entirely on a Fedora or RHEL host, which is worse than the
+    generic answer -- and the generic answer is not a guess: Tux is a true
+    statement about any Linux distribution. It is a lie about macOS and the
+    BSDs, so keys outside ``_LINUX_KEYS`` keep whatever they have, including
+    nothing.
+    """
+    logo = os_logo_by_key(key)
+    if logo.plain or key not in _LINUX_KEYS:
+        return logo
+    return os_logo_by_key("linux")
+
+
 def os_logo(os_name: str | None) -> Text:
     """Return the pre-rendered logo for *os_name*, or empty Text if missing."""
-    return os_logo_by_key(_logo_name(os_name))
+    return logo_for_key(_logo_name(os_name))

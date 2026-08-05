@@ -20,10 +20,14 @@ Regenerate the `.ans` files with `python tools/generate_logos.py`.
 
 ## Omitted marks
 
-These keys are resolved by `_logo_name` (they degrade to an empty logo, per
-`os_logo_by_key`, rather than to Tux — that fallback is reserved for Linux
-distributions, and BSDs and RHEL-family systems already have no fallback in
-the existing resolution table) but ship no artwork:
+These keys are resolved by `_logo_name` but ship no artwork. What is shown in
+their place depends on what would be true, and `logo_for_key` draws that line:
+`rhel`, `fedora`, `alma`, `opensuse` and `suse` name Linux distributions, so
+they fall back to `linux.ans` (Tux) — the penguin is a true statement about the
+kernel even when the distribution's own mark cannot be redistributed, and
+dropping the logo entirely would cost a RHEL or Fedora host its whole logo
+column. `freebsd` is not Linux, so it renders nothing at all; borrowing Tux
+there would be a lie.
 
 | Key | Reason |
 | --- | --- |
@@ -34,6 +38,6 @@ the existing resolution table) but ship no artwork:
 | `suse` | **Could not verify — primary source blocked/truncated.** `brand.suse.com/suse-logo` loaded but was truncated before any third-party-use section; I found no complete statement of terms I could read and quote. |
 | `freebsd` | **Legibility, not licence.** The FreeBSD Foundation's Trademark Usage Terms and Conditions (<https://freebsdfoundation.org/legal/trademark-usage-terms-and-conditions/>, fetched directly) actually permit this use: "Any individual, organization, or company may, without explicit permission from the Foundation, use the FreeBSD Marks to show support for the Project or as part of a notice to users that a product incorporates the FreeBSD operating system." The Foundation's official asset package (<https://freebsdfoundation.org/brand/>, "FreeBSD_Logo Set (Original Red)") only publishes combined wordmark + "FOUNDATION" lockups, no standalone icon, and the terms forbid altering the released artwork. Rendered at 18 character cells the wordmark is illegible and the icon reads as an indistinct red blob — worse than showing nothing. Dropped for that reason; the licence itself would have supported shipping it if a legible standalone icon existed. |
 
-Any Linux distribution not listed above falls back to `linux.ans` (Tux) via
-`_logo_name`; this is a true statement about the kernel even when the
-distribution's own mark is not bundled.
+Any Linux distribution not listed above — one `_DISTRO_KEYS` does not match at
+all — resolves to `linux` directly and so also renders `linux.ans` (Tux), for
+the same reason.
