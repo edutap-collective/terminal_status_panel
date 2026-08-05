@@ -234,6 +234,29 @@ def test_stackless_entries_from_both_origins_share_one_table():
     assert "lonely-container" in out
 
 
+def test_an_infrastructure_shaped_stackless_entry_claims_no_project():
+    """`docker run -d redis` on a host with no Compose project at all.
+
+    ``redis`` and ``registry`` match ``infrastructure_stacks``, which used to
+    file them under this origin's Infrastructure table -- and so under a
+    "COMPOSE PROJECTS" / "SWARM STACKS" heading naming a project that does not
+    exist. The earlier fixtures were called ``lonely-*`` and matched no infra
+    keyword, which is why they never saw it. Being infrastructure-shaped does
+    not give an entry a project.
+    """
+    swarm = _swarm_with_origins(
+        services=[_origin_status("registry")],
+        containers=[_origin_status("redis")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "SWARM STACKS" not in out
+    assert "COMPOSE PROJECTS" not in out
+    assert "Infrastructure" not in out
+    standalone_at = out.index("Standalone containers")
+    assert out.index("redis") > standalone_at
+    assert out.index("registry") > standalone_at
+
+
 def test_the_summary_counts_containers_without_calling_them_services():
     swarm = _swarm_with_origins(containers=[_origin_status("web", stack="portal"),
                                             _origin_status("db", stack="portal")])
@@ -653,7 +676,7 @@ def test_bugsink_is_infrastructure():
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
             ServiceStatus("bugsink_bugsink", 1, 1, stack="bugsink",
-                          description="Bugsink (Fehler-Tracker)",
+                          description="Bugsink (error tracker)",
                           tasks=[ServiceTask("srv-01", "running")]),
             ServiceStatus("app_web", 1, 1, stack="app",
                           tasks=[ServiceTask("srv-01", "running")]),

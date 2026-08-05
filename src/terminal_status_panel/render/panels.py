@@ -588,7 +588,9 @@ def _classify_origin(services, cfg, node_names):
 
     The infrastructure/UI classification is unchanged -- it simply runs per
     origin now, so a Compose `adminer` still joins the infra UIs and a Compose
-    `postgres` still counts as infrastructure.
+    project named `postgres` still counts as infrastructure. It classifies
+    *stacks*, though: an entry with no stack has no project to file under and
+    goes to the shared remainder regardless (see below).
     """
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
     ui_keys = [k.lower() for k in cfg.infra_ui_services]
@@ -621,8 +623,14 @@ def _classify_origin(services, cfg, node_names):
         entry = (name, subrows_for(name, svcs))
         (infra if is_infra(name) else service).append(entry)
     for base, svcs in _base_groups(ungrouped, node_names).items():
-        entry = (base, [(base, svcs, _group_desc(svcs))])
-        (infra if is_infra(base) else stackless).append(entry)
+        # Stackless entries never enter this origin's tables, infrastructure-
+        # shaped or not. `infra`/`service` live under a "SWARM STACKS" or
+        # "COMPOSE PROJECTS" heading, and a `docker run -d redis` on a host
+        # with no Compose project at all was filed under a project that does
+        # not exist. Being infrastructure does not give an entry a project;
+        # the shared remainder table says "Standalone containers", which is
+        # true of a stackless Swarm service and a stackless container alike.
+        stackless.append((base, [(base, svcs, _group_desc(svcs))]))
 
     return infra, service, stackless
 
