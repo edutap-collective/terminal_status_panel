@@ -38,6 +38,13 @@ def test_system_overview_handles_none():
     assert "not available" in out
 
 
+def test_missing_os_identity_is_named_not_hidden():
+    info = SystemInfo(hostname="host", os_name=None, os_version=None,
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root")
+    out = _text(panels.system_overview(info))
+    assert "OS identity unavailable" in out
+
+
 def test_memory_panel_renders_bars():
     res = ResourceUsage(
         mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,

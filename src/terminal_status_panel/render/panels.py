@@ -105,7 +105,7 @@ def system_overview(info: SystemInfo | None) -> Group:
         return section("SYSTEM OVERVIEW", table)
 
     # distro.name(pretty=True) usually already embeds the version/codename.
-    os_line = info.os_name or "n/a"
+    os_line = info.os_name or "n/a (OS identity unavailable)"
     if info.os_version and info.os_version not in (info.os_name or ""):
         os_line = f"{os_line} {info.os_version}"
     table.add_row("OS", os_line)
