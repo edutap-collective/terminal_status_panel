@@ -6,6 +6,8 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 
+from . import platform_defaults
+
 #: Docker service label read as the per-service description column.
 #: Vendor-neutral, as befits a public package.
 DEFAULT_DESCRIPTION_LABEL = "status.description"
@@ -23,7 +25,7 @@ DEFAULT_CONFIG_PATH = "/etc/terminal-status-panel/config.toml"
 class Thresholds:
     memory_warning: float = 75.0
     memory_critical: float = 90.0
-    swap_warning: float = 1.0
+    swap_warning: float = field(default_factory=platform_defaults.swap_warning)
     filesystem_warning: float = 80.0
     filesystem_critical: float = 90.0
     load_warning: float = 0.8  # per-CPU multiplier
@@ -117,6 +119,9 @@ class Config:
     infra_ui_services: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRA_UI_SERVICES)
     )
+    ignore_mountpoints: list[str] = field(
+        default_factory=platform_defaults.ignore_mountpoints
+    )
     thresholds: Thresholds = field(default_factory=Thresholds)
     health: HealthConfig = field(default_factory=HealthConfig)
     traefik: TraefikApiConfig = field(default_factory=TraefikApiConfig)
@@ -196,6 +201,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     services = _section(data, "services")
     infra = docker.get("infrastructure_stacks", services.get("infrastructure", None))
     infra_uis = docker.get("infra_ui_services", None)
+    resources = _section(data, "resources")
+    # Presence, not truthiness: an explicit [] means "hide nothing" and must not
+    # be replaced by the platform defaults it was written to override.
+    ignore = resources.get("ignore_mountpoints", None)
     traefik_section = _section(data, "traefik")
     traefik = TraefikApiConfig(
         url=traefik_section.get("url") or None,
@@ -213,6 +222,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         else list(DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=list(infra_uis) if infra_uis is not None
         else list(DEFAULT_INFRA_UI_SERVICES),
+        ignore_mountpoints=list(ignore) if ignore is not None
+        else platform_defaults.ignore_mountpoints(),
         thresholds=thresholds,
         health=_health_config(data),
         traefik=traefik,

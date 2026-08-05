@@ -131,3 +131,36 @@ def test_traefik_api_can_be_configured(tmp_path):
     cfg = load_config(str(path))
     assert cfg.traefik.url.endswith("/rawdata")
     assert cfg.traefik.cert == "/etc/ssl/panel.pem"
+
+
+def test_ignore_mountpoints_defaults_to_the_platform_list(monkeypatch, tmp_path):
+    from terminal_status_panel import platform_defaults
+
+    monkeypatch.setattr(platform_defaults.platform, "system", lambda: "Darwin")
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.ignore_mountpoints == [
+        "/System/Volumes/",
+        "/Library/Developer/CoreSimulator/",
+    ]
+    assert cfg.thresholds.swap_warning == 80.0
+
+
+def test_ignore_mountpoints_from_the_resources_block(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[resources]\nignore_mountpoints = ["/mnt/backup/", "/srv/scratch/"]\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    assert cfg.ignore_mountpoints == ["/mnt/backup/", "/srv/scratch/"]
+
+
+def test_an_explicitly_empty_ignore_list_hides_nothing(monkeypatch, tmp_path):
+    """Presence, not truthiness: [] means "hide nothing", not "use defaults"."""
+    from terminal_status_panel import platform_defaults
+
+    monkeypatch.setattr(platform_defaults.platform, "system", lambda: "Darwin")
+    path = tmp_path / "config.toml"
+    path.write_text("[resources]\nignore_mountpoints = []\n", encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.ignore_mountpoints == []
