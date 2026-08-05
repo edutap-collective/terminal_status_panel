@@ -224,7 +224,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 |-----|---------|---------|
 | `width` | `80` | Fallback render width when no TTY is available (see width resolution above). |
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
-| `docker.description_label` | `"lmu.service.description"` | Docker **service label** read as the per-service description column. |
+| `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A stack (or ungrouped service, e.g. `registry`) whose name matches goes into the **Infrastruktur** column; everything else goes into **Service**. |
 | `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastruktur** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
@@ -249,7 +249,7 @@ width = 200
 
 [docker]
 timeout = 1.5
-description_label = "lmu.service.description"
+description_label = "status.description"
 infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry"]
 infra_ui_services = ["kafbat-ui", "cloudbeaver", "mongo-express", "rustfs-console"]
 
@@ -708,7 +708,7 @@ mix of 4K and laptop screens that is the wrong trade-off; prefer `install-panel`
 Services are grouped by their `com.docker.stack.namespace` label (set
 automatically for stack deployments). To show a human-readable description per
 service, add a label to the service — by default the key
-`lmu.service.description`:
+`status.description`:
 
 ```yaml
 services:
@@ -716,10 +716,18 @@ services:
     image: postgres:18
     deploy:
       labels:
-        lmu.service.description: "PostgreSQL database, version 18"
+        status.description: "PostgreSQL database, version 18"
 ```
 
 Change the read label key via `docker.description_label` in the config.
+
+Before this key was renamed it was `lmu.service.description`. That key is still
+read whenever the configured one is absent from a service, so an existing
+deployment keeps its descriptions without any change. Where a service carries
+both, the configured key wins — otherwise a service could be pinned to an older
+text it had been migrated away from. The rule is presence, not content: a
+service that sets the configured key to an empty string is saying "no
+description here", and the legacy key is not consulted.
 
 ## OS logos
 
