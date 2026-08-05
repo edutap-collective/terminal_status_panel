@@ -17,6 +17,14 @@ from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
 from ..model import ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
 
 STACK_LABEL = "com.docker.stack.namespace"
+COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+SWARM_SERVICE_LABEL = "com.docker.swarm.service.name"
+
+#: Raw Docker states a container without Compose labels must be in to appear at
+#: all. Anything else is a leftover from a one-off `docker run`, and on a
+#: development machine those accumulate without end.
+_LIVE_STATES = frozenset({"running", "restarting"})
 
 
 def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
@@ -119,23 +127,96 @@ def _swarm_services(client, critical: set[str], description_label: str,
     return services
 
 
-def _container_services(client, critical: set[str]) -> list[ServiceStatus]:
-    services = []
-    for cont in client.containers.list():
+def _container_labels(container) -> dict:
+    attrs = getattr(container, "attrs", {}) or {}
+    config = attrs.get("Config") or {}
+    return dict(config.get("Labels") or {})
+
+
+def _raw_state(container) -> str:
+    """The Docker state, ignoring any healthcheck verdict."""
+    attrs = getattr(container, "attrs", {}) or {}
+    state = attrs.get("State") or {}
+    return state.get("Status") or getattr(container, "status", "") or "unknown"
+
+
+def _reported_state(container) -> str:
+    """The state the panel shows: the healthcheck overrides `running`.
+
+    A container that is up but failing its own healthcheck is not working, and
+    rendering it green would be the panel agreeing with the wrong half of the
+    evidence. ``starting`` maps onto the start-phase set in model.py, which
+    renders as "not measured yet" rather than as a failure.
+    """
+    attrs = getattr(container, "attrs", {}) or {}
+    health = ((attrs.get("State") or {}).get("Health") or {}).get("Status")
+    if health in ("unhealthy", "starting"):
+        return health
+    return _raw_state(container)
+
+
+def _is_completed_job(container) -> bool:
+    """Exited cleanly: the work is done, not broken."""
+    attrs = getattr(container, "attrs", {}) or {}
+    state = attrs.get("State") or {}
+    return state.get("Status") == "exited" and state.get("ExitCode") == 0
+
+
+def _container_groups(client) -> dict[tuple[str | None, str], list]:
+    """Group live containers by (compose project, service name).
+
+    Compose labels rather than name parsing: the container is called
+    ``portal-web-1`` and only the labels say reliably which part is the project
+    and which the service.
+    """
+    groups: dict[tuple[str | None, str], list] = {}
+    for container in client.containers.list(all=True):
+        labels = _container_labels(container)
+        if SWARM_SERVICE_LABEL in labels:
+            continue  # already reported through services.list()
+        if _is_completed_job(container):
+            continue
+        project = labels.get(COMPOSE_PROJECT_LABEL)
+        if project is None:
+            if _raw_state(container) not in _LIVE_STATES:
+                continue
+            key = (None, container.name)
+        else:
+            key = (project, labels.get(COMPOSE_SERVICE_LABEL) or container.name)
+        groups.setdefault(key, []).append((container, labels))
+    return groups
+
+
+def _container_services(client, critical: set[str], description_label: str,
+                        node_name: str | None) -> list[ServiceStatus]:
+    """Plain and Compose containers as ServiceStatus entries."""
+    services: list[ServiceStatus] = []
+    for (stack, name), members in _container_groups(client).items():
+        states = [_reported_state(container) for container, _ in members]
+        labels = members[0][1]
         services.append(
             ServiceStatus(
-                name=cont.name,
-                running_replicas=1,
-                desired_replicas=1,
-                critical=cont.name in critical,
+                name=name,
+                running_replicas=sum(1 for state in states if state == "running"),
+                # Every surviving container of the group is wanted: a stopped
+                # Compose service is a shortfall, not an absence.
+                desired_replicas=len(members),
+                critical=name in critical,
+                stack=stack,
+                description=(labels[description_label]
+                             if description_label in labels
+                             else labels.get(LEGACY_DESCRIPTION_LABEL)),
+                tasks=[ServiceTask(node=node_name, state=state) for state in states]
+                if node_name else [],
             )
         )
+    services.sort(key=lambda svc: (svc.stack or "", svc.name))
     return services
 
 
 def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
                    description_label: str = DEFAULT_DESCRIPTION_LABEL) -> SwarmInfo:
-    """Return Swarm/service health; never raises."""
+    """Return Swarm and container health; never raises."""
     critical_set = set(critical or [])
     try:
         client = docker.from_env(timeout=timeout)
@@ -146,18 +227,23 @@ def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
         if active:
             role = "manager" if swarm.get("ControlAvailable") else "worker"
             nodes, id_to_name = _node_map(client)
+            local_node = id_to_name.get(swarm.get("NodeID") or "")
             return SwarmInfo(
                 reachable=True,
                 enabled=True,
                 node_role=role,
                 node_count=swarm.get("Nodes") or (len(nodes) or None),
-                services=_swarm_services(client, critical_set, description_label, id_to_name),
+                services=_swarm_services(client, critical_set, description_label,
+                                         id_to_name),
+                containers=_container_services(client, critical_set,
+                                               description_label, local_node),
                 nodes=nodes,
             )
         return SwarmInfo(
             reachable=True,
             enabled=False,
-            services=_container_services(client, critical_set),
+            containers=_container_services(client, critical_set,
+                                           description_label, None),
         )
     except Exception:
         return SwarmInfo(reachable=False)

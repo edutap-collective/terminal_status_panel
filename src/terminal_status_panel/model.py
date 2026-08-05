@@ -111,6 +111,10 @@ class SwarmInfo:
     node_role: str | None = None
     node_count: int | None = None
     services: list[ServiceStatus] = field(default_factory=list)
+    # Plain and Compose containers, kept apart from Swarm services so the
+    # SWARM summary line can stay honest about what the Swarm actually runs --
+    # and so render/traefik.py, which filters `services` by name, is unaffected.
+    containers: list[ServiceStatus] = field(default_factory=list)
     nodes: list[SwarmNode] = field(default_factory=list)
 
 

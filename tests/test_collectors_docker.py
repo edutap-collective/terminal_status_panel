@@ -156,13 +156,18 @@ def test_swarm_inactive_falls_back_to_containers(monkeypatch):
     class _C:
         def __init__(self, name):
             self.name = name
+            self.status = "running"
+            self.attrs = {"State": {"Status": "running", "ExitCode": 0},
+                          "Config": {"Labels": {}}}
 
     client = _FakeClient("inactive", containers=[_C("redis"), _C("nginx")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
     assert result.reachable is True and result.enabled is False
-    assert {s.name for s in result.services} == {"redis", "nginx"}
-    assert all(s.running_replicas == 1 and s.desired_replicas == 1 for s in result.services)
+    assert result.services == []
+    assert {c.name for c in result.containers} == {"redis", "nginx"}
+    assert all(c.running_replicas == 1 and c.desired_replicas == 1
+              for c in result.containers)
 
 
 def test_drained_node_is_ready_but_not_operational(monkeypatch):
@@ -233,3 +238,237 @@ def test_an_empty_configured_label_is_still_the_answer(monkeypatch):
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
     assert result.services[0].description == ""
+
+
+# --- plain and Compose container collection ----------------------------------
+
+class _FakeContainer:
+    """*state* is the raw Docker status; *health* the healthcheck verdict."""
+
+    def __init__(self, name, labels=None, state="running", exit_code=0, health=None):
+        self.name = name
+        self.status = state
+        container_state = {"Status": state, "ExitCode": exit_code}
+        if health is not None:
+            container_state["Health"] = {"Status": health}
+        self.attrs = {
+            "State": container_state,
+            "Config": {"Labels": dict(labels or {})},
+        }
+
+
+def _compose(project, service, **kwargs):
+    return _FakeContainer(
+        f"{project}-{service}-1",
+        labels={
+            docker_collector.COMPOSE_PROJECT_LABEL: project,
+            docker_collector.COMPOSE_SERVICE_LABEL: service,
+        },
+        **kwargs,
+    )
+
+
+def test_compose_containers_are_grouped_by_project_and_service(monkeypatch):
+    client = _FakeClient(
+        "inactive",
+        containers=[
+            _compose("portal", "web"),
+            _compose("portal", "web"),
+            _compose("portal", "db"),
+            _FakeContainer("lone-otel"),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    by_name = {c.name: c for c in result.containers}
+    assert by_name["web"].stack == "portal"
+    assert by_name["web"].running_replicas == 2
+    assert by_name["web"].desired_replicas == 2
+    assert by_name["db"].stack == "portal"
+    assert by_name["lone-otel"].stack is None
+    assert result.services == []
+
+
+def test_swarm_tasks_are_not_listed_twice(monkeypatch):
+    """A Swarm task is also a container; services.list() already reported it."""
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01", leader=True, role="manager")],
+        services=[_FakeService("kafka", desired=1, tasks=[("n1", "running")])],
+        containers=[
+            _FakeContainer("kafka.1.abcdef",
+                           labels={docker_collector.SWARM_SERVICE_LABEL: "kafka"}),
+            _compose("portal", "web"),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert [s.name for s in result.services] == ["kafka"]
+    assert [c.name for c in result.containers] == ["web"]
+
+
+def test_a_dead_compose_container_shows_as_a_shortfall(monkeypatch):
+    client = _FakeClient(
+        "inactive",
+        containers=[
+            _compose("portal", "web"),
+            _compose("portal", "web", state="exited", exit_code=137),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    web = result.containers[0]
+    assert (web.running_replicas, web.desired_replicas) == (1, 2)
+
+
+def test_a_completed_job_is_dropped_entirely(monkeypatch):
+    """Exit code 0 means the job did its work; it is not a service that died."""
+    client = _FakeClient(
+        "inactive",
+        containers=[
+            _compose("portal", "migrate", state="exited", exit_code=0),
+            _compose("portal", "web"),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert [c.name for c in result.containers] == ["web"]
+
+
+def test_a_failed_job_is_kept(monkeypatch):
+    client = _FakeClient(
+        "inactive",
+        containers=[_compose("portal", "migrate", state="exited", exit_code=1)],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    migrate = result.containers[0]
+    assert (migrate.running_replicas, migrate.desired_replicas) == (0, 1)
+
+
+def test_stopped_containers_without_compose_labels_are_ignored(monkeypatch):
+    """Otherwise every `docker run` leftover haunts the panel forever."""
+    client = _FakeClient(
+        "inactive",
+        containers=[
+            _FakeContainer("leftover", state="exited", exit_code=2),
+            _FakeContainer("running-one"),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert [c.name for c in result.containers] == ["running-one"]
+
+
+def test_an_unhealthy_container_does_not_count_as_running(monkeypatch):
+    client = _FakeClient(
+        "inactive",
+        containers=[_compose("portal", "web", health="unhealthy")],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    web = result.containers[0]
+    assert web.running_replicas == 0
+    assert web.desired_replicas == 1
+
+
+def test_a_starting_healthcheck_is_not_reported_as_failure(monkeypatch):
+    client = _FakeClient(
+        "inactive",
+        containers=[_compose("portal", "web", health="starting")],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert result.containers[0].running_replicas == 0
+
+
+def test_containers_are_placed_on_the_local_node_when_swarm_is_active(monkeypatch):
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01", leader=True, role="manager")],
+        containers=[_compose("portal", "web")],
+    )
+    client._info["Swarm"]["NodeID"] = "n1"
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    web = result.containers[0]
+    assert [t.node for t in web.tasks] == ["srv-01"]
+    assert web.tasks[0].running is True
+
+
+def test_containers_carry_no_tasks_without_swarm(monkeypatch):
+    client = _FakeClient("inactive", containers=[_compose("portal", "web")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert result.containers[0].tasks == []
+
+
+def test_containers_use_the_same_description_label_as_services(monkeypatch):
+    client = _FakeClient(
+        "inactive",
+        containers=[
+            _FakeContainer(
+                "web",
+                labels={
+                    docker_collector.COMPOSE_PROJECT_LABEL: "portal",
+                    docker_collector.COMPOSE_SERVICE_LABEL: "web",
+                    "status.description": "the public front end",
+                },
+            )
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert result.containers[0].description == "the public front end"
+
+
+def test_containers_honour_the_legacy_description_label(monkeypatch):
+    client = _FakeClient(
+        "inactive",
+        containers=[
+            _FakeContainer(
+                "web",
+                labels={
+                    docker_collector.COMPOSE_PROJECT_LABEL: "portal",
+                    docker_collector.COMPOSE_SERVICE_LABEL: "web",
+                    docker_collector.LEGACY_DESCRIPTION_LABEL: "from the old key",
+                },
+            )
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert result.containers[0].description == "from the old key"
+
+
+def test_containers_can_be_marked_critical(monkeypatch):
+    client = _FakeClient("inactive", containers=[_compose("portal", "web")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker(critical=["web"])
+
+    assert result.containers[0].critical is True
