@@ -27,6 +27,9 @@ LOGOS = [
     ("debian.png", "debian", 18),
     ("ubuntu.png", "ubuntu", 18),
     ("tux.png", "linux", 18),
+    ("rocky.png", "rocky", 18),
+    ("centos.png", "centos", 18),
+    ("bsd.png", "bsd", 18),
 ]
 
 _UPPER = "▀"

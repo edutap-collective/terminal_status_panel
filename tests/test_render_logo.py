@@ -70,3 +70,19 @@ def test_the_macos_word_mark_is_bundled():
     path = logo_module._LOGO_DIR / "macos.ans"
     assert path.is_file(), "macos.ans must ship with the package"
     assert logo_module.os_logo_by_key("macos").plain.strip() != ""
+
+
+def test_every_bundled_logo_records_its_provenance():
+    """A public repository ships other people's marks; say where each came from."""
+    import pathlib
+    import re
+
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    sources = (repo / "assets" / "logos" / "SOURCES.md").read_text(encoding="utf-8")
+    documented = set(re.findall(r"^\| `([a-z0-9]+)\.ans`", sources, re.MULTILINE))
+    bundled = {p.stem for p in logo_module._LOGO_DIR.glob("*.ans")}
+
+    assert bundled == documented, (
+        f"undocumented: {sorted(bundled - documented)}, "
+        f"documented but absent: {sorted(documented - bundled)}"
+    )
