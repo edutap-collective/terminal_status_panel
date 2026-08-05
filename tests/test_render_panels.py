@@ -129,7 +129,7 @@ def test_services_section_merges_per_node_replicas():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "DOCKER INFOS" in out
-    assert "Infrastruktur" in out and "Service" in out and "Container (ohne Stack)" in out
+    assert "Infrastructure" in out and "Service" in out and "Standalone containers" in out
     assert "Description" in out
     assert "mgr-01" in out  # short node header
 
@@ -143,7 +143,7 @@ def test_services_section_merges_per_node_replicas():
     # traefik sub-rows without stack prefix.
     assert "sockproxy" in out
     assert "traefik_sockproxy" not in out
-    # registry -> Infrastruktur, watchtower -> Container, eduTAP -> Service.
+    # registry -> Infrastructure, watchtower -> Standalone containers, eduTAP -> Service.
     assert "registry" in out and "Docker registry" in out
     assert "watchtower" in out
     assert "eduTAP" in out
@@ -244,14 +244,14 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
 
-    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastruktur"))
+    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastructure"))
     uis_at = _line_index(out, lambda ln: ln.strip().startswith("infra-uis"))
     kafka_at = _line_index(out, lambda ln: ln.strip().startswith("kafka"))
     service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
-    container_at = _line_index(out, lambda ln: ln.strip().startswith("Container (ohne"))
+    container_at = _line_index(out, lambda ln: ln.strip().startswith("Standalone"))
     es_at = _line_index(out, lambda ln: ln.strip().startswith("elasticsearch"))
 
-    # The pseudo stack heads the Infrastruktur block.
+    # The pseudo stack heads the Infrastructure block.
     assert infra_at < uis_at < kafka_at < service_at
     assert uis_at < es_at  # pseudo stack is hoisted, not sorted alphabetically
     # All three UI shapes ended up inside it.
@@ -263,7 +263,7 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     # Unrelated services keep their block.
     assert service_at < _line_index(out, lambda ln: "eduTAP" in ln) < container_at
     # mongo-express must appear exactly once: under infra-uis, not left behind
-    # as a row in the "Container (ohne Stack)" matrix too (_line_index above
+    # as a row in the "Standalone containers" matrix too (_line_index above
     # only finds the FIRST match, so it would miss a stray leftover row).
     assert out.count("mongo-express") == 1
 
@@ -572,7 +572,7 @@ def test_bugsink_is_infrastructure():
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
-    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastruktur"))
+    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastructure"))
     service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
     bugsink_at = _line_index(out, lambda ln: ln.strip().startswith("bugsink"))
     assert infra_at < bugsink_at < service_at

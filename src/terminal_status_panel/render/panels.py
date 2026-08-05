@@ -613,11 +613,11 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config,
     # Per-service rows plus a description column make each table wide, so the
     # three categories stack vertically (each full width) instead of side by side.
     return Group(
-        _stack_matrix("Infrastruktur", infra, swarm.nodes, verdict),
+        _stack_matrix("Infrastructure", infra, swarm.nodes, verdict),
         Text(""),
         _stack_matrix("Service", service, swarm.nodes, verdict),
         Text(""),
-        _stack_matrix("Container (ohne Stack)", container_rows, swarm.nodes, verdict),
+        _stack_matrix("Standalone containers", container_rows, swarm.nodes, verdict),
     )
 
 
