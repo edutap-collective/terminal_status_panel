@@ -69,6 +69,46 @@ def render(path: Path, cols: int) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --- text logos -------------------------------------------------------------
+#
+# macOS gets no emblem. Apple's trademark guidelines forbid third parties from
+# using the apple glyph but permit the word mark referentially, and a 34x34
+# emblem squeezed into eighteen character cells would be an unreadable smear
+# either way. Block lettering says "macOS" and says it legibly.
+
+_FONT = {
+    "M": ("█ █", "███", "███", "█ █", "█ █"),
+    "A": ("███", "█ █", "███", "█ █", "█ █"),
+    "C": ("███", "█  ", "█  ", "█  ", "███"),
+    "O": ("███", "█ █", "█ █", "█ █", "███"),
+    "S": ("███", "█  ", "███", "  █", "███"),
+}
+
+# RGB of the block glyphs. A neutral light grey reads on both dark and light
+# terminals; the other logos carry their own brand colours from their PNGs.
+_TEXT_RGB = (220, 220, 224)
+
+
+def _text_block(word: str) -> list[str]:
+    """Render *word* as five rows of block glyphs, one space between letters."""
+    rows = []
+    for line in range(5):
+        rows.append(" ".join(_FONT[ch][line] for ch in word.upper()))
+    return rows
+
+
+def render_text_logo(words: list[str]) -> str:
+    """Stack *words* vertically as coloured block lettering."""
+    red, green, blue = _TEXT_RGB
+    prefix = f"\x1b[38;2;{red};{green};{blue}m"
+    lines: list[str] = []
+    for index, word in enumerate(words):
+        if index:
+            lines.append("")
+        lines.extend(f"{prefix}{row}\x1b[0m" for row in _text_block(word))
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for source, name, cols in LOGOS:
@@ -79,6 +119,9 @@ def main() -> None:
         ansi = render(src, cols)
         (OUT / f"{name}.ans").write_text(ansi, encoding="utf-8")
         print(f"wrote {name}.ans ({len(ansi)} bytes)")
+
+    (OUT / "macos.ans").write_text(render_text_logo(["mac", "OS"]), encoding="utf-8")
+    print("wrote macos.ans (text)")
 
 
 if __name__ == "__main__":
