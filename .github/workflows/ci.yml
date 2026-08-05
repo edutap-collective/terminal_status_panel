@@ -7,11 +7,20 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          # macOS verifies the Darwin branches for real: the SystemVersion
+          # plist, APFS disk_partitions, the absent Docker socket. The oldest
+          # and newest supported interpreters are enough to catch a break.
+          - os: macos-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.14"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,3 +34,20 @@ jobs:
         run: ruff check src tests
       - name: Test
         run: python -m pytest
+
+  freebsd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test in a FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          usesh: true
+          # psutil compiles from source unless it comes from pkg, which is the
+          # difference between a one-minute job and a ten-minute one.
+          prepare: |
+            pkg install -y python311 py311-pip py311-psutil py311-sqlite3
+          run: |
+            python3.11 -m pip install --break-system-packages -e '.[test]'
+            python3.11 -m pytest
