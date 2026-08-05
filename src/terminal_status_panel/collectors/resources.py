@@ -81,7 +81,18 @@ def collect_resources(ignore_mountpoints: list[str] | None = None) -> ResourceUs
 
     mem = _safe(psutil.virtual_memory)
     if mem is not None:
-        res.mem_total, res.mem_used, res.mem_percent = mem.total, mem.used, mem.percent
+        res.mem_total = mem.total
+        # psutil's own `used` excludes reclaimable memory -- compressed and
+        # cached pages the kernel can drop under pressure -- while `percent`
+        # is `(total - available) / total`, a different measure entirely.
+        # Reporting `used` next to a `percent` derived from `available`
+        # produces a row that contradicts itself (e.g. "75.7%" beside a byte
+        # figure that only implies 38%). Deriving `used` the same way as
+        # `percent` keeps the two numbers describing one thing. This holds
+        # on Linux too -- there `used` similarly excludes buffers/cache --
+        # so it is unconditional rather than a Darwin-only branch.
+        res.mem_used = mem.total - mem.available
+        res.mem_percent = mem.percent
 
     swap = _safe(psutil.swap_memory)
     if swap is not None:
