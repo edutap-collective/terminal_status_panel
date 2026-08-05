@@ -163,6 +163,85 @@ def test_services_section_unreachable():
     assert "not reachable" in out.lower()
 
 
+def _swarm_with_origins(services=(), containers=(), nodes=None) -> SwarmInfo:
+    """A Swarm carrying both Swarm services and plain/Compose containers.
+
+    Named distinctly from the ``_swarm_with(node_name, reachable)`` helper
+    further down this file, which builds a two-node Swarm for the WireGuard
+    tunnel tests -- same short name, different shape, would otherwise shadow
+    each other as module-level definitions.
+    """
+    return SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        services=list(services), containers=list(containers),
+        nodes=list(nodes or [SwarmNode(name="node-01", reachable=True,
+                                       role="manager", leader=True,
+                                       state="ready", availability="active")]),
+    )
+
+
+def _origin_status(name, stack=None, running=1, desired=1, node="node-01") -> ServiceStatus:
+    return ServiceStatus(
+        name=name, running_replicas=running, desired_replicas=desired, stack=stack,
+        tasks=[ServiceTask(node=node, state="running")] * running,
+    )
+
+
+def test_swarm_services_and_compose_projects_get_separate_blocks():
+    swarm = _swarm_with_origins(
+        services=[_origin_status("api", stack="backend")],
+        containers=[_origin_status("web", stack="portal")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "SWARM STACKS" in out
+    assert "COMPOSE PROJECTS" in out
+    swarm_at = out.index("SWARM STACKS")
+    compose_at = out.index("COMPOSE PROJECTS")
+    assert swarm_at < compose_at
+
+
+def test_an_empty_swarm_block_is_omitted_entirely():
+    """A wall of dashes is what the explicit layout must not degenerate into."""
+    swarm = _swarm_with_origins(containers=[_origin_status("web", stack="portal")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "SWARM STACKS" not in out
+    assert "COMPOSE PROJECTS" in out
+
+
+def test_an_empty_compose_block_is_omitted_entirely():
+    swarm = _swarm_with_origins(services=[_origin_status("api", stack="backend")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "COMPOSE PROJECTS" not in out
+    assert "SWARM STACKS" in out
+
+
+def test_an_empty_category_inside_a_present_block_keeps_its_placeholder():
+    """"Swarm is running but has no infrastructure" is a statement."""
+    swarm = _swarm_with_origins(services=[_origin_status("api", stack="backend")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "Infrastructure" in out
+    assert "—" in out
+
+
+def test_stackless_entries_from_both_origins_share_one_table():
+    swarm = _swarm_with_origins(
+        services=[_origin_status("lonely-service")],
+        containers=[_origin_status("lonely-container")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "Standalone containers" in out
+    assert "lonely-service" in out
+    assert "lonely-container" in out
+
+
+def test_the_summary_counts_containers_without_calling_them_services():
+    swarm = _swarm_with_origins(containers=[_origin_status("web", stack="portal"),
+                                            _origin_status("db", stack="portal")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "0 services" in out
+    assert "2 containers" in out
+
+
 def _mixed_availability_swarm() -> SwarmInfo:
     """One active, one drained, one down node — no services."""
     return SwarmInfo(
@@ -255,7 +334,6 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     uis_at = _line_index(out, lambda ln: ln.strip().startswith("infra-uis"))
     kafka_at = _line_index(out, lambda ln: ln.strip().startswith("kafka"))
     service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
-    container_at = _line_index(out, lambda ln: ln.strip().startswith("Standalone"))
     es_at = _line_index(out, lambda ln: ln.strip().startswith("elasticsearch"))
 
     # The pseudo stack heads the Infrastructure block.
@@ -267,8 +345,11 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     # Stack prefixes are stripped on the sub-rows.
     assert "kafka_kafbat-ui" not in out
     assert "cloudbeaver_cloudbeaver" not in out
-    # Unrelated services keep their block.
-    assert service_at < _line_index(out, lambda ln: "eduTAP" in ln) < container_at
+    # Unrelated services keep their block. Every service in this fixture has a
+    # stack, so there is no stackless leftover and no "Standalone containers"
+    # table at all -- eduTAP only needs to land after the Service header.
+    assert service_at < _line_index(out, lambda ln: "eduTAP" in ln)
+    assert "Standalone containers" not in out
     # mongo-express must appear exactly once: under infra-uis, not left behind
     # as a row in the "Standalone containers" matrix too (_line_index above
     # only finds the FIRST match, so it would miss a stray leftover row).

@@ -442,6 +442,8 @@ def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
     if capacity is not None:
         summary.append_text(capacity)
     summary.append(f"  ·  {len(swarm.services)} services  ·  {n_stacks} stacks")
+    if swarm.containers:
+        summary.append(f"  ·  {len(swarm.containers)} containers")
     table.add_row("Swarm", summary)
     table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True, peers=peers))
     return table
@@ -581,10 +583,71 @@ def _stack_matrix(
     return table
 
 
-def _stack_columns(swarm: SwarmInfo, cfg: Config,
-                   health: HealthInfo | None = None) -> RenderableType:
+def _classify_origin(services, cfg, node_names):
+    """Sort one origin's services into (infrastructure, service, stackless).
+
+    The infrastructure/UI classification is unchanged -- it simply runs per
+    origin now, so a Compose `adminer` still joins the infra UIs and a Compose
+    `postgres` still counts as infrastructure.
+    """
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
     ui_keys = [k.lower() for k in cfg.infra_ui_services]
+
+    def is_infra(name: str) -> bool:
+        return any(k in name.lower() for k in infra_keys)
+
+    def subrows_for(stack: str, group) -> list[tuple[str, list, str]]:
+        groups = _base_groups(group, node_names)
+        return [
+            (_strip_stack_prefix(base, stack) or base, groups[base],
+             _group_desc(groups[base]))
+            for base in sorted(groups, key=str.lower)
+        ]
+
+    ui_services, remaining = _split_infra_uis(services, ui_keys, node_names)
+
+    stacks: dict[str, list] = {}
+    ungrouped: list = []
+    for svc in remaining:
+        if svc.stack is None:
+            ungrouped.append(svc)
+        else:
+            stacks.setdefault(svc.stack, []).append(svc)
+
+    infra, service, stackless = [], [], []
+    if ui_services:
+        infra.append((INFRA_UI_STACK, _ui_subrows(ui_services, node_names, ui_keys)))
+    for name, svcs in stacks.items():
+        entry = (name, subrows_for(name, svcs))
+        (infra if is_infra(name) else service).append(entry)
+    for base, svcs in _base_groups(ungrouped, node_names).items():
+        entry = (base, [(base, svcs, _group_desc(svcs))])
+        (infra if is_infra(base) else stackless).append(entry)
+
+    return infra, service, stackless
+
+
+def _origin_block(title, infra, service, nodes, verdict) -> list[RenderableType]:
+    """The two tables of one origin, or nothing at all when it is empty.
+
+    Omitting an empty block is what keeps the more explicit layout readable: a
+    Mac with no Swarm services and a server with no Compose projects would each
+    otherwise carry a full block of dashes. Inside a block that does exist the
+    placeholder stays -- "running, but nothing here" is worth saying.
+    """
+    if not infra and not service:
+        return []
+    return [
+        _subhead(title),
+        _stack_matrix("Infrastructure", infra, nodes, verdict),
+        Text(""),
+        _stack_matrix("Service", service, nodes, verdict),
+        Text(""),
+    ]
+
+
+def _stack_columns(swarm: SwarmInfo, cfg: Config,
+                   health: HealthInfo | None = None) -> RenderableType:
     node_names = [n.name for n in swarm.nodes]
     by_kind: dict[str, ClusterService] = {
         service.kind: service for service in (health.clusters if health else [])
@@ -603,49 +666,27 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config,
             node_count=node_count,
         )
 
-    def is_infra(name: str) -> bool:
-        return any(k in name.lower() for k in infra_keys)
-
-    def subrows_for(stack: str, services) -> list[tuple[str, list, str]]:
-        groups = _base_groups(services, node_names)
-        return [
-            (_strip_stack_prefix(base, stack) or base, groups[base], _group_desc(groups[base]))
-            for base in sorted(groups, key=str.lower)
-        ]
-
-    # Admin UIs leave their origin stack and form one pseudo stack.
-    ui_services, remaining = _split_infra_uis(swarm.services, ui_keys, node_names)
-
-    stacks: dict[str, list] = {}
-    ungrouped: list = []
-    for svc in remaining:
-        if svc.stack is None:
-            ungrouped.append(svc)
-        else:
-            stacks.setdefault(svc.stack, []).append(svc)
-
-    infra, service = [], []
-    if ui_services:
-        infra.append((INFRA_UI_STACK, _ui_subrows(ui_services, node_names, ui_keys)))
-    for name, svcs in stacks.items():
-        entry = (name, subrows_for(name, svcs))
-        (infra if is_infra(name) else service).append(entry)
-
-    # Ungrouped services: merge per-node replicas, classify each by base name.
-    container_rows = []
-    for base, svcs in _base_groups(ungrouped, node_names).items():
-        entry = (base, [(base, svcs, _group_desc(svcs))])
-        (infra if is_infra(base) else container_rows).append(entry)
-
-    # Per-service rows plus a description column make each table wide, so the
-    # three categories stack vertically (each full width) instead of side by side.
-    return Group(
-        _stack_matrix("Infrastructure", infra, swarm.nodes, verdict),
-        Text(""),
-        _stack_matrix("Service", service, swarm.nodes, verdict),
-        Text(""),
-        _stack_matrix("Standalone containers", container_rows, swarm.nodes, verdict),
+    swarm_infra, swarm_service, swarm_rest = _classify_origin(
+        swarm.services, cfg, node_names
     )
+    compose_infra, compose_service, compose_rest = _classify_origin(
+        swarm.containers, cfg, node_names
+    )
+
+    parts: list[RenderableType] = []
+    parts += _origin_block("SWARM STACKS", swarm_infra, swarm_service,
+                           swarm.nodes, verdict)
+    parts += _origin_block("COMPOSE PROJECTS", compose_infra, compose_service,
+                           swarm.nodes, verdict)
+
+    stackless = swarm_rest + compose_rest
+    if stackless:
+        parts += [
+            _stack_matrix("Standalone containers", stackless, swarm.nodes, verdict),
+        ]
+    if not parts:
+        return Text("no services or containers", style="dim")
+    return Group(*parts)
 
 
 def services_section(swarm: SwarmInfo | None, cfg: Config,
@@ -654,8 +695,7 @@ def services_section(swarm: SwarmInfo | None, cfg: Config,
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
     if not swarm.enabled:
-        body = Group(_subhead("CONTAINER"), _stack_columns(swarm, cfg, health))
-        return section("DOCKER INFOS", body)
+        return section("DOCKER INFOS", _stack_columns(swarm, cfg, health))
 
     body = Group(
         _subhead("SWARM"),
