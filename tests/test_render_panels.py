@@ -730,25 +730,38 @@ def test_filesystem_numeric_columns_not_truncated_in_system_status():
     uses max_width instead of width. This test exercises the real constraint
     by rendering through system_status (which applies the ratio-based split)
     at a narrow width, and checking that numeric values are not truncated.
+
+    The fixture values are deliberately chosen to format to five-character
+    figures (three integer digits, a dot, one decimal digit, e.g. "950.0")
+    plus a unit. Short values like "1.8 TB" survive even a squeezed column
+    and would not discriminate between the fixed and broken layouts; the
+    original defect only mangled wider figures, e.g. "926.4" rendered as
+    "926…" in a four-character column.
     """
     res = ResourceUsage(
         mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
         swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
         filesystems=[
-            FilesystemUsage("/", 230_000_000_000, 210_000_000_000, 91.0),
-            FilesystemUsage("/Volumes/Data2", 1_800_000_000_000, 1_100_000_000, 0.0),
+            # total=950.0 GB, used=850.0 GB, avail=total-used=100.0 GB
+            FilesystemUsage("/", 1_020_054_732_800, 912_680_550_400, 89.0),
+            # total=500.0 GB, used=125.0 GB, avail=total-used=375.0 GB
+            FilesystemUsage("/Volumes/Data2", 536_870_912_000, 134_217_728_000, 25.0),
         ],
     )
-    # Render at width 100, which puts the filesystem table in a narrow space
+    # Render at width 100, which puts the filesystem table in a narrow space.
     out = _text(panels.system_status(res, Config()), width=100)
-    # The key test: numeric values must not be truncated mid-number.
-    # format_bytes converts 230GB to "214.2 GB" (actually 230_000_000_000 / 1.073e9),
-    # but the pattern is X.X GB. If truncated to "926…", this test would fail.
-    # We check for presence of a complete decimal value, not just "9…" or "2…".
-    # Looking for numbers with at least one decimal digit followed by unit.
-    has_complete_value = any(
-        s in out for s in ["214.2", "195", "1.6", "1.1", "1.8"]  # Expected values
-    )
-    assert has_complete_value, "Numeric columns appear truncated (no complete values found)"
-    # Verify mount path is readable too
-    assert "/Volumes/Data2" in out or "Data2" in out, "Mount path not visible"
+
+    # Every numeric figure must appear intact, not cut mid-number. Each
+    # assertion is pinned individually -- an any() over alternatives would
+    # pass even if most of the expected values were missing.
+    assert "950.0 GB" in out
+    assert "850.0 GB" in out
+    assert "100.0 GB" in out
+    assert "500.0 GB" in out
+    assert "125.0 GB" in out
+    assert "375.0 GB" in out
+
+    # Column headers alone are not proof: the original defect left them
+    # intact, which is precisely why it slipped through.
+    assert "/" in out
+    assert "/Volumes/Data2" in out
