@@ -8,8 +8,11 @@ out in five tiers:
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
 - **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
   usage table.
-- **DOCKER INFOS** — Swarm key facts (summary + node health) above three
-  stacked node matrices: *Infrastruktur*, *Service*, and standalone *Container*.
+- **DOCKER INFOS** — Swarm key facts (summary + node health) above the node
+  matrices: an *Infrastructure* and a *Service* table per origin — under
+  **SWARM STACKS** and **COMPOSE PROJECTS**, each block omitted entirely when
+  that origin has nothing — and one shared *Standalone containers* table below
+  them for everything that belongs to no stack or project.
   Node health has three states: ✅ ready and active, ⚠️ ready but drained or
   paused (it accepts no tasks), 💀 unreachable; the summary line counts the
   non-operational ones, e.g. `5 nodes (1 drain, 1 down)`.
@@ -226,11 +229,11 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
 | `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `resources.ignore_mountpoints` | platform-dependent | Mountpoint prefixes hidden from the filesystem table. Defaults to `["/System/Volumes/", "/Library/Developer/CoreSimulator/"]` on macOS and to `[]` elsewhere. An explicitly empty list hides nothing rather than falling back to the default. |
-| `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A stack (or ungrouped service, e.g. `registry`) whose name matches goes into the **Infrastruktur** column; everything else goes into **Service**. |
-| `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastruktur** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
+| `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A **stack** (or Compose project) whose name matches goes into that origin's **Infrastructure** table; every other stack goes into **Service**. An entry with no stack at all is never classified this way — it has no project to be filed under, so `docker run -d redis` lands in **Standalone containers** like any other stackless entry, however infrastructural its name. |
+| `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastructure** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
 | `thresholds.memory.warning` / `.critical` | `75` / `90` | RAM usage % thresholds (yellow / red). |
-| `thresholds.swap.warning` | `1` | Swap usage % above which SWAP turns yellow. |
+| `thresholds.swap.warning` | platform-dependent | Swap usage % above which SWAP turns yellow. Defaults to `80` on macOS, which allocates swap continuously by design, and to `1` elsewhere. An explicit value overrides both. |
 | `thresholds.filesystem.warning` / `.critical` | `80` / `90` | Filesystem usage % thresholds. |
 | `thresholds.load.warning` / `.critical` | `0.8` / `1.0` | Load-average thresholds as a **per-CPU multiplier** (compared against `load1 / cpu_count`). |
 | `health.budget` | `5.0` | Total wall-clock budget in seconds for all health checks. Every check runs concurrently as its own task, so this bounds the login delay — it is not the sum of the individual timeouts. |
@@ -322,15 +325,21 @@ is where those differences are collected.
   wins when it applies. Where no platform claims the system, the panel falls
   back to matching the distribution name, and finally to Tux — a true
   statement about the kernel for any Linux distribution without its own
-  bundled mark. macOS itself gets its product name rendered as block
+  bundled mark — the RHEL and SUSE families are exactly that case, since their
+  marks could not be licensed for redistribution. Systems Tux would
+  *misdescribe* never borrow it: macOS gets its product name rendered as block
   lettering rather than an Apple emblem, since no Apple artwork is
-  redistributed. Every bundled mark's provenance and licence are recorded in
+  redistributed, OpenBSD and NetBSD get the BSD daemon, and FreeBSD shows no
+  logo at all, its own wordmark being illegible at this size. Every bundled
+  mark's provenance and licence are recorded in
   [`assets/logos/SOURCES.md`](assets/logos/SOURCES.md).
 - **Containers.** Plain `docker run` containers and Docker Compose projects
   now appear alongside Swarm services, not just services from an active
   Swarm. They are grouped by their Compose project into their own `COMPOSE
   PROJECTS` block (mirroring the `SWARM STACKS` block above it); a container
-  with no Compose project lands under `Standalone containers`. A container
+  with no Compose project lands under `Standalone containers`, as does a Swarm
+  service created outside any stack — both are standalone, and neither is
+  given a project heading it does not belong to. A container
   that exited cleanly (exit code `0`) is treated as finished work and is
   omitted, in both blocks. Beyond a clean exit, the two kinds are **not**
   treated alike: a **Compose** container that exits with a non-zero code
