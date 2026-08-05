@@ -332,8 +332,14 @@ is where those differences are collected.
   PROJECTS` block (mirroring the `SWARM STACKS` block above it); a container
   with no Compose project lands under `Standalone containers`. A container
   that exited cleanly (exit code `0`) is treated as finished work and is
-  omitted; one that exited with a non-zero code stays visible and shows as a
-  shortfall, the same way a stopped Swarm task would.
+  omitted, in both blocks. Beyond a clean exit, the two kinds are **not**
+  treated alike: a **Compose** container that exits with a non-zero code
+  stays visible and shows as a shortfall against its group, the same way a
+  stopped Swarm task would; a **standalone** container has no group to fall
+  short against, so it is shown only while it is `running` or `restarting`
+  — once it exits, at any exit code, it disappears rather than lingering.
+  Without that difference, every one-off `docker run` left behind on a
+  development machine would accumulate in the panel forever.
 
 ## Cluster health checks
 
