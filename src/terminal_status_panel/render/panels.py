@@ -13,7 +13,8 @@ import re
 from collections.abc import Callable
 from datetime import datetime
 
-from rich.console import Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.measure import Measurement
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
@@ -249,26 +250,95 @@ def _memory_body(res: ResourceUsage, cfg: Config) -> RenderableType:
     return table
 
 
-def _filesystem_body(res: ResourceUsage) -> RenderableType:
+#: A bar thinner than this reads as a stray colour smear, not as usage --
+#: below it the row is better off with no bar at all.
+_MIN_FS_BAR_WIDTH = 6
+
+#: The padding cell ``Table.grid`` inserts between the last numeric column
+#: and the bar column once it exists (matches the table's own ``padding``).
+_FS_BAR_GAP = 2
+
+#: Comfortably wider than any realistic filesystem row could ever need, so
+#: measuring against it yields the columns' true desired width rather than
+#: one clipped to whatever space happens to be available (see
+#: ``_FilesystemBody`` -- ``Table.__rich_measure__`` clips to the width it is
+#: asked about, so asking about a merely "big enough" width would silently
+#: hide how much room the fixed columns actually want).
+_UNBOUNDED_WIDTH = 10_000
+
+
+def _filesystem_table(res: ResourceUsage, bar_width: int | None) -> Table:
+    """Build the filesystem table, with a usage bar column iff *bar_width* is given."""
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True, max_width=14)
     table.add_column(justify="right")
     table.add_column(justify="right")
     table.add_column(justify="right")
     table.add_column(justify="right")
+    if bar_width is not None:
+        table.add_column(no_wrap=True, width=bar_width)
+
+    def _row(*cells: RenderableType) -> None:
+        if bar_width is not None:
+            cells = (*cells, "")
+        table.add_row(*cells)
+
     if not res.filesystems:
-        table.add_row("Status", "", "", "", Text("no filesystems", style="dim"))
+        _row("Status", "", "", "", Text("no filesystems", style="dim"))
         return table
-    table.add_row("Mounted on", "Size", "Used", "Avail", "Use%")
+    _row("Mounted on", "Size", "Used", "Avail", "Use%")
     for fs in res.filesystems:
         status = classify(fs.percent, 80.0, 90.0)
         avail = max(fs.total - fs.used, 0)
-        table.add_row(
+        cells: list[RenderableType] = [
             _short_mount(fs.mountpoint, 14), format_bytes(fs.total), format_bytes(fs.used),
             format_bytes(avail),
             Text(f"{fs.percent:.0f}%", style=STATUS_COLORS.get(status, "white")),
-        )
+        ]
+        if bar_width is not None:
+            cells.append(render_bar(fs.percent, status, width=bar_width))
+        table.add_row(*cells)
     return table
+
+
+class _FilesystemBody:
+    """The filesystem table, with a usage bar sized to whatever is left over.
+
+    An earlier task dropped the bar entirely to free up columns, having
+    measured the layout only at width 80 -- at the maintainer's actual
+    terminal (215 columns) that left roughly 90 columns unused. Simply
+    giving the bar a ``ratio`` column would bring it back, but Rich's own
+    column-shrinking falls back to reducing *every* column evenly once the
+    table no longer fits (see ``Table._calculate_column_widths``'s
+    last-resort ``ratio_reduce`` step) -- including columns marked
+    ``no_wrap``, which is exactly the squeeze the numeric columns must never
+    take. So the decision of whether the bar exists at all, and how wide it
+    is, is made here at render time against the real available width
+    (``options.max_width``, the width Rich has already allotted this cell)
+    rather than left to that generic algorithm: when there is not enough
+    left over for a bar that would actually read as one, the table falls
+    back to exactly the same rendering as before the bar existed.
+    """
+
+    def __init__(self, res: ResourceUsage) -> None:
+        self._res = res
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        base = _filesystem_table(self._res, bar_width=None)
+        natural_width = Measurement.get(
+            console, options.update_width(_UNBOUNDED_WIDTH), base
+        ).maximum
+        bar_width = options.max_width - natural_width - _FS_BAR_GAP
+        if bar_width >= _MIN_FS_BAR_WIDTH:
+            yield _filesystem_table(self._res, bar_width=bar_width)
+        else:
+            yield base
+
+
+def _filesystem_body(res: ResourceUsage) -> RenderableType:
+    return _FilesystemBody(res)
 
 
 def system_status(res: ResourceUsage | None, cfg: Config) -> Group:

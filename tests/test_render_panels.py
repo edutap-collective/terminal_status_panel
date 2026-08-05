@@ -826,6 +826,19 @@ def test_short_mount_handles_width_one():
     assert len(panels._short_mount("/Volumes/Data2", 1)) == 1
 
 
+def _fs_regression_resource() -> ResourceUsage:
+    return ResourceUsage(
+        mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
+        swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
+        filesystems=[
+            # total=950.0 GB, used=850.0 GB, avail=total-used=100.0 GB
+            FilesystemUsage("/", 1_020_054_732_800, 912_680_550_400, 89.0),
+            # total=500.0 GB, used=125.0 GB, avail=total-used=375.0 GB
+            FilesystemUsage("/Volumes/Data2", 536_870_912_000, 134_217_728_000, 25.0),
+        ],
+    )
+
+
 def test_filesystem_numeric_columns_not_truncated_in_system_status():
     """Regression test: mount column must not squeeze numeric columns.
 
@@ -842,18 +855,10 @@ def test_filesystem_numeric_columns_not_truncated_in_system_status():
     original defect only mangled wider figures, e.g. "926.4" rendered as
     "926…" in a four-character column.
     """
-    res = ResourceUsage(
-        mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
-        swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
-        filesystems=[
-            # total=950.0 GB, used=850.0 GB, avail=total-used=100.0 GB
-            FilesystemUsage("/", 1_020_054_732_800, 912_680_550_400, 89.0),
-            # total=500.0 GB, used=125.0 GB, avail=total-used=375.0 GB
-            FilesystemUsage("/Volumes/Data2", 536_870_912_000, 134_217_728_000, 25.0),
-        ],
-    )
-    # Render at width 100, which puts the filesystem table in a narrow space.
-    out = _text(panels.system_status(res, Config()), width=100)
+    # Render at width 100, which puts the filesystem table in a narrow space
+    # -- narrow enough to leave no room for a usage bar (see the width-80/215
+    # cases below), wide enough that Size/Used/Avail still fit on one line.
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=100)
 
     # Every numeric figure must appear intact, not cut mid-number. Each
     # assertion is pinned individually -- an any() over alternatives would
@@ -869,3 +874,58 @@ def test_filesystem_numeric_columns_not_truncated_in_system_status():
     # intact, which is precisely why it slipped through.
     assert "/" in out
     assert "/Volumes/Data2" in out
+
+
+def test_filesystem_numeric_columns_survive_a_narrow_terminal():
+    """Regression test: restoring the usage bar must not re-break narrow terminals.
+
+    The usage bar removed by an earlier task was restored to flex with the
+    available width (see ``_FilesystemBody``) rather than claim a fixed
+    share of it. At a genuinely narrow terminal -- width 80, the fallback
+    width used when a shell is not attached to a TTY, not just a "somewhat
+    narrow" 100 -- there is no room left for a bar at all once the numeric
+    columns and the mount column have what they need, so the bar must
+    disappear instead of taking space from them.
+    """
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=80)
+    fs_block = out[out.index("FILESYSTEM USAGE"):]
+
+    # No mid-number cut, e.g. "926…": the fixed columns render exactly as
+    # they did before the bar existed, wrapped onto extra lines rather than
+    # truncated, because there is nothing left over for the bar to claim.
+    assert "…" not in fs_block
+    for fragment in ("950.0", "850.0", "100.0", "500.0", "125.0", "375.0", "GB"):
+        assert fragment in fs_block
+    assert "/Volumes/Data2" in fs_block
+
+
+def test_filesystem_usage_bar_reappears_on_a_wide_terminal():
+    """The usage bar an earlier task removed must come back once there is room.
+
+    At the maintainer's actual terminal (215 columns) there are roughly 90
+    columns unused to the right of the filesystem table; the bar should
+    claim them rather than stay gone everywhere just because it must vanish
+    at width 80. The numeric columns must still show their complete,
+    single-line values -- the bar is an addition beside Use%, not something
+    that gets to squeeze them.
+    """
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=215)
+    fs_block = out[out.index("FILESYSTEM USAGE"):]
+
+    assert "950.0 GB" in fs_block
+    assert "850.0 GB" in fs_block
+    assert "100.0 GB" in fs_block
+    assert "500.0 GB" in fs_block
+    assert "125.0 GB" in fs_block
+    assert "375.0 GB" in fs_block
+    assert "/Volumes/Data2" in fs_block
+    assert "Use%" in fs_block  # the percentage column stays, not replaced
+
+    # The bar itself: filled cells for the 89%-full "/" and the 25%-full
+    # "/Volumes/Data2" both present, and the fuller one has strictly more
+    # filled cells than the emptier one.
+    lines = [line for line in fs_block.splitlines() if "█" in line or "░" in line]
+    assert len(lines) == 2
+    filled_counts = [line.count("█") for line in lines]
+    assert all(count > 0 for count in filled_counts)
+    assert filled_counts[0] > filled_counts[1]
