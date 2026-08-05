@@ -683,3 +683,21 @@ def test_stale_handshake_is_not_reported_as_none():
     output = _text(panels.services_section(swarm, Config(), health))
     assert "no handshake" not in output
     assert "5:00" in output
+
+
+def test_long_address_lists_are_capped_with_a_visible_remainder():
+    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
+                      ip_addresses=[f"10.0.0.{n}" for n in range(101, 113)])
+    out = _text(panels.system_overview(info), width=200)
+    assert "10.0.0.108" in out
+    assert "10.0.0.109" not in out
+    assert "(+4 more)" in out
+
+
+def test_short_address_lists_show_no_remainder():
+    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
+                      ip_addresses=["10.0.0.1", "10.0.0.2"])
+    out = _text(panels.system_overview(info), width=200)
+    assert "more)" not in out

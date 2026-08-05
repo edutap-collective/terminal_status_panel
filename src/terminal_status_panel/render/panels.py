@@ -45,6 +45,11 @@ _CPU_CRITICAL = 90.0
 # Name of the synthetic stack collecting infrastructure admin UIs.
 INFRA_UI_STACK = "infra-uis"
 
+#: A laptop with several interfaces and IPv6 privacy addresses can present
+#: thirty addresses. Past a handful the list stops informing and starts
+#: displacing everything below it.
+MAX_RENDERED_IPS = 8
+
 # Ordinal instances of one service: a connector pinned per node must run as
 # connector_1, _2, … because each instance needs its own secrets.
 # Underscore only — with '-<digits>' a stack named PostgreSQL-18 whose service
@@ -114,7 +119,15 @@ def system_overview(info: SystemInfo | None) -> Group:
     table.add_row("Uptime", _fmt_uptime(info.uptime_seconds))
     table.add_row("Date", _now())
     table.add_row("User", info.user or "n/a")
-    table.add_row("IP", ", ".join(info.ip_addresses) or "n/a")
+    addresses = info.ip_addresses
+    if not addresses:
+        ip_line = "n/a"
+    else:
+        ip_line = ", ".join(addresses[:MAX_RENDERED_IPS])
+        hidden = len(addresses) - MAX_RENDERED_IPS
+        if hidden > 0:
+            ip_line = f"{ip_line} … (+{hidden} more)"
+    table.add_row("IP", ip_line)
 
     logo = os_logo(info.os_name)
     if logo.plain:

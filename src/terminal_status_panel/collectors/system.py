@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import ipaddress
 import platform
 import plistlib
 import socket
@@ -20,7 +21,25 @@ from ..model import SystemInfo
 MACOS_VERSION_PLIST = "/System/Library/CoreServices/SystemVersion.plist"
 
 
+def _is_link_local(value: str) -> bool:
+    """True for fe80::/10 and 169.254.0.0/16.
+
+    ``ipaddress`` knows both ranges, which beats prefix matching on strings --
+    ``169.254`` as a prefix would also swallow ``169.2545.x`` were such a thing
+    ever handed to us.
+    """
+    try:
+        return ipaddress.ip_address(value).is_link_local
+    except ValueError:
+        return False
+
+
 def _collect_ips() -> list[str]:
+    """Every reachable address on this host, in interface order, uncapped.
+
+    Capping belongs to the renderer: it needs the true total to say how many
+    addresses it is not showing.
+    """
     ips: list[str] = []
     for addrs in psutil.net_if_addrs().values():
         for addr in addrs:
@@ -28,6 +47,8 @@ def _collect_ips() -> list[str]:
                 continue
             value = addr.address.split("%")[0]  # strip IPv6 zone id
             if value.startswith("127.") or value in ("::1",):
+                continue
+            if _is_link_local(value):
                 continue
             if value and value not in ips:
                 ips.append(value)

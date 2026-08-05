@@ -127,3 +127,54 @@ def test_kernel_names_the_system_it_belongs_to(monkeypatch):
     monkeypatch.setattr(system_collector.platform, "release", lambda: "25.5.0")
 
     assert system_collector._kernel() == "Darwin 25.5.0"
+
+
+def test_link_local_addresses_are_dropped(monkeypatch):
+    """fe80:: and 169.254/16 are unreachable from anywhere that matters."""
+    import socket as socket_module
+
+    class _Addr:
+        def __init__(self, family, address):
+            self.family = family
+            self.address = address
+
+    monkeypatch.setattr(
+        system_collector.psutil,
+        "net_if_addrs",
+        lambda: {
+            "en0": [
+                _Addr(socket_module.AF_INET, "192.168.178.169"),
+                _Addr(socket_module.AF_INET, "169.254.11.4"),
+                _Addr(socket_module.AF_INET6, "fe80::1c57:1103%en0"),
+                _Addr(socket_module.AF_INET6, "2a02:810d:d07:b100::42"),
+            ],
+            "lo0": [_Addr(socket_module.AF_INET, "127.0.0.1")],
+        },
+    )
+
+    assert system_collector._collect_ips() == [
+        "192.168.178.169",
+        "2a02:810d:d07:b100::42",
+    ]
+
+
+def test_the_collector_does_not_cap_the_address_list(monkeypatch):
+    """Capping here would destroy the total the renderer needs for "+N more"."""
+    import socket as socket_module
+
+    class _Addr:
+        def __init__(self, family, address):
+            self.family = family
+            self.address = address
+
+    monkeypatch.setattr(
+        system_collector.psutil,
+        "net_if_addrs",
+        lambda: {
+            "en0": [
+                _Addr(socket_module.AF_INET, f"10.0.0.{n}") for n in range(1, 21)
+            ]
+        },
+    )
+
+    assert len(system_collector._collect_ips()) == 20
