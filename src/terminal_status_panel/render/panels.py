@@ -701,7 +701,6 @@ def services_section(swarm: SwarmInfo | None, cfg: Config,
         _subhead("SWARM"),
         _swarm_body(swarm, health.peers if health else None),
         Text(""),
-        _subhead("STACKS"),
         _stack_columns(swarm, cfg, health),
     )
     return section("DOCKER INFOS", body)
