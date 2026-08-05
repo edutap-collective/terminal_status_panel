@@ -276,10 +276,10 @@ def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
 
     monkeypatch.setattr(health_collector, "collect_dns", capture)
     health_collector.collect_health(
-        _config(dns_expect=[DnsExpectation(name="login.lmu.de", addresses=["10.9.9.9"])]),
+        _config(dns_expect=[DnsExpectation(name="login.example.net", addresses=["10.9.9.9"])]),
         peer_names=["ccn-01"], client=object(), resolve_fqdn=_fqdn,
     )
-    assert captured["expectations"] == [("login.lmu.de", ["10.9.9.9"])]
+    assert captured["expectations"] == [("login.example.net", ["10.9.9.9"])]
     assert captured["peer_names"] == ["ccn-01"]
 
 

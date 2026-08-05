@@ -6,6 +6,16 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 
+#: Docker service label read as the per-service description column.
+#: Vendor-neutral, as befits a public package.
+DEFAULT_DESCRIPTION_LABEL = "status.description"
+
+#: The key this panel read before the rename. Still honoured as a fallback by
+#: the Docker collector, so installations that set it -- and never set
+#: ``docker.description_label`` -- keep their descriptions without changing
+#: anything.
+LEGACY_DESCRIPTION_LABEL = "lmu.service.description"
+
 DEFAULT_CONFIG_PATH = "/etc/terminal-status-panel/config.toml"
 
 
@@ -100,7 +110,7 @@ class Config:
     width: int = 80
     docker_timeout: float = 1.5
     critical_services: list[str] = field(default_factory=list)
-    description_label: str = "lmu.service.description"
+    description_label: str = DEFAULT_DESCRIPTION_LABEL
     infrastructure_stacks: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRASTRUCTURE_STACKS)
     )
@@ -197,7 +207,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
         critical_services=list(services.get("critical", [])),
-        description_label=str(docker.get("description_label", "lmu.service.description")),
+        description_label=str(docker.get("description_label",
+                                        DEFAULT_DESCRIPTION_LABEL)),
         infrastructure_stacks=list(infra) if infra is not None
         else list(DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=list(infra_uis) if infra_uis is not None

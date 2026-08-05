@@ -5,13 +5,15 @@ from terminal_status_panel.model import SwarmInfo
 class _FakeService:
     """*tasks* is a list of (node_id | None, state) for desired-state=running."""
 
-    def __init__(self, name, desired, tasks, stack=None, description=None):
+    def __init__(self, name, desired, tasks, stack=None, description=None,
+                 raw_labels=None):
         self.name = name
         labels = {}
         if stack is not None:
             labels["com.docker.stack.namespace"] = stack
         if description is not None:
-            labels["lmu.service.description"] = description
+            labels[docker_collector.LEGACY_DESCRIPTION_LABEL] = description
+        labels.update(raw_labels or {})
         self.attrs = {
             "Spec": {"Mode": {"Replicated": {"Replicas": desired}}, "Labels": labels}
         }
@@ -113,7 +115,7 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
     ]
     services = [
         _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="PostgreSQL-18",
-                     description="PostgreSQL Datenbank, Version 18"),
+                     description="PostgreSQL database, version 18"),
         _FakeService("kafka", desired=2, tasks=[("n2", "running"), ("n3", "failed")],
                      stack="kafka"),
         _FakeService("registry", desired=1, tasks=[(None, "pending")]),  # unassigned
@@ -128,7 +130,7 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
 
     pg = next(s for s in result.services if s.name == "pg")
     assert pg.stack == "PostgreSQL-18"
-    assert pg.description == "PostgreSQL Datenbank, Version 18"
+    assert pg.description == "PostgreSQL database, version 18"
     assert [(t.node, t.state) for t in pg.tasks] == [("srv-ccc-01", "running")]
 
     kafka = next(s for s in result.services if s.name == "kafka")
@@ -188,3 +190,46 @@ def test_missing_availability_field_stays_operational(monkeypatch):
 
     assert result.nodes[0].availability is None
     assert result.nodes[0].operational is True
+
+
+# --- description label: neutral default, legacy key still honoured ----------
+
+def test_default_description_label_is_vendor_neutral():
+    from terminal_status_panel.config import Config
+
+    assert Config().description_label == "status.description"
+    assert docker_collector.LEGACY_DESCRIPTION_LABEL == "lmu.service.description"
+
+
+def test_legacy_label_is_still_read(monkeypatch):
+    """Installations predating the rename set the old key and no config. They
+    must keep their descriptions without changing anything."""
+    svc = _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="s",
+                       raw_labels={"lmu.service.description": "from the old key"})
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-a")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.services[0].description == "from the old key"
+
+
+def test_configured_label_wins_over_the_legacy_one(monkeypatch):
+    svc = _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="s",
+                       raw_labels={"status.description": "current",
+                                   "lmu.service.description": "stale"})
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-a")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.services[0].description == "current"
+
+
+def test_an_empty_configured_label_is_still_the_answer(monkeypatch):
+    """Setting the key to "" is a deliberate "no description here". Treating it
+    as absent would resurrect the legacy text the service was migrated away
+    from — the opposite of what the migration was for."""
+    svc = _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="s",
+                       raw_labels={"status.description": "",
+                                   "lmu.service.description": "stale"})
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-a")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.services[0].description == ""

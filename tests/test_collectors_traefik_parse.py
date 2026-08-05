@@ -19,8 +19,8 @@ ARGS = [
     "--accessLog.filePath=/log/access.log",
     "--log.level=INFO",
     "--global.checknewversion=false",
-    "--entryPoints.login_lmu_de.address=:2009",
-    "--entryPoints.login_lmu_de.forwardedHeaders.trustedIPs=0.0.0.0/0",
+    "--entryPoints.login_example_net.address=:2009",
+    "--entryPoints.login_example_net.forwardedHeaders.trustedIPs=0.0.0.0/0",
     "--entryPoints.portalmgmt.address=:2020",
     "--entryPoints.portalmgmt.forwardedHeaders.trustedIPs=0.0.0.0/0",
     "--entryPoints.www_portal_uni_muenchen_de.address=:2010",
@@ -36,7 +36,7 @@ def test_both_spellings_of_the_prefix_are_found():
     names = {ep.name for ep in parse.parse_entrypoints(ARGS)}
     assert names == {
         "dashboard", "ping", "default", "https",
-        "login_lmu_de", "portalmgmt", "www_portal_uni_muenchen_de",
+        "login_example_net", "portalmgmt", "www_portal_uni_muenchen_de",
         "db-ui", "kafbat",
     }
 
@@ -55,7 +55,7 @@ def test_entrypoints_keep_the_order_the_arguments_declare_them_in():
     names = [ep.name for ep in parse.parse_entrypoints(ARGS)]
     assert names[:4] == ["dashboard", "ping", "default", "https"]
     assert names[4:] == [
-        "login_lmu_de", "portalmgmt", "www_portal_uni_muenchen_de",
+        "login_example_net", "portalmgmt", "www_portal_uni_muenchen_de",
         "db-ui", "kafbat",
     ]
 
@@ -115,7 +115,7 @@ IMAGE_API_LABELS = {
     "traefik.http.routers.image_api.entrypoints": "websecure",
     "traefik.http.routers.image_api.middlewares": "image_api_stripprefix",
     "traefik.http.routers.image_api.rule":
-        "Host(`www.portal.uni-muenchen.de`) && PathPrefix(`/wallet/image-api`)",
+        "Host(`www.example.net`) && PathPrefix(`/wallet/image-api`)",
     "traefik.http.routers.image_api.tls": "true",
     "traefik.http.services.image_api.loadbalancer.server.port": "8090",
 }
@@ -191,14 +191,14 @@ def test_both_spellings_of_the_entrypoints_label_parse_the_same():
 def test_a_mis_cased_router_key_is_still_read():
     routers, _, _ = parse.parse_labels(
         {
-            "traefik.http.routers.image_api.Rule": "Host(`www.portal.uni-muenchen.de`)",
+            "traefik.http.routers.image_api.Rule": "Host(`www.example.net`)",
             "traefik.http.routers.image_api.TLS": "true",
             "traefik.http.routers.image_api.Middlewares": "image_api_stripprefix",
             "traefik.http.routers.image_api.Service": "image_api",
         },
         origin="x",
     )
-    assert routers[0].rule == "Host(`www.portal.uni-muenchen.de`)"
+    assert routers[0].rule == "Host(`www.example.net`)"
     assert routers[0].tls is True
     assert routers[0].middlewares == ["image_api_stripprefix"]
     assert routers[0].service == "image_api"
@@ -252,7 +252,7 @@ http:
             tls: 'true'
         ping-router:
             entryPoints:
-            - login_lmu_de
+            - login_example_net
             - portalmgmt
             - www_portal_uni_muenchen_de
             - db-ui
@@ -295,7 +295,7 @@ def test_the_capitalised_entrypoints_key_is_also_read():
     routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
     ping = [r for r in routers if r.name == "ping-router"][0]
     assert ping.entrypoints == [
-        "login_lmu_de", "portalmgmt", "www_portal_uni_muenchen_de",
+        "login_example_net", "portalmgmt", "www_portal_uni_muenchen_de",
         "db-ui", "kafbat", "default",
     ]
 
@@ -415,7 +415,7 @@ http:
   routers:
     account-api:
       rule: "PathPrefix(`/api`)"
-      entryPoints: [login_lmu_de]
+      entryPoints: [login_example_net]
       service: account-api-placeholder
       tls: {}
   services:

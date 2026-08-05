@@ -162,9 +162,9 @@ def test_a_mis_cased_entrypoints_label_still_reaches_the_orphan_block():
     the finding turns into "wired to all nine ports"."""
     client = _FakeClient(services=[
         _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
-        _FakeService("edutap_production_image_api", labels={
+        _FakeService("mystack_image_api", labels={
             "traefik.http.routers.image_api.entryPoints": "websecure",
-            "traefik.http.routers.image_api.rule": "Host(`www.portal.uni-muenchen.de`)",
+            "traefik.http.routers.image_api.rule": "Host(`www.example.net`)",
         }),
     ])
     info = collector.collect_traefik(client)

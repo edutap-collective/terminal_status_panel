@@ -20,7 +20,7 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "assets" / "logos"
-OUT = REPO / "src" / "lmu" / "terminal_status_panel" / "render" / "logos"
+OUT = REPO / "src" / "terminal_status_panel" / "render" / "logos"
 
 # (source file, output name, target width in character cells)
 LOGOS = [

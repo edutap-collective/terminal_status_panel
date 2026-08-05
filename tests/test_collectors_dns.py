@@ -112,24 +112,24 @@ def test_a_peer_that_does_not_resolve_fails_the_summary(tmp_path):
 
 
 def test_expectation_with_matching_address_passes(tmp_path):
-    resolver = _StubResolver(answers={("login.lmu.de", "A"): ["10.9.9.9"]})
+    resolver = _StubResolver(answers={("login.example.net", "A"): ["10.9.9.9"]})
     checks = dns_collector.collect_dns(
         fqdn="node1.example", peer_names=[],
-        expectations=[("login.lmu.de", ["10.9.9.9"])], timeout=1.0,
+        expectations=[("login.example.net", ["10.9.9.9"])], timeout=1.0,
         resolver=resolver, hosts_path=_hosts(tmp_path, ""),
     )
-    check = [c for c in checks if c.label == "login.lmu.de"][0]
+    check = [c for c in checks if c.label == "login.example.net"][0]
     assert check.ok is True
 
 
 def test_expectation_with_wrong_address_fails(tmp_path):
-    resolver = _StubResolver(answers={("login.lmu.de", "A"): ["10.9.9.9"]})
+    resolver = _StubResolver(answers={("login.example.net", "A"): ["10.9.9.9"]})
     checks = dns_collector.collect_dns(
         fqdn="node1.example", peer_names=[],
-        expectations=[("login.lmu.de", ["10.1.1.1"])], timeout=1.0,
+        expectations=[("login.example.net", ["10.1.1.1"])], timeout=1.0,
         resolver=resolver, hosts_path=_hosts(tmp_path, ""),
     )
-    check = [c for c in checks if c.label == "login.lmu.de"][0]
+    check = [c for c in checks if c.label == "login.example.net"][0]
     assert check.ok is False
     assert "10.9.9.9" in check.detail
 

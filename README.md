@@ -18,8 +18,8 @@ out in five tiers:
   one row named after the stack, a stack with several shows a header plus one
   sub-row per service (stack prefix and node name stripped). A trailing
   `_<digits>` is stripped the same way, so ordinal instances collapse too — a
-  service deployed as `heidi_connector_1`, `_2`, `_3` (one pinned instance per
-  node, each with its own secrets) renders as a single `heidi_connector` row.
+  service deployed as `connector_1`, `_2`, `_3` (one pinned instance per
+  node, each with its own secrets) renders as a single `connector` row.
   That stripping is unconditional, and it has an accepted cost: if one
   instance is later removed from the deployment — or scaled to zero — its
   row just folds into the remaining two, and the panel reads `✅ 2/2` with
@@ -224,7 +224,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 |-----|---------|---------|
 | `width` | `80` | Fallback render width when no TTY is available (see width resolution above). |
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
-| `docker.description_label` | `"lmu.service.description"` | Docker **service label** read as the per-service description column. |
+| `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A stack (or ungrouped service, e.g. `registry`) whose name matches goes into the **Infrastruktur** column; everything else goes into **Service**. |
 | `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastruktur** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
@@ -249,7 +249,7 @@ width = 200
 
 [docker]
 timeout = 1.5
-description_label = "lmu.service.description"
+description_label = "status.description"
 infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry"]
 infra_ui_services = ["kafbat-ui", "cloudbeaver", "mongo-express", "rustfs-console"]
 
@@ -285,7 +285,7 @@ wireguard = 1.0
 dns = 2.5
 
 [[health.dns.expect]]
-name = "login.lmu.de"
+name = "login.example.net"
 addresses = ["10.9.9.9"]
 ```
 
@@ -319,14 +319,13 @@ for a container that stopped mid-listing, which the panel would have shown as
 a failed check. Only RustFS needs a container's full attributes (for
 `RUSTFS_VOLUMES`), and it inspects only the one container it matched.
 
-Measured on production nodes on 2026-07-31: on `lmzvd06-ccc-01` (5-node
-Swarm), the whole section takes **3.25 s** end to end, within the 5 s default
-budget, with individual probe costs of PostgreSQL `pg_autoctl show state`
-0.13 s, Kafka `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not
-optimisable), GlusterFS `gluster … --xml` 0.10 s, and RustFS `/health`
-~0.2 s. The `lrz_cc` cluster that node belongs to runs no MongoDB, so that
-figure — `db.hello()` 0.95 s — was measured separately, on
-`lmzvd06-internet-app-1`.
+Measured on a production manager of a five-node Swarm: the whole section
+takes **3.25 s** end to end, within the 5 s default budget, with individual
+probe costs of PostgreSQL `pg_autoctl show state` 0.13 s, Kafka
+`kafka-metadata-quorum.sh` 2.6 s (JVM startup, not optimisable), GlusterFS
+`gluster … --xml` 0.10 s, and RustFS `/health` ~0.2 s. That cluster runs no
+MongoDB, so its figure — `db.hello()` 0.95 s — was measured separately on
+another cluster.
 
 ### How the timeouts are enforced
 
@@ -493,7 +492,7 @@ deployment.
 
 **Only the config generations the Traefik service actually mounts are read.**
 Swarm keeps every generation of a config — `traefik_dynamic_yml_v1` through
-`_v4` all exist on `lrz_cc` — but only the ones named in the service spec are
+`_v4` may all still exist — but only the ones named in the service spec are
 the ones Traefik has loaded. Selecting by name instead showed `ping-router`
 four times on every entrypoint and turned entrypoints that were removed two
 revisions ago into orphaned-router findings. Where the Traefik service cannot
@@ -521,7 +520,8 @@ absence.
 
 The entrypoint branches flow into as many columns as the terminal allows —
 the same `Columns` arrangement CLUSTER HEALTH uses, three at 190 columns, one
-at 60. Stacked vertically they run to some seventy lines on `lrz_cc` while two
+at 60. Stacked vertically they run to some seventy lines on a mid-sized
+cluster while two
 thirds of the width stays empty. The orphaned-router block stays full width
 below them: its lines are the longest in the section, and it is what you read
 first. Each entrypoint's head line carries the worst verdict among its
@@ -539,8 +539,8 @@ would put `https` (443) first and `dashboard` (8082) last and scatter the four.
 itself, with no router involved. It is read from the same arguments, and that
 entrypoint reads `— Traefik's own health check` instead of `— no router`, so
 the one port that is *meant* to carry nothing does not read as a finding.
-Every other empty entrypoint still does — `https :443` on `lrz_cc` genuinely
-has nothing behind it.
+Every other empty entrypoint still does — an internal `https :443` with
+nothing routed to it genuinely has nothing behind it.
 
 ### Services the file provider declares
 
@@ -560,10 +560,10 @@ entrypoint that does not exist, still appears here exactly as declared**,
 because nothing in this reading path asks Traefik whether it actually
 accepted it. The real case on this cluster: the `image_api` router's label
 names the entrypoint `websecure` (Traefik's own common naming convention for
-a TLS entrypoint), but this cluster's nine entrypoints are named `dashboard`,
-`ping`, `default`, `https`, `login_lmu_de`, `portalmgmt`,
-`www_portal_uni_muenchen_de`, `db-ui` and `kafbat` — no `websecure` among
-them, so the router is wired to a port that plainly doesn't exist. Since a
+a TLS entrypoint), but that cluster's nine entrypoints are named `dashboard`,
+`ping`, `default`, `https`, `login_example_net`, `portal_example_net`,
+`www_example_net`, `db-ui` and `kafbat` — no `websecure` among them, so the
+router is wired to a port that plainly doesn't exist. Since a
 tree keyed by entrypoint has no branch to put such a router under, it would
 otherwise vanish from the panel silently. Instead it gets its own
 **ORPHANED ROUTERS** block, listing the router, the entrypoint name(s) it
@@ -708,7 +708,7 @@ mix of 4K and laptop screens that is the wrong trade-off; prefer `install-panel`
 Services are grouped by their `com.docker.stack.namespace` label (set
 automatically for stack deployments). To show a human-readable description per
 service, add a label to the service — by default the key
-`lmu.service.description`:
+`status.description`:
 
 ```yaml
 services:
@@ -716,10 +716,18 @@ services:
     image: postgres:18
     deploy:
       labels:
-        lmu.service.description: "PostgreSQL Datenbank, Version 18"
+        status.description: "PostgreSQL database, version 18"
 ```
 
 Change the read label key via `docker.description_label` in the config.
+
+Before this key was renamed it was `lmu.service.description`. That key is still
+read whenever the configured one is absent from a service, so an existing
+deployment keeps its descriptions without any change. Where a service carries
+both, the configured key wins — otherwise a service could be pinned to an older
+text it had been migrated away from. The rule is presence, not content: a
+service that sets the configured key to an empty string is saying "no
+description here", and the legacy key is not consulted.
 
 ## OS logos
 

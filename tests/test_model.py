@@ -46,7 +46,7 @@ def test_swarm_node_operational_requires_ready_and_active():
 
 
 def test_cluster_member_defaults_to_unobserved_health():
-    member = ClusterMember(name="pg18-lmzvd06-ccn-02")
+    member = ClusterMember(name="pg18-swarm01-wrk-02")
     assert member.healthy is None
     assert member.role is None
     assert member.warning is None
