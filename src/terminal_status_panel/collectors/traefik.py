@@ -18,6 +18,7 @@ import httpx
 import yaml
 
 from ..model import TraefikInfo, TraefikRouter
+from ._labels import SWARM_SERVICE_LABEL, container_labels
 from .traefik_parse import (
     parse_api_rawdata,
     parse_dynamic_yaml,
@@ -182,6 +183,26 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
                 info.ping_entrypoint = parse_ping_entrypoint(args)
                 mounted = _mounted_config_names(service)
             routers, middlewares, refs = parse_labels(_labels_of(service), origin=name)
+            info.routers.extend(routers)
+            info.middlewares.update(middlewares)
+            info.services.update(refs)
+
+        try:
+            containers = client.containers.list()
+        except Exception as exc:
+            # Compose and plain containers are an addition, not a
+            # precondition: a daemon that answered for services but not for
+            # containers still yields real wiring, so degrade rather than
+            # discard what was already read.
+            info.container_error = f"{type(exc).__name__}: {exc}"
+            containers = []
+
+        for container in containers:
+            labels = container_labels(container)
+            if SWARM_SERVICE_LABEL in labels:
+                continue
+            name = getattr(container, "name", "") or ""
+            routers, middlewares, refs = parse_labels(labels, origin=name)
             info.routers.extend(routers)
             info.middlewares.update(middlewares)
             info.services.update(refs)

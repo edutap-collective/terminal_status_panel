@@ -30,10 +30,27 @@ class _FakeConfig:
         self.attrs = {"Spec": {"Data": base64.b64encode(data.encode()).decode()}}
 
 
+class _FakeContainer:
+    """Labels in the inspect shape, which is what `containers.list()` returns."""
+
+    def __init__(self, name, labels=None):
+        self.name = name
+        self.attrs = {"Config": {"Labels": dict(labels or {})}}
+
+
+class _SparseFakeContainer:
+    """Labels in the `sparse=True` shape: top level, no Config key."""
+
+    def __init__(self, name, labels=None):
+        self.name = name
+        self.attrs = {"Labels": dict(labels or {})}
+
+
 class _FakeClient:
-    def __init__(self, services=None, configs=None):
+    def __init__(self, services=None, configs=None, containers=None):
         self._services = services or []
         self._configs = configs or []
+        self._containers = containers or []
 
     class _Coll:
         def __init__(self, items):
@@ -49,6 +66,10 @@ class _FakeClient:
     @property
     def configs(self):
         return self._Coll(self._configs)
+
+    @property
+    def containers(self):
+        return self._Coll(self._containers)
 
 
 def test_unknown_entrypoints_reports_only_the_missing_ones():
@@ -87,6 +108,60 @@ def test_collect_joins_labels_from_every_service():
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["kafbat-ui"]
     assert info.services["kafbat-ui"].port == 8080
+
+
+def test_router_labels_are_read_from_containers():
+    client = _FakeClient(containers=[
+        _FakeContainer("portal-web-1", {
+            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+            "traefik.http.routers.web.entrypoints": "https",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    by_name = {r.name: r for r in info.routers}
+    assert "web" in by_name
+    assert by_name["web"].entrypoints == ["https"]
+    assert by_name["web"].origin == "portal-web-1"
+
+
+def test_container_labels_are_read_in_the_sparse_shape_too():
+    client = _FakeClient(containers=[
+        _SparseFakeContainer("portal-web-1", {
+            "traefik.http.routers.web.entrypoints": "https",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["web"]
+
+
+def test_a_swarm_task_container_is_not_read_twice():
+    """The task carries its service's labels; services.list() already had them."""
+    labels = {"traefik.http.routers.api.entrypoints": "https"}
+    client = _FakeClient(
+        services=[_FakeService("api", labels=labels)],
+        containers=[_FakeContainer("api.1.abcdef",
+                                   {**labels, "com.docker.swarm.service.name": "api"})],
+    )
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["api"]
+    assert [r.origin for r in info.routers] == ["api"]
+
+
+def test_a_failing_container_listing_keeps_the_service_results():
+    class _Boom:
+        def list(self, *a, **k):
+            raise RuntimeError("no containers for you")
+
+    client = _FakeClient(services=[
+        _FakeService("api", labels={"traefik.http.routers.api.entrypoints": "https"}),
+    ])
+    client.__class__.containers = property(lambda self: _Boom())
+    try:
+        info = collector.collect_traefik(client)
+        assert [r.name for r in info.routers] == ["api"]
+        assert info.reachable is True
+    finally:
+        del client.__class__.containers
 
 
 def test_collect_reads_the_file_provider_configs():

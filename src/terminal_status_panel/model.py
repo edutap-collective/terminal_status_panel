@@ -112,8 +112,8 @@ class SwarmInfo:
     node_count: int | None = None
     services: list[ServiceStatus] = field(default_factory=list)
     # Plain and Compose containers, kept apart from Swarm services so the
-    # SWARM summary line can stay honest about what the Swarm actually runs --
-    # and so render/traefik.py, which filters `services` by name, is unaffected.
+    # SWARM summary line can stay honest about what the Swarm actually runs.
+    # render/traefik.py matches router targets against both lists.
     containers: list[ServiceStatus] = field(default_factory=list)
     nodes: list[SwarmNode] = field(default_factory=list)
 
@@ -247,7 +247,7 @@ class TraefikRouter:
     service: str | None = None
     tls: bool = False
     source: str = "swarm"  # swarm | file
-    origin: str | None = None  # the Docker service or config it was read from
+    origin: str | None = None  # the Docker service, container, or config it was read from
     # None means the Traefik API was never asked. It must not render as
     # "accepted": not consulted is not the same as confirmed.
     rejected: bool | None = None
@@ -269,6 +269,9 @@ class TraefikInfo:
     # A partial failure: the labels were read but the file provider was not.
     # Distinct from `error`, which means nothing could be read at all.
     file_provider_error: str | None = None
+    # Labels were read from services but not from containers. Distinct from
+    # `error`, which means nothing could be read at all.
+    container_error: str | None = None
 
 
 @dataclass
