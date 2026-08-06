@@ -11,9 +11,30 @@ from __future__ import annotations
 #: skip these, or every Swarm object is counted twice on a manager node.
 SWARM_SERVICE_LABEL = "com.docker.swarm.service.name"
 
+#: `docker compose` sets this to the *service* name -- ``db``, not the
+#: container's own ``course-statistics-db`` -- on every container it starts.
+COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+
 
 def _mapping(value) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def compose_identity(labels: dict, container_name: str) -> str:
+    """The name ``collectors/docker.py`` gives this container's ``ServiceStatus``.
+
+    ``_container_groups`` in ``docker.py`` keys a Compose container's
+    ``ServiceStatus.name`` by ``COMPOSE_SERVICE_LABEL`` when it is present,
+    falling back to the container's own name for one Compose never touched.
+    Any other caller that needs to match a Docker identity coming from
+    elsewhere -- a Traefik router label, for instance -- against
+    ``ServiceStatus.name`` must compute the very same string. A caller that
+    reimplements the rule instead of calling this is one edit away from the
+    two silently drifting apart, at which point the match just stops firing,
+    with no error and no failing test -- exactly the shape of bug this
+    function exists to rule out.
+    """
+    return labels.get(COMPOSE_SERVICE_LABEL) or container_name
 
 
 def container_labels(container) -> dict:

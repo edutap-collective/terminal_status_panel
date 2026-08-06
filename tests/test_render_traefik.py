@@ -258,6 +258,34 @@ def test_a_router_pointing_at_a_compose_container_is_confirmed():
     assert "no such service" not in _render(info, swarm)
 
 
+def test_a_router_declared_by_a_compose_container_is_confirmed():
+    """The regression this task was written to catch.
+
+    `origin` and `docker_service` are what the Traefik collector's container
+    pass actually produces for a container named `course-statistics-db` that
+    carries `com.docker.compose.service=db`: the container's own name for
+    `origin`, the Compose service name for `docker_service`. Matching only
+    `origin` (as an earlier version of the container pass did) makes this
+    router read as `no such service`, even though the container it names is
+    running — and `ServiceStatus` is built exactly the way
+    `collectors/docker.py`'s `_container_services` would build it, stack and
+    all, so nothing here is more forgiving than the real collector."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="db", service="db", entrypoints=["https"],
+                               origin="course-statistics-db")],
+        services={"db": TraefikServiceRef(name="db", docker_service="db")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=False,
+        containers=[ServiceStatus(name="db", stack="course-statistics",
+                                  running_replicas=1, desired_replicas=1)],
+    )
+    out = _render(info, swarm)
+    assert "no such service" not in out
+    assert icons.FAILED not in out
+
+
 def test_a_router_pointing_nowhere_is_still_reported_missing():
     info = TraefikInfo(
         reachable=True,

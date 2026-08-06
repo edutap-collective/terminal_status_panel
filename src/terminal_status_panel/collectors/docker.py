@@ -15,11 +15,10 @@ import docker
 
 from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
 from ..model import ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
-from ._labels import SWARM_SERVICE_LABEL, container_labels
+from ._labels import SWARM_SERVICE_LABEL, compose_identity, container_labels
 
 STACK_LABEL = "com.docker.stack.namespace"
 COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
-COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
 
 #: Raw Docker states a container without Compose labels must be in to appear at
 #: all. Anything else is a leftover from a one-off `docker run`, and on a
@@ -181,7 +180,7 @@ def _container_groups(client) -> dict[tuple[str | None, str], list]:
                 continue
             key = (None, container.name)
         else:
-            key = (project, labels.get(COMPOSE_SERVICE_LABEL) or container.name)
+            key = (project, compose_identity(labels, container.name))
         groups.setdefault(key, []).append((container, labels))
     return groups
 

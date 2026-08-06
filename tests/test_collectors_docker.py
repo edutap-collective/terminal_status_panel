@@ -1,4 +1,5 @@
 from terminal_status_panel.collectors import docker as docker_collector
+from terminal_status_panel.collectors._labels import COMPOSE_SERVICE_LABEL
 from terminal_status_panel.model import SwarmInfo
 from terminal_status_panel.render import icons
 from terminal_status_panel.render.verdict import service_verdict
@@ -264,7 +265,7 @@ def _compose(project, service, **kwargs):
         f"{project}-{service}-1",
         labels={
             docker_collector.COMPOSE_PROJECT_LABEL: project,
-            docker_collector.COMPOSE_SERVICE_LABEL: service,
+            COMPOSE_SERVICE_LABEL: service,
         },
         **kwargs,
     )
@@ -318,7 +319,7 @@ def test_a_sparsely_shaped_container_is_still_grouped_by_compose_labels(monkeypa
         "portal-web-1",
         labels={
             docker_collector.COMPOSE_PROJECT_LABEL: "portal",
-            docker_collector.COMPOSE_SERVICE_LABEL: "web",
+            COMPOSE_SERVICE_LABEL: "web",
         },
     )
     client = _FakeClient("inactive", containers=[sparse])
@@ -491,7 +492,7 @@ def test_containers_use_the_same_description_label_as_services(monkeypatch):
                 "web",
                 labels={
                     docker_collector.COMPOSE_PROJECT_LABEL: "portal",
-                    docker_collector.COMPOSE_SERVICE_LABEL: "web",
+                    COMPOSE_SERVICE_LABEL: "web",
                     "status.description": "the public front end",
                 },
             )
@@ -512,7 +513,7 @@ def test_containers_honour_the_legacy_description_label(monkeypatch):
                 "web",
                 labels={
                     docker_collector.COMPOSE_PROJECT_LABEL: "portal",
-                    docker_collector.COMPOSE_SERVICE_LABEL: "web",
+                    COMPOSE_SERVICE_LABEL: "web",
                     docker_collector.LEGACY_DESCRIPTION_LABEL: "from the old key",
                 },
             )

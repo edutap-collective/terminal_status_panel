@@ -18,7 +18,7 @@ import httpx
 import yaml
 
 from ..model import TraefikInfo, TraefikRouter
-from ._labels import SWARM_SERVICE_LABEL, container_labels
+from ._labels import SWARM_SERVICE_LABEL, compose_identity, container_labels
 from .traefik_parse import (
     parse_api_rawdata,
     parse_dynamic_yaml,
@@ -202,7 +202,16 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             if SWARM_SERVICE_LABEL in labels:
                 continue
             name = getattr(container, "name", "") or ""
-            routers, middlewares, refs = parse_labels(labels, origin=name)
+            # origin (who declared this router) and docker_name (what
+            # ServiceStatus.name calls it) differ for a Compose container: the
+            # container is named "course-statistics-db", the service it
+            # matches against is "db". compose_identity computes the same
+            # name collectors/docker.py gives that container's ServiceStatus,
+            # so the two stay in step without a second, drifting copy of that
+            # rule here.
+            routers, middlewares, refs = parse_labels(
+                labels, origin=name, docker_name=compose_identity(labels, name)
+            )
             info.routers.extend(routers)
             info.middlewares.update(middlewares)
             info.services.update(refs)

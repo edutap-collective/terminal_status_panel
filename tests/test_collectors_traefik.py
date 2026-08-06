@@ -1,6 +1,7 @@
 import httpx
 
 from terminal_status_panel.collectors import traefik as collector
+from terminal_status_panel.collectors._labels import COMPOSE_SERVICE_LABEL
 from terminal_status_panel.config import Config, TraefikApiConfig
 from terminal_status_panel.model import TraefikRouter
 
@@ -122,6 +123,41 @@ def test_router_labels_are_read_from_containers():
     assert "web" in by_name
     assert by_name["web"].entrypoints == ["https"]
     assert by_name["web"].origin == "portal-web-1"
+
+
+def test_a_compose_container_s_router_matches_the_compose_service_name():
+    """The container's own name (`origin`, for display) and the Compose
+    service name (`docker_service`, matched against ServiceStatus.name by the
+    renderer) are two different strings -- collectors/docker.py names this
+    container's ServiceStatus "db", not "course-statistics-db"."""
+    client = _FakeClient(containers=[
+        _FakeContainer("course-statistics-db", {
+            "traefik.http.routers.db.rule": "Host(`stats.example.net`)",
+            "traefik.http.routers.db.entrypoints": "https",
+            "traefik.http.services.db.loadbalancer.server.port": "5432",
+            COMPOSE_SERVICE_LABEL: "db",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    router = next(r for r in info.routers if r.name == "db")
+    assert router.origin == "course-statistics-db"
+    assert info.services["db"].docker_service == "db"
+
+
+def test_a_container_without_compose_labels_yields_the_same_name_twice():
+    """No Compose service label to prefer, so the container's own name is the
+    only identity there is -- for both `origin` and `docker_service`."""
+    client = _FakeClient(containers=[
+        _FakeContainer("standalone-proxy", {
+            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+            "traefik.http.routers.web.entrypoints": "https",
+            "traefik.http.services.web.loadbalancer.server.port": "80",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    router = next(r for r in info.routers if r.name == "web")
+    assert router.origin == "standalone-proxy"
+    assert info.services["web"].docker_service == "standalone-proxy"
 
 
 def test_container_labels_are_read_in_the_sparse_shape_too():
