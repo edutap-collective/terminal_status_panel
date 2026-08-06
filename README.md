@@ -612,6 +612,42 @@ container's identity by service name alone, not by (project, service) —
 fixing it would mean deciding how a router should express *which* project's
 `db` it means, which is a design question for another day.
 
+**A second, different collision: one Traefik service name, two declarations.**
+The ambiguity above is about two *containers* sharing a target name, and it
+shows up as an inflated replica count. This one is about two *label sources*
+declaring the same Traefik service name, and it shows up as a verdict for the
+wrong thing entirely. `collect_traefik` reads Swarm services first and
+containers second, and the container pass ends with `info.services.update()`,
+so where both declare `traefik.http.services.web.*` the container's
+declaration replaces the Swarm one:
+
+```
+Swarm service portal_web        declares routers.web + services.web
+Compose container dev-web-1     declares routers.web + services.web
+→ services["web"].docker_service becomes "web" (was "portal_web")
+```
+
+The router declared by `portal_web` now has its verdict computed from the
+Compose container. If `portal_web` is scaled 0/3 and dead while the container
+runs, that router renders a green `✅ 1/1` — a healthy verdict for a dead
+service, measured on something unrelated to it. **Where two label sources
+declare the same Traefik service name, the panel shows one verdict and does
+not tell you there was a conflict.** The underlying situation is a genuine
+name conflict between two label sources, and what the panel *should* say
+about it — report both targets, flag the collision, prefer the Swarm
+declaration — is a design question rather than a patch, so it is documented
+here instead of fixed. Until it is answered, a router whose verdict looks
+implausible is worth checking for a second declaration of its service name.
+
+**A paused standalone container reads as missing.** A paused container is
+still listed by `containers.list()`, so its labels are read and its router
+appears in the tree — but `collectors/docker.py` counts a container with no
+Compose project only while it is running or restarting, so it never becomes a
+`ServiceStatus` for the verdict to match against. The router's target then
+renders a red `✗ no such service` for a container the panel itself just read
+labels off. Un-pausing it restores both halves; a *Compose* container is
+unaffected, since it stays in its group and shows the shortfall instead.
+
 The panel renders one branch per entrypoint (sorted by port), each listing
 its routers (dimmed when they come from the file provider), their
 middlewares, and the Docker service or container each one points at —
