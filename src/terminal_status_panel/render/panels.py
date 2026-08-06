@@ -184,12 +184,19 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
 # System status (load + memory/swap + filesystem)
 # --------------------------------------------------------------------------- #
 
+#: Fixed width of the RAM/SWAP bars in the MEMORY & SWAP block. The
+#: filesystem bar reuses this as its upper bound (see ``_FilesystemBody``) so
+#: the two blocks, which sit side by side, carry equal visual weight instead
+#: of the filesystem bar sprawling to whatever space happens to be left over.
+_MEMORY_BAR_WIDTH = 44
+
+
 def _bar_row(table: Table, label: str, percent: float | None,
              used: int | None, total: int | None, status: str) -> None:
     if percent is None:
         table.add_row(label, Text("n/a", style="dim"), "", "")
         return
-    bar = render_bar(percent, status, width=44)
+    bar = render_bar(percent, status, width=_MEMORY_BAR_WIDTH)
     pct = Text(f"{percent:5.1f}%", style=STATUS_COLORS.get(status, "white"))
     detail = f"{format_bytes(used)} / {format_bytes(total)}"
     table.add_row(label, bar, pct, detail)
@@ -318,6 +325,12 @@ class _FilesystemBody:
     rather than left to that generic algorithm: when there is not enough
     left over for a bar that would actually read as one, the table falls
     back to exactly the same rendering as before the bar existed.
+
+    The width is additionally capped at ``_MEMORY_BAR_WIDTH``: on a wide
+    terminal, leftover space alone would let this bar run far past the
+    RAM/SWAP bars in the block directly above it, so the two blocks stop
+    reading as a matched pair. Below the cap the bar keeps flexing with the
+    available width exactly as before.
     """
 
     def __init__(self, res: ResourceUsage) -> None:
@@ -330,7 +343,9 @@ class _FilesystemBody:
         natural_width = Measurement.get(
             console, options.update_width(_UNBOUNDED_WIDTH), base
         ).maximum
-        bar_width = options.max_width - natural_width - _FS_BAR_GAP
+        bar_width = min(
+            options.max_width - natural_width - _FS_BAR_GAP, _MEMORY_BAR_WIDTH
+        )
         if bar_width >= _MIN_FS_BAR_WIDTH:
             yield _filesystem_table(self._res, bar_width=bar_width)
         else:

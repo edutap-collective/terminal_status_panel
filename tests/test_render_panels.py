@@ -929,3 +929,25 @@ def test_filesystem_usage_bar_reappears_on_a_wide_terminal():
     filled_counts = [line.count("█") for line in lines]
     assert all(count > 0 for count in filled_counts)
     assert filled_counts[0] > filled_counts[1]
+
+
+def test_filesystem_usage_bar_is_capped_to_the_memory_bar_width():
+    """The filesystem bar must not outgrow the RAM/SWAP bars above it.
+
+    At width 215 there are roughly 90 columns free to the right of the
+    filesystem table -- flexing all the way into them makes the filesystem
+    block visibly heavier than the MEMORY & SWAP block directly above it,
+    even though both present a single measurement per row. The filesystem
+    bar must stop growing once it reaches the memory bars' own width
+    (``panels._MEMORY_BAR_WIDTH``, currently 44), continuing to flex only
+    below that cap -- which the width-80 and width-100 tests above already
+    cover.
+    """
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=215)
+    fs_block = out[out.index("FILESYSTEM USAGE"):]
+
+    bar_lines = [line for line in fs_block.splitlines() if "█" in line or "░" in line]
+    assert len(bar_lines) == 2
+    for line in bar_lines:
+        bar_width = line.count("█") + line.count("░")
+        assert bar_width == panels._MEMORY_BAR_WIDTH
