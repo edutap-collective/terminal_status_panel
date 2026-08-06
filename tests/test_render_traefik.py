@@ -395,6 +395,41 @@ def test_file_provider_error_is_shown_as_a_warning_above_the_tree():
     assert tree_idx > warning_idx
 
 
+def test_container_error_is_shown_as_a_warning_above_the_tree():
+    """A container listing that failed drops every router declared by a plain
+    or Compose container. Without this line the section reads as though the
+    wiring were complete."""
+    info = _wired()
+    info.container_error = "ReadTimeout: containers.list() timed out"
+    out = _render(info)
+    lines = out.splitlines()
+    warning_idx = next(i for i, ln in enumerate(lines) if "container labels unreadable" in ln)
+    assert "ReadTimeout: containers.list() timed out" in lines[warning_idx]
+    # The tree still renders beneath the warning.
+    tree_idx = next(i for i, ln in enumerate(lines) if "kafbat-ui" in ln)
+    assert tree_idx > warning_idx
+
+
+def test_no_container_warning_when_the_containers_were_read():
+    """The line is a notice about a failed read, so it must be absent on the
+    normal path -- where `container_error` is None."""
+    assert _wired().container_error is None
+    assert "container labels unreadable" not in _render(_wired())
+
+
+def test_the_container_error_changes_no_verdict():
+    """Verdicts come from `swarm`, not from this field: the notice is a notice.
+    Everything below it renders exactly as it does without the failure."""
+    without = _render(_wired(), width=200).splitlines()
+    info = _wired()
+    info.container_error = "ReadTimeout"
+    with_error = _render(info, width=200).splitlines()
+    notice = next(i for i, ln in enumerate(with_error) if "container labels unreadable" in ln)
+    # The notice and the blank line under it are the only additions: every
+    # other line, verdicts included, is the one rendered without the failure.
+    assert with_error[:notice] + with_error[notice + 2:] == without
+
+
 def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
     """Stacked vertically they run to some seventy lines on cluster-a while two
     thirds of the terminal stay empty — the same arrangement CLUSTER HEALTH

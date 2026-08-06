@@ -241,6 +241,18 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
             style="dim",
         ))
         parts.append(Text(""))
+    if data.container_error:
+        # Same shape as the file-provider line above, one label source over:
+        # a container listing that failed drops every router declared by a
+        # plain or Compose container, and the section would otherwise render
+        # as though the wiring were complete. A notice only — the verdicts
+        # below come from `swarm`, which this failure did not touch.
+        parts.append(Text(
+            f"{icons.WARN} container labels unreadable: {data.container_error}"
+            " — routers declared by plain or Compose containers are missing",
+            style="dim",
+        ))
+        parts.append(Text(""))
     if data.entrypoints:
         # Declaration order, which the collector preserves: the four
         # entrypoints every cluster has come before this cluster's own.
