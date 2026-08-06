@@ -340,9 +340,13 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
             # A UI deployed as its own stack.
             ServiceStatus("cloudbeaver_cloudbeaver", 1, 1, stack="cloudbeaver",
                           description="SQL UI", tasks=[ServiceTask(N1, "running")]),
-            # A UI running as a standalone container.
-            ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
-                          tasks=[ServiceTask(N1, "running")]),
+            # A UI deployed as its own single-service Compose stack -- the
+            # normal shape a Compose UI takes, and the case this hoisting
+            # must cover. (A genuinely stackless container is covered
+            # separately by test_a_stackless_admin_ui_claims_no_project,
+            # which must NOT be hoisted here.)
+            ServiceStatus("mongo-express", 1, 1, stack="mongo-express",
+                          description="Mongo UI", tasks=[ServiceTask(N1, "running")]),
             ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="frontend",
                           tasks=[ServiceTask(N1, "running")]),
             # A real infrastructure stack that sorts alphabetically before
@@ -380,16 +384,38 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
 
 
 def test_single_infra_ui_keeps_its_own_name():
+    """The Compose case: a UI deployed as its own single-service stack."""
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
+        services=[ServiceStatus("mongo-express", 1, 1, stack="mongo-express",
+                                description="Mongo UI",
                                 tasks=[ServiceTask("srv-01", "running")])],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     # Not collapsed to a single row labelled 'infra-uis' — the UI stays named.
     assert "infra-uis" in out
     assert "mongo-express" in out
+
+
+def test_a_stackless_admin_ui_claims_no_project():
+    """A bare `docker run -d adminer` on a host with no Compose projects.
+
+    `adminer` matches DEFAULT_INFRA_UI_SERVICES, which used to be enough to
+    pull it into `_split_infra_uis` before the stackless split happened --
+    landing it under "COMPOSE PROJECTS / Infrastructure / infra-uis", a
+    project that does not exist. Being UI-shaped does not give a stackless
+    entry a project either; it belongs in the same remainder table as any
+    other stackless container.
+    """
+    swarm = _swarm_with_origins(containers=[_origin_status("adminer")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "COMPOSE PROJECTS" not in out
+    assert "SWARM STACKS" not in out
+    assert "Infrastructure" not in out
+    assert "infra-uis" not in out
+    assert "Standalone containers" in out
+    assert "adminer" in out
 
 
 def test_infra_ui_services_win_over_infrastructure_stacks():

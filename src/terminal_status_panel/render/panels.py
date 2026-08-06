@@ -691,15 +691,19 @@ def _classify_origin(services, cfg, node_names):
             for base in sorted(groups, key=str.lower)
         ]
 
-    ui_services, remaining = _split_infra_uis(services, ui_keys, node_names)
+    # Stackless entries must bypass `_split_infra_uis` for the same reason
+    # they bypass `is_infra` below: a bare `docker run -d adminer` on a host
+    # with no Compose projects has no project to file under, UI-shaped or
+    # not. Splitting them out first, before the UI keywords are even
+    # consulted, keeps that true regardless of what the name matches.
+    stackful = [svc for svc in services if svc.stack is not None]
+    ungrouped = [svc for svc in services if svc.stack is None]
+
+    ui_services, remaining = _split_infra_uis(stackful, ui_keys, node_names)
 
     stacks: dict[str, list] = {}
-    ungrouped: list = []
     for svc in remaining:
-        if svc.stack is None:
-            ungrouped.append(svc)
-        else:
-            stacks.setdefault(svc.stack, []).append(svc)
+        stacks.setdefault(svc.stack, []).append(svc)
 
     infra, service, stackless = [], [], []
     if ui_services:
