@@ -44,10 +44,22 @@ jobs:
         with:
           release: "14.3"
           usesh: true
-          # psutil compiles from source unless it comes from pkg, which is the
-          # difference between a one-minute job and a ten-minute one.
+          # Do not pin the Python version: FreeBSD moves its default flavour
+          # between releases, and the py311-* packages this job first asked for
+          # no longer exist in 14.3's repository. Install the default `python3`
+          # and derive the flavour prefix from it, so the job follows whatever
+          # the release ships instead of guessing.
+          #
+          # psutil comes from pkg rather than pip because building it from
+          # source is the difference between a one-minute job and a ten-minute
+          # one.
           prepare: |
-            pkg install -y python311 py311-pip py311-psutil py311-sqlite3
+            set -e
+            pkg install -y python3
+            PYVER=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')
+            echo "FreeBSD default Python flavour: py${PYVER}"
+            pkg install -y "py${PYVER}-pip" "py${PYVER}-psutil" "py${PYVER}-sqlite3"
           run: |
-            python3.11 -m pip install --break-system-packages -e '.[test]'
-            python3.11 -m pytest
+            set -e
+            python3 -m pip install --break-system-packages -e '.[test]'
+            python3 -m pytest
