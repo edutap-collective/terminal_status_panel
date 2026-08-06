@@ -128,9 +128,27 @@ def _swarm_services(client, critical: set[str], description_label: str,
 
 
 def _container_labels(container) -> dict:
+    """Every label on *container*, whichever response shape produced it.
+
+    ``containers.list()`` -- what this collector calls today -- issues a full
+    inspect per container (docker-py implements ``list()`` as one ``get()``
+    per result) and carries labels under ``attrs["Config"]["Labels"]``, with
+    ``Config`` present. ``containers.list(sparse=True)`` -- the optimisation
+    ``ContainerIndex`` in ``clusters.py`` already uses for the health checks,
+    and the one an unwary caller would reach for here too, since
+    ``containers.list(all=True)`` is the one place this branch increases
+    login-path runtime -- returns the raw list-API response instead: labels
+    sit at the top level, ``attrs["Labels"]``, and there is no ``Config`` key
+    at all. Preferring ``Config.Labels`` and falling back to the top-level key
+    keeps this working under either shape; switching to sparse without this
+    guard would silently strip every container of its stack, description and
+    criticality, and break the ``SWARM_SERVICE_LABEL`` filter so Swarm
+    services appeared twice -- with no error and no failing test.
+    """
     attrs = getattr(container, "attrs", {}) or {}
-    config = attrs.get("Config") or {}
-    return dict(config.get("Labels") or {})
+    if "Config" in attrs:
+        return dict((attrs["Config"] or {}).get("Labels") or {})
+    return dict(attrs.get("Labels") or {})
 
 
 def _raw_state(container) -> str:

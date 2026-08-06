@@ -293,6 +293,46 @@ def test_compose_containers_are_grouped_by_project_and_service(monkeypatch):
     assert result.services == []
 
 
+class _SparseFakeContainer:
+    """Mimics ``containers.list(sparse=True)``: labels sit at the top level and
+    there is no "Config" key at all -- unlike the inspecting ``containers.list()``
+    this collector actually calls today, where ``_FakeContainer`` above puts
+    them under ``Config.Labels``. Only what ``_container_labels`` cares about
+    is varied here; ``State`` stays nested so the rest of the pipeline
+    (``_raw_state`` and friends) behaves exactly as in the non-sparse tests.
+    """
+
+    def __init__(self, name, labels=None, state="running", exit_code=0):
+        self.name = name
+        self.status = state
+        self.attrs = {
+            "State": {"Status": state, "ExitCode": exit_code},
+            "Labels": dict(labels or {}),
+        }
+
+
+def test_a_sparsely_shaped_container_is_still_grouped_by_compose_labels(monkeypatch):
+    """``_container_labels`` must tolerate both response shapes, not just the
+    one this collector happens to call today -- see its docstring."""
+    sparse = _SparseFakeContainer(
+        "portal-web-1",
+        labels={
+            docker_collector.COMPOSE_PROJECT_LABEL: "portal",
+            docker_collector.COMPOSE_SERVICE_LABEL: "web",
+        },
+    )
+    client = _FakeClient("inactive", containers=[sparse])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert len(result.containers) == 1
+    web = result.containers[0]
+    assert web.name == "web"
+    assert web.stack == "portal"
+    assert web.running_replicas == 1
+
+
 def test_swarm_tasks_are_not_listed_twice(monkeypatch):
     """A Swarm task is also a container; services.list() already reported it."""
     client = _FakeClient(
