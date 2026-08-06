@@ -622,7 +622,7 @@ because nothing in this reading path asks Traefik whether it actually
 accepted it. The real case on this cluster: the `image_api` router's label
 names the entrypoint `websecure` (Traefik's own common naming convention for
 a TLS entrypoint), but that cluster's nine entrypoints are named `dashboard`,
-`ping`, `default`, `https`, `login_example_net`, `portal_example_net`,
+`ping`, `default`, `https`, `login_example_net`, `portalmgmt`,
 `www_example_net`, `db-ui` and `kafbat` — no `websecure` among them, so the
 router is wired to a port that plainly doesn't exist. Since a
 tree keyed by entrypoint has no branch to put such a router under, it would
