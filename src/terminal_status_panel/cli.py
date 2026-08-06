@@ -148,7 +148,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
 
     return PanelData(
         system=collect_system() if server else None,
-        resources=collect_resources() if server else None,
+        resources=collect_resources(cfg.ignore_mountpoints) if server else None,
         updates=collect_updates(timeout=cfg.docker_timeout) if server else None,
         swarm=swarm,
         health=health_info,

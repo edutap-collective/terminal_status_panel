@@ -13,7 +13,8 @@ import re
 from collections.abc import Callable
 from datetime import datetime
 
-from rich.console import Group, RenderableType
+from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+from rich.measure import Measurement
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
@@ -45,6 +46,11 @@ _CPU_CRITICAL = 90.0
 # Name of the synthetic stack collecting infrastructure admin UIs.
 INFRA_UI_STACK = "infra-uis"
 
+#: A laptop with several interfaces and IPv6 privacy addresses can present
+#: thirty addresses. Past a handful the list stops informing and starts
+#: displacing everything below it.
+MAX_RENDERED_IPS = 8
+
 # Ordinal instances of one service: a connector pinned per node must run as
 # connector_1, _2, … because each instance needs its own secrets.
 # Underscore only — with '-<digits>' a stack named PostgreSQL-18 whose service
@@ -57,6 +63,21 @@ INFRA_UI_STACK = "infra-uis"
 # alternative — collapsing only when siblings actually exist — would rename
 # the row as instances come and go.
 _ORDINAL_SUFFIX = re.compile(r"_\d+$")
+
+
+def _short_mount(path: str, width: int) -> str:
+    """Shorten from the left, keeping the tail.
+
+    A long mount path carries its distinguishing part at the end --
+    ``.../Volumes/iOS_23C54``. Cutting the tail, which is what letting the table
+    truncate would do, turns a dozen distinct rows into a dozen copies of
+    ``/Libr…``.
+    """
+    if len(path) <= width:
+        return path
+    if width <= 1:
+        return "…"
+    return "…" + path[-(width - 1):]
 
 
 def section(title: str, body: RenderableType) -> Group:
@@ -105,7 +126,7 @@ def system_overview(info: SystemInfo | None) -> Group:
         return section("SYSTEM OVERVIEW", table)
 
     # distro.name(pretty=True) usually already embeds the version/codename.
-    os_line = info.os_name or "n/a"
+    os_line = info.os_name or "n/a (OS identity unavailable)"
     if info.os_version and info.os_version not in (info.os_name or ""):
         os_line = f"{os_line} {info.os_version}"
     table.add_row("OS", os_line)
@@ -114,7 +135,15 @@ def system_overview(info: SystemInfo | None) -> Group:
     table.add_row("Uptime", _fmt_uptime(info.uptime_seconds))
     table.add_row("Date", _now())
     table.add_row("User", info.user or "n/a")
-    table.add_row("IP", ", ".join(info.ip_addresses) or "n/a")
+    addresses = info.ip_addresses
+    if not addresses:
+        ip_line = "n/a"
+    else:
+        ip_line = ", ".join(addresses[:MAX_RENDERED_IPS])
+        hidden = len(addresses) - MAX_RENDERED_IPS
+        if hidden > 0:
+            ip_line = f"{ip_line} … (+{hidden} more)"
+    table.add_row("IP", ip_line)
 
     logo = os_logo(info.os_name)
     if logo.plain:
@@ -155,12 +184,19 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
 # System status (load + memory/swap + filesystem)
 # --------------------------------------------------------------------------- #
 
+#: Fixed width of the RAM/SWAP bars in the MEMORY & SWAP block. The
+#: filesystem bar reuses this as its upper bound (see ``_FilesystemBody``) so
+#: the two blocks, which sit side by side, carry equal visual weight instead
+#: of the filesystem bar sprawling to whatever space happens to be left over.
+_MEMORY_BAR_WIDTH = 44
+
+
 def _bar_row(table: Table, label: str, percent: float | None,
              used: int | None, total: int | None, status: str) -> None:
     if percent is None:
         table.add_row(label, Text("n/a", style="dim"), "", "")
         return
-    bar = render_bar(percent, status, width=44)
+    bar = render_bar(percent, status, width=_MEMORY_BAR_WIDTH)
     pct = Text(f"{percent:5.1f}%", style=STATUS_COLORS.get(status, "white"))
     detail = f"{format_bytes(used)} / {format_bytes(total)}"
     table.add_row(label, bar, pct, detail)
@@ -221,27 +257,103 @@ def _memory_body(res: ResourceUsage, cfg: Config) -> RenderableType:
     return table
 
 
-def _filesystem_body(res: ResourceUsage) -> RenderableType:
+#: A bar thinner than this reads as a stray colour smear, not as usage --
+#: below it the row is better off with no bar at all.
+_MIN_FS_BAR_WIDTH = 6
+
+#: The padding cell ``Table.grid`` inserts between the last numeric column
+#: and the bar column once it exists (matches the table's own ``padding``).
+_FS_BAR_GAP = 2
+
+#: Comfortably wider than any realistic filesystem row could ever need, so
+#: measuring against it yields the columns' true desired width rather than
+#: one clipped to whatever space happens to be available (see
+#: ``_FilesystemBody`` -- ``Table.__rich_measure__`` clips to the width it is
+#: asked about, so asking about a merely "big enough" width would silently
+#: hide how much room the fixed columns actually want).
+_UNBOUNDED_WIDTH = 10_000
+
+
+def _filesystem_table(res: ResourceUsage, bar_width: int | None) -> Table:
+    """Build the filesystem table, with a usage bar column iff *bar_width* is given."""
     table = Table.grid(padding=(0, 2))
-    table.add_column(style="bold cyan")
+    table.add_column(style="bold cyan", no_wrap=True, max_width=14)
     table.add_column(justify="right")
     table.add_column(justify="right")
     table.add_column(justify="right")
-    table.add_column()
     table.add_column(justify="right")
+    if bar_width is not None:
+        table.add_column(no_wrap=True, width=bar_width)
+
+    def _row(*cells: RenderableType) -> None:
+        if bar_width is not None:
+            cells = (*cells, "")
+        table.add_row(*cells)
+
     if not res.filesystems:
-        table.add_row("Status", "", "", "", Text("no filesystems", style="dim"), "")
+        _row("Status", "", "", "", Text("no filesystems", style="dim"))
         return table
-    table.add_row("Mounted on", "Size", "Used", "Avail", "", "Use%")
+    _row("Mounted on", "Size", "Used", "Avail", "Use%")
     for fs in res.filesystems:
         status = classify(fs.percent, 80.0, 90.0)
         avail = max(fs.total - fs.used, 0)
-        table.add_row(
-            fs.mountpoint, format_bytes(fs.total), format_bytes(fs.used),
-            format_bytes(avail), render_bar(fs.percent, status, width=24),
+        cells: list[RenderableType] = [
+            _short_mount(fs.mountpoint, 14), format_bytes(fs.total), format_bytes(fs.used),
+            format_bytes(avail),
             Text(f"{fs.percent:.0f}%", style=STATUS_COLORS.get(status, "white")),
-        )
+        ]
+        if bar_width is not None:
+            cells.append(render_bar(fs.percent, status, width=bar_width))
+        table.add_row(*cells)
     return table
+
+
+class _FilesystemBody:
+    """The filesystem table, with a usage bar sized to whatever is left over.
+
+    An earlier task dropped the bar entirely to free up columns, having
+    measured the layout only at width 80 -- at the maintainer's actual
+    terminal (215 columns) that left roughly 90 columns unused. Simply
+    giving the bar a ``ratio`` column would bring it back, but Rich's own
+    column-shrinking falls back to reducing *every* column evenly once the
+    table no longer fits (see ``Table._calculate_column_widths``'s
+    last-resort ``ratio_reduce`` step) -- including columns marked
+    ``no_wrap``, which is exactly the squeeze the numeric columns must never
+    take. So the decision of whether the bar exists at all, and how wide it
+    is, is made here at render time against the real available width
+    (``options.max_width``, the width Rich has already allotted this cell)
+    rather than left to that generic algorithm: when there is not enough
+    left over for a bar that would actually read as one, the table falls
+    back to exactly the same rendering as before the bar existed.
+
+    The width is additionally capped at ``_MEMORY_BAR_WIDTH``: on a wide
+    terminal, leftover space alone would let this bar run far past the
+    RAM/SWAP bars in the block directly above it, so the two blocks stop
+    reading as a matched pair. Below the cap the bar keeps flexing with the
+    available width exactly as before.
+    """
+
+    def __init__(self, res: ResourceUsage) -> None:
+        self._res = res
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        base = _filesystem_table(self._res, bar_width=None)
+        natural_width = Measurement.get(
+            console, options.update_width(_UNBOUNDED_WIDTH), base
+        ).maximum
+        bar_width = min(
+            options.max_width - natural_width - _FS_BAR_GAP, _MEMORY_BAR_WIDTH
+        )
+        if bar_width >= _MIN_FS_BAR_WIDTH:
+            yield _filesystem_table(self._res, bar_width=bar_width)
+        else:
+            yield base
+
+
+def _filesystem_body(res: ResourceUsage) -> RenderableType:
+    return _FilesystemBody(res)
 
 
 def system_status(res: ResourceUsage | None, cfg: Config) -> Group:
@@ -415,6 +527,8 @@ def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
     if capacity is not None:
         summary.append_text(capacity)
     summary.append(f"  ·  {len(swarm.services)} services  ·  {n_stacks} stacks")
+    if swarm.containers:
+        summary.append(f"  ·  {len(swarm.containers)} containers")
     table.add_row("Swarm", summary)
     table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True, peers=peers))
     return table
@@ -554,10 +668,83 @@ def _stack_matrix(
     return table
 
 
-def _stack_columns(swarm: SwarmInfo, cfg: Config,
-                   health: HealthInfo | None = None) -> RenderableType:
+def _classify_origin(services, cfg, node_names):
+    """Sort one origin's services into (infrastructure, service, stackless).
+
+    The infrastructure/UI classification is unchanged -- it simply runs per
+    origin now, so a Compose `adminer` still joins the infra UIs and a Compose
+    project named `postgres` still counts as infrastructure. It classifies
+    *stacks*, though: an entry with no stack has no project to file under and
+    goes to the shared remainder regardless (see below).
+    """
     infra_keys = [k.lower() for k in cfg.infrastructure_stacks]
     ui_keys = [k.lower() for k in cfg.infra_ui_services]
+
+    def is_infra(name: str) -> bool:
+        return any(k in name.lower() for k in infra_keys)
+
+    def subrows_for(stack: str, group) -> list[tuple[str, list, str]]:
+        groups = _base_groups(group, node_names)
+        return [
+            (_strip_stack_prefix(base, stack) or base, groups[base],
+             _group_desc(groups[base]))
+            for base in sorted(groups, key=str.lower)
+        ]
+
+    # Stackless entries must bypass `_split_infra_uis` for the same reason
+    # they bypass `is_infra` below: a bare `docker run -d adminer` on a host
+    # with no Compose projects has no project to file under, UI-shaped or
+    # not. Splitting them out first, before the UI keywords are even
+    # consulted, keeps that true regardless of what the name matches.
+    stackful = [svc for svc in services if svc.stack is not None]
+    ungrouped = [svc for svc in services if svc.stack is None]
+
+    ui_services, remaining = _split_infra_uis(stackful, ui_keys, node_names)
+
+    stacks: dict[str, list] = {}
+    for svc in remaining:
+        stacks.setdefault(svc.stack, []).append(svc)
+
+    infra, service, stackless = [], [], []
+    if ui_services:
+        infra.append((INFRA_UI_STACK, _ui_subrows(ui_services, node_names, ui_keys)))
+    for name, svcs in stacks.items():
+        entry = (name, subrows_for(name, svcs))
+        (infra if is_infra(name) else service).append(entry)
+    for base, svcs in _base_groups(ungrouped, node_names).items():
+        # Stackless entries never enter this origin's tables, infrastructure-
+        # shaped or not. `infra`/`service` live under a "SWARM STACKS" or
+        # "COMPOSE PROJECTS" heading, and a `docker run -d redis` on a host
+        # with no Compose project at all was filed under a project that does
+        # not exist. Being infrastructure does not give an entry a project;
+        # the shared remainder table says "Standalone containers", which is
+        # true of a stackless Swarm service and a stackless container alike.
+        stackless.append((base, [(base, svcs, _group_desc(svcs))]))
+
+    return infra, service, stackless
+
+
+def _origin_block(title, infra, service, nodes, verdict) -> list[RenderableType]:
+    """The two tables of one origin, or nothing at all when it is empty.
+
+    Omitting an empty block is what keeps the more explicit layout readable: a
+    Mac with no Swarm services and a server with no Compose projects would each
+    otherwise carry a full block of dashes. Inside a block that does exist the
+    placeholder stays -- "running, but nothing here" is worth saying.
+    """
+    if not infra and not service:
+        return []
+    return [
+        _subhead(title),
+        _stack_matrix("Infrastructure", infra, nodes, verdict),
+        Text(""),
+        _stack_matrix("Service", service, nodes, verdict),
+        Text(""),
+    ]
+
+
+def _stack_columns(swarm: SwarmInfo, cfg: Config,
+                   health: HealthInfo | None = None) -> RenderableType:
     node_names = [n.name for n in swarm.nodes]
     by_kind: dict[str, ClusterService] = {
         service.kind: service for service in (health.clusters if health else [])
@@ -576,49 +763,27 @@ def _stack_columns(swarm: SwarmInfo, cfg: Config,
             node_count=node_count,
         )
 
-    def is_infra(name: str) -> bool:
-        return any(k in name.lower() for k in infra_keys)
-
-    def subrows_for(stack: str, services) -> list[tuple[str, list, str]]:
-        groups = _base_groups(services, node_names)
-        return [
-            (_strip_stack_prefix(base, stack) or base, groups[base], _group_desc(groups[base]))
-            for base in sorted(groups, key=str.lower)
-        ]
-
-    # Admin UIs leave their origin stack and form one pseudo stack.
-    ui_services, remaining = _split_infra_uis(swarm.services, ui_keys, node_names)
-
-    stacks: dict[str, list] = {}
-    ungrouped: list = []
-    for svc in remaining:
-        if svc.stack is None:
-            ungrouped.append(svc)
-        else:
-            stacks.setdefault(svc.stack, []).append(svc)
-
-    infra, service = [], []
-    if ui_services:
-        infra.append((INFRA_UI_STACK, _ui_subrows(ui_services, node_names, ui_keys)))
-    for name, svcs in stacks.items():
-        entry = (name, subrows_for(name, svcs))
-        (infra if is_infra(name) else service).append(entry)
-
-    # Ungrouped services: merge per-node replicas, classify each by base name.
-    container_rows = []
-    for base, svcs in _base_groups(ungrouped, node_names).items():
-        entry = (base, [(base, svcs, _group_desc(svcs))])
-        (infra if is_infra(base) else container_rows).append(entry)
-
-    # Per-service rows plus a description column make each table wide, so the
-    # three categories stack vertically (each full width) instead of side by side.
-    return Group(
-        _stack_matrix("Infrastruktur", infra, swarm.nodes, verdict),
-        Text(""),
-        _stack_matrix("Service", service, swarm.nodes, verdict),
-        Text(""),
-        _stack_matrix("Container (ohne Stack)", container_rows, swarm.nodes, verdict),
+    swarm_infra, swarm_service, swarm_rest = _classify_origin(
+        swarm.services, cfg, node_names
     )
+    compose_infra, compose_service, compose_rest = _classify_origin(
+        swarm.containers, cfg, node_names
+    )
+
+    parts: list[RenderableType] = []
+    parts += _origin_block("SWARM STACKS", swarm_infra, swarm_service,
+                           swarm.nodes, verdict)
+    parts += _origin_block("COMPOSE PROJECTS", compose_infra, compose_service,
+                           swarm.nodes, verdict)
+
+    stackless = swarm_rest + compose_rest
+    if stackless:
+        parts += [
+            _stack_matrix("Standalone containers", stackless, swarm.nodes, verdict),
+        ]
+    if not parts:
+        return Text("no services or containers", style="dim")
+    return Group(*parts)
 
 
 def services_section(swarm: SwarmInfo | None, cfg: Config,
@@ -627,14 +792,12 @@ def services_section(swarm: SwarmInfo | None, cfg: Config,
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
     if not swarm.enabled:
-        body = Group(_subhead("CONTAINER"), _stack_columns(swarm, cfg, health))
-        return section("DOCKER INFOS", body)
+        return section("DOCKER INFOS", _stack_columns(swarm, cfg, health))
 
     body = Group(
         _subhead("SWARM"),
         _swarm_body(swarm, health.peers if health else None),
         Text(""),
-        _subhead("STACKS"),
         _stack_columns(swarm, cfg, health),
     )
     return section("DOCKER INFOS", body)

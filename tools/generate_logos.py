@@ -27,6 +27,9 @@ LOGOS = [
     ("debian.png", "debian", 18),
     ("ubuntu.png", "ubuntu", 18),
     ("tux.png", "linux", 18),
+    ("rocky.png", "rocky", 18),
+    ("centos.png", "centos", 18),
+    ("bsd.png", "bsd", 18),
 ]
 
 _UPPER = "▀"
@@ -69,6 +72,42 @@ def render(path: Path, cols: int) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --- text logo ---------------------------------------------------------------
+#
+# macOS gets no emblem. Apple's trademark guidelines forbid third parties from
+# using the apple glyph but permit the word mark referentially. Earlier this
+# spelled the word out in stacked block-letter glyphs ("MAC" over "OS"), which
+# on screen read as ambiguous noise rather than as the word "macOS". A single
+# line reads unambiguously; the maintainer asked for a border around it too.
+
+# RGB of the boxed word mark. A neutral light grey reads on both dark and
+# light terminals; the other logos carry their own brand colours from their
+# PNGs.
+_TEXT_RGB = (220, 220, 224)
+
+# Inner box width in character cells (excludes the two corner/side glyphs),
+# chosen so "macOS" sits with the same padding as neofetch-style word marks
+# while the whole box -- corners included -- stays comfortably under the
+# ``LOGOS`` table's usual 18-cell budget.
+_BOX_INNER_WIDTH = 14
+
+
+def render_box_logo(word: str, inner_width: int = _BOX_INNER_WIDTH) -> str:
+    """Draw *word*, centred, inside a single-line rounded box.
+
+    One line reads as a word; five stacked rows of block glyphs read as a
+    shape you have to decode. Keeping the word's own case ("macOS", not
+    "MACOS") is what makes it legible at a glance instead of just present.
+    """
+    red, green, blue = _TEXT_RGB
+    prefix = f"\x1b[38;2;{red};{green};{blue}m"
+    top = "╭" + "─" * inner_width + "╮"
+    middle = "│" + word.center(inner_width) + "│"
+    bottom = "╰" + "─" * inner_width + "╯"
+    lines = [f"{prefix}{line}\x1b[0m" for line in (top, middle, bottom)]
+    return "\n".join(lines) + "\n"
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for source, name, cols in LOGOS:
@@ -79,6 +118,9 @@ def main() -> None:
         ansi = render(src, cols)
         (OUT / f"{name}.ans").write_text(ansi, encoding="utf-8")
         print(f"wrote {name}.ans ({len(ansi)} bytes)")
+
+    (OUT / "macos.ans").write_text(render_box_logo("macOS"), encoding="utf-8")
+    print("wrote macos.ans (text)")
 
 
 if __name__ == "__main__":

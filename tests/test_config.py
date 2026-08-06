@@ -131,3 +131,81 @@ def test_traefik_api_can_be_configured(tmp_path):
     cfg = load_config(str(path))
     assert cfg.traefik.url.endswith("/rawdata")
     assert cfg.traefik.cert == "/etc/ssl/panel.pem"
+
+
+def test_ignore_mountpoints_defaults_to_the_platform_list(monkeypatch, tmp_path):
+    from terminal_status_panel import platform_defaults
+
+    monkeypatch.setattr(platform_defaults.platform, "system", lambda: "Darwin")
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.ignore_mountpoints == [
+        "/System/Volumes/",
+        "/Library/Developer/CoreSimulator/",
+    ]
+    assert cfg.thresholds.swap_warning == 80.0
+
+
+def test_ignore_mountpoints_from_the_resources_block(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[resources]\nignore_mountpoints = ["/mnt/backup/", "/srv/scratch/"]\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    assert cfg.ignore_mountpoints == ["/mnt/backup/", "/srv/scratch/"]
+
+
+def test_an_explicitly_empty_ignore_list_hides_nothing(monkeypatch, tmp_path):
+    """Presence, not truthiness: [] means "hide nothing", not "use defaults"."""
+    from terminal_status_panel import platform_defaults
+
+    monkeypatch.setattr(platform_defaults.platform, "system", lambda: "Darwin")
+    path = tmp_path / "config.toml"
+    path.write_text("[resources]\nignore_mountpoints = []\n", encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.ignore_mountpoints == []
+
+
+# --- a bare scalar in a list-shaped key must not be split into characters ---
+
+def test_ignore_mountpoints_scalar_string_becomes_a_one_element_list(tmp_path):
+    """A bare string is valid TOML for this key and a plausible authoring
+    mistake. Splitting it with list("/System/Volumes/") used to yield
+    ['/', 'S', 'y', ...], and the lone "/" element prefix-matches every
+    mountpoint -- blanking the whole filesystem table with no error."""
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[resources]\nignore_mountpoints = "/System/Volumes/"\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    assert cfg.ignore_mountpoints == ["/System/Volumes/"]
+    # The regression this guards against: a lone "/" hides every mountpoint.
+    assert "/" not in cfg.ignore_mountpoints
+
+
+def test_ignore_mountpoints_wrong_type_falls_back_to_the_platform_default(
+    monkeypatch, tmp_path
+):
+    """Neither a list nor a string -- e.g. a stray number -- is not the typo
+    this helper forgives; it falls back to the default instead of raising."""
+    from terminal_status_panel import platform_defaults
+
+    monkeypatch.setattr(platform_defaults.platform, "system", lambda: "Darwin")
+    path = tmp_path / "config.toml"
+    path.write_text("[resources]\nignore_mountpoints = 42\n", encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.ignore_mountpoints == [
+        "/System/Volumes/",
+        "/Library/Developer/CoreSimulator/",
+    ]
+
+
+def test_critical_services_scalar_string_becomes_a_one_element_list(tmp_path):
+    """The same list(...) pitfall applies to critical_services, just with a
+    milder failure: it silently drops every character of the one intended
+    service name into its own (bogus) critical-service entry."""
+    path = tmp_path / "config.toml"
+    path.write_text('[services]\ncritical = "postgres"\n', encoding="utf-8")
+    cfg = load_config(path)
+    assert cfg.critical_services == ["postgres"]

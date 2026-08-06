@@ -38,6 +38,13 @@ def test_system_overview_handles_none():
     assert "not available" in out
 
 
+def test_missing_os_identity_is_named_not_hidden():
+    info = SystemInfo(hostname="host", os_name=None, os_version=None,
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root")
+    out = _text(panels.system_overview(info))
+    assert "OS identity unavailable" in out
+
+
 def test_memory_panel_renders_bars():
     res = ResourceUsage(
         mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
@@ -129,7 +136,7 @@ def test_services_section_merges_per_node_replicas():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "DOCKER INFOS" in out
-    assert "Infrastruktur" in out and "Service" in out and "Container (ohne Stack)" in out
+    assert "Infrastructure" in out and "Service" in out and "Standalone containers" in out
     assert "Description" in out
     assert "mgr-01" in out  # short node header
 
@@ -143,7 +150,7 @@ def test_services_section_merges_per_node_replicas():
     # traefik sub-rows without stack prefix.
     assert "sockproxy" in out
     assert "traefik_sockproxy" not in out
-    # registry -> Infrastruktur, watchtower -> Container, eduTAP -> Service.
+    # registry -> Infrastructure, watchtower -> Standalone containers, eduTAP -> Service.
     assert "registry" in out and "Docker registry" in out
     assert "watchtower" in out
     assert "eduTAP" in out
@@ -154,6 +161,108 @@ def test_services_section_merges_per_node_replicas():
 def test_services_section_unreachable():
     out = _text(panels.services_section(SwarmInfo(reachable=False), Config()))
     assert "not reachable" in out.lower()
+
+
+def _swarm_with_origins(services=(), containers=(), nodes=None) -> SwarmInfo:
+    """A Swarm carrying both Swarm services and plain/Compose containers.
+
+    Named distinctly from the ``_swarm_with(node_name, reachable)`` helper
+    further down this file, which builds a two-node Swarm for the WireGuard
+    tunnel tests -- same short name, different shape, would otherwise shadow
+    each other as module-level definitions.
+    """
+    return SwarmInfo(
+        reachable=True, enabled=True, node_role="manager", node_count=1,
+        services=list(services), containers=list(containers),
+        nodes=list(nodes or [SwarmNode(name="node-01", reachable=True,
+                                       role="manager", leader=True,
+                                       state="ready", availability="active")]),
+    )
+
+
+def _origin_status(name, stack=None, running=1, desired=1, node="node-01") -> ServiceStatus:
+    return ServiceStatus(
+        name=name, running_replicas=running, desired_replicas=desired, stack=stack,
+        tasks=[ServiceTask(node=node, state="running")] * running,
+    )
+
+
+def test_swarm_services_and_compose_projects_get_separate_blocks():
+    swarm = _swarm_with_origins(
+        services=[_origin_status("api", stack="backend")],
+        containers=[_origin_status("web", stack="portal")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "SWARM STACKS" in out
+    assert "COMPOSE PROJECTS" in out
+    swarm_at = out.index("SWARM STACKS")
+    compose_at = out.index("COMPOSE PROJECTS")
+    assert swarm_at < compose_at
+
+
+def test_an_empty_swarm_block_is_omitted_entirely():
+    """A wall of dashes is what the explicit layout must not degenerate into."""
+    swarm = _swarm_with_origins(containers=[_origin_status("web", stack="portal")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "SWARM STACKS" not in out
+    assert "COMPOSE PROJECTS" in out
+
+
+def test_an_empty_compose_block_is_omitted_entirely():
+    swarm = _swarm_with_origins(services=[_origin_status("api", stack="backend")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "COMPOSE PROJECTS" not in out
+    assert "SWARM STACKS" in out
+
+
+def test_an_empty_category_inside_a_present_block_keeps_its_placeholder():
+    """"Swarm is running but has no infrastructure" is a statement."""
+    swarm = _swarm_with_origins(services=[_origin_status("api", stack="backend")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "Infrastructure" in out
+    assert "—" in out
+
+
+def test_stackless_entries_from_both_origins_share_one_table():
+    swarm = _swarm_with_origins(
+        services=[_origin_status("lonely-service")],
+        containers=[_origin_status("lonely-container")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "Standalone containers" in out
+    assert "lonely-service" in out
+    assert "lonely-container" in out
+
+
+def test_an_infrastructure_shaped_stackless_entry_claims_no_project():
+    """`docker run -d redis` on a host with no Compose project at all.
+
+    ``redis`` and ``registry`` match ``infrastructure_stacks``, which used to
+    file them under this origin's Infrastructure table -- and so under a
+    "COMPOSE PROJECTS" / "SWARM STACKS" heading naming a project that does not
+    exist. The earlier fixtures were called ``lonely-*`` and matched no infra
+    keyword, which is why they never saw it. Being infrastructure-shaped does
+    not give an entry a project.
+    """
+    swarm = _swarm_with_origins(
+        services=[_origin_status("registry")],
+        containers=[_origin_status("redis")],
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "SWARM STACKS" not in out
+    assert "COMPOSE PROJECTS" not in out
+    assert "Infrastructure" not in out
+    standalone_at = out.index("Standalone containers")
+    assert out.index("redis") > standalone_at
+    assert out.index("registry") > standalone_at
+
+
+def test_the_summary_counts_containers_without_calling_them_services():
+    swarm = _swarm_with_origins(containers=[_origin_status("web", stack="portal"),
+                                            _origin_status("db", stack="portal")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "0 services" in out
+    assert "2 containers" in out
 
 
 def _mixed_availability_swarm() -> SwarmInfo:
@@ -231,9 +340,13 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
             # A UI deployed as its own stack.
             ServiceStatus("cloudbeaver_cloudbeaver", 1, 1, stack="cloudbeaver",
                           description="SQL UI", tasks=[ServiceTask(N1, "running")]),
-            # A UI running as a standalone container.
-            ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
-                          tasks=[ServiceTask(N1, "running")]),
+            # A UI deployed as its own single-service Compose stack -- the
+            # normal shape a Compose UI takes, and the case this hoisting
+            # must cover. (A genuinely stackless container is covered
+            # separately by test_a_stackless_admin_ui_claims_no_project,
+            # which must NOT be hoisted here.)
+            ServiceStatus("mongo-express", 1, 1, stack="mongo-express",
+                          description="Mongo UI", tasks=[ServiceTask(N1, "running")]),
             ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="frontend",
                           tasks=[ServiceTask(N1, "running")]),
             # A real infrastructure stack that sorts alphabetically before
@@ -244,14 +357,13 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
 
-    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastruktur"))
+    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastructure"))
     uis_at = _line_index(out, lambda ln: ln.strip().startswith("infra-uis"))
     kafka_at = _line_index(out, lambda ln: ln.strip().startswith("kafka"))
     service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
-    container_at = _line_index(out, lambda ln: ln.strip().startswith("Container (ohne"))
     es_at = _line_index(out, lambda ln: ln.strip().startswith("elasticsearch"))
 
-    # The pseudo stack heads the Infrastruktur block.
+    # The pseudo stack heads the Infrastructure block.
     assert infra_at < uis_at < kafka_at < service_at
     assert uis_at < es_at  # pseudo stack is hoisted, not sorted alphabetically
     # All three UI shapes ended up inside it.
@@ -260,25 +372,50 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
     # Stack prefixes are stripped on the sub-rows.
     assert "kafka_kafbat-ui" not in out
     assert "cloudbeaver_cloudbeaver" not in out
-    # Unrelated services keep their block.
-    assert service_at < _line_index(out, lambda ln: "eduTAP" in ln) < container_at
+    # Unrelated services keep their block. Every service in this fixture has a
+    # stack, so there is no stackless leftover and no "Standalone containers"
+    # table at all -- eduTAP only needs to land after the Service header.
+    assert service_at < _line_index(out, lambda ln: "eduTAP" in ln)
+    assert "Standalone containers" not in out
     # mongo-express must appear exactly once: under infra-uis, not left behind
-    # as a row in the "Container (ohne Stack)" matrix too (_line_index above
+    # as a row in the "Standalone containers" matrix too (_line_index above
     # only finds the FIRST match, so it would miss a stray leftover row).
     assert out.count("mongo-express") == 1
 
 
 def test_single_infra_ui_keeps_its_own_name():
+    """The Compose case: a UI deployed as its own single-service stack."""
     swarm = SwarmInfo(
         reachable=True, enabled=True, node_role="manager", node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[ServiceStatus("mongo-express", 1, 1, description="Mongo UI",
+        services=[ServiceStatus("mongo-express", 1, 1, stack="mongo-express",
+                                description="Mongo UI",
                                 tasks=[ServiceTask("srv-01", "running")])],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     # Not collapsed to a single row labelled 'infra-uis' — the UI stays named.
     assert "infra-uis" in out
     assert "mongo-express" in out
+
+
+def test_a_stackless_admin_ui_claims_no_project():
+    """A bare `docker run -d adminer` on a host with no Compose projects.
+
+    `adminer` matches DEFAULT_INFRA_UI_SERVICES, which used to be enough to
+    pull it into `_split_infra_uis` before the stackless split happened --
+    landing it under "COMPOSE PROJECTS / Infrastructure / infra-uis", a
+    project that does not exist. Being UI-shaped does not give a stackless
+    entry a project either; it belongs in the same remainder table as any
+    other stackless container.
+    """
+    swarm = _swarm_with_origins(containers=[_origin_status("adminer")])
+    out = _text(panels.services_section(swarm, Config()), width=170)
+    assert "COMPOSE PROJECTS" not in out
+    assert "SWARM STACKS" not in out
+    assert "Infrastructure" not in out
+    assert "infra-uis" not in out
+    assert "Standalone containers" in out
+    assert "adminer" in out
 
 
 def test_infra_ui_services_win_over_infrastructure_stacks():
@@ -565,14 +702,14 @@ def test_bugsink_is_infrastructure():
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
             ServiceStatus("bugsink_bugsink", 1, 1, stack="bugsink",
-                          description="Bugsink (Fehler-Tracker)",
+                          description="Bugsink (error tracker)",
                           tasks=[ServiceTask("srv-01", "running")]),
             ServiceStatus("app_web", 1, 1, stack="app",
                           tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
-    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastruktur"))
+    infra_at = _line_index(out, lambda ln: ln.strip().startswith("Infrastructure"))
     service_at = _line_index(out, lambda ln: ln.strip().startswith("Service"))
     bugsink_at = _line_index(out, lambda ln: ln.strip().startswith("bugsink"))
     assert infra_at < bugsink_at < service_at
@@ -676,3 +813,167 @@ def test_stale_handshake_is_not_reported_as_none():
     output = _text(panels.services_section(swarm, Config(), health))
     assert "no handshake" not in output
     assert "5:00" in output
+
+
+def test_long_address_lists_are_capped_with_a_visible_remainder():
+    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
+                      ip_addresses=[f"10.0.0.{n}" for n in range(101, 113)])
+    out = _text(panels.system_overview(info), width=200)
+    assert "10.0.0.108" in out
+    assert "10.0.0.109" not in out
+    assert "(+4 more)" in out
+
+
+def test_short_address_lists_show_no_remainder():
+    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
+                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
+                      ip_addresses=["10.0.0.1", "10.0.0.2"])
+    out = _text(panels.system_overview(info), width=200)
+    assert "more)" not in out
+
+
+def test_long_mount_paths_keep_their_distinguishing_tail():
+    path = "/Library/Developer/CoreSimulator/Volumes/iOS_23C54"
+    shortened = panels._short_mount(path, 15)
+    assert len(shortened) == 15
+    assert shortened.startswith("…")
+    assert shortened.endswith("iOS_23C54")
+
+
+def test_short_mount_paths_are_left_alone():
+    assert panels._short_mount("/", 15) == "/"
+    assert panels._short_mount("/Volumes/Data2", 15) == "/Volumes/Data2"
+
+
+def test_short_mount_handles_width_one():
+    """Edge case: width=1 should return just the ellipsis, not the full path."""
+    assert panels._short_mount("/Volumes/Data2", 1) == "…"
+    assert len(panels._short_mount("/Volumes/Data2", 1)) == 1
+
+
+def _fs_regression_resource() -> ResourceUsage:
+    return ResourceUsage(
+        mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
+        swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
+        filesystems=[
+            # total=950.0 GB, used=850.0 GB, avail=total-used=100.0 GB
+            FilesystemUsage("/", 1_020_054_732_800, 912_680_550_400, 89.0),
+            # total=500.0 GB, used=125.0 GB, avail=total-used=375.0 GB
+            FilesystemUsage("/Volumes/Data2", 536_870_912_000, 134_217_728_000, 25.0),
+        ],
+    )
+
+
+def test_filesystem_numeric_columns_not_truncated_in_system_status():
+    """Regression test: mount column must not squeeze numeric columns.
+
+    The filesystem table shares a narrow pane with memory; a fixed width mount
+    column was starving Size, Used, Avail to a few characters each. The fix
+    uses max_width instead of width. This test exercises the real constraint
+    by rendering through system_status (which applies the ratio-based split)
+    at a narrow width, and checking that numeric values are not truncated.
+
+    The fixture values are deliberately chosen to format to five-character
+    figures (three integer digits, a dot, one decimal digit, e.g. "950.0")
+    plus a unit. Short values like "1.8 TB" survive even a squeezed column
+    and would not discriminate between the fixed and broken layouts; the
+    original defect only mangled wider figures, e.g. "926.4" rendered as
+    "926…" in a four-character column.
+    """
+    # Render at width 100, which puts the filesystem table in a narrow space
+    # -- narrow enough to leave no room for a usage bar (see the width-80/215
+    # cases below), wide enough that Size/Used/Avail still fit on one line.
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=100)
+
+    # Every numeric figure must appear intact, not cut mid-number. Each
+    # assertion is pinned individually -- an any() over alternatives would
+    # pass even if most of the expected values were missing.
+    assert "950.0 GB" in out
+    assert "850.0 GB" in out
+    assert "100.0 GB" in out
+    assert "500.0 GB" in out
+    assert "125.0 GB" in out
+    assert "375.0 GB" in out
+
+    # Column headers alone are not proof: the original defect left them
+    # intact, which is precisely why it slipped through.
+    assert "/" in out
+    assert "/Volumes/Data2" in out
+
+
+def test_filesystem_numeric_columns_survive_a_narrow_terminal():
+    """Regression test: restoring the usage bar must not re-break narrow terminals.
+
+    The usage bar removed by an earlier task was restored to flex with the
+    available width (see ``_FilesystemBody``) rather than claim a fixed
+    share of it. At a genuinely narrow terminal -- width 80, the fallback
+    width used when a shell is not attached to a TTY, not just a "somewhat
+    narrow" 100 -- there is no room left for a bar at all once the numeric
+    columns and the mount column have what they need, so the bar must
+    disappear instead of taking space from them.
+    """
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=80)
+    fs_block = out[out.index("FILESYSTEM USAGE"):]
+
+    # No mid-number cut, e.g. "926…": the fixed columns render exactly as
+    # they did before the bar existed, wrapped onto extra lines rather than
+    # truncated, because there is nothing left over for the bar to claim.
+    assert "…" not in fs_block
+    for fragment in ("950.0", "850.0", "100.0", "500.0", "125.0", "375.0", "GB"):
+        assert fragment in fs_block
+    assert "/Volumes/Data2" in fs_block
+
+
+def test_filesystem_usage_bar_reappears_on_a_wide_terminal():
+    """The usage bar an earlier task removed must come back once there is room.
+
+    At the maintainer's actual terminal (215 columns) there are roughly 90
+    columns unused to the right of the filesystem table; the bar should
+    claim them rather than stay gone everywhere just because it must vanish
+    at width 80. The numeric columns must still show their complete,
+    single-line values -- the bar is an addition beside Use%, not something
+    that gets to squeeze them.
+    """
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=215)
+    fs_block = out[out.index("FILESYSTEM USAGE"):]
+
+    assert "950.0 GB" in fs_block
+    assert "850.0 GB" in fs_block
+    assert "100.0 GB" in fs_block
+    assert "500.0 GB" in fs_block
+    assert "125.0 GB" in fs_block
+    assert "375.0 GB" in fs_block
+    assert "/Volumes/Data2" in fs_block
+    assert "Use%" in fs_block  # the percentage column stays, not replaced
+
+    # The bar itself: filled cells for the 89%-full "/" and the 25%-full
+    # "/Volumes/Data2" both present, and the fuller one has strictly more
+    # filled cells than the emptier one.
+    lines = [line for line in fs_block.splitlines() if "█" in line or "░" in line]
+    assert len(lines) == 2
+    filled_counts = [line.count("█") for line in lines]
+    assert all(count > 0 for count in filled_counts)
+    assert filled_counts[0] > filled_counts[1]
+
+
+def test_filesystem_usage_bar_is_capped_to_the_memory_bar_width():
+    """The filesystem bar must not outgrow the RAM/SWAP bars above it.
+
+    At width 215 there are roughly 90 columns free to the right of the
+    filesystem table -- flexing all the way into them makes the filesystem
+    block visibly heavier than the MEMORY & SWAP block directly above it,
+    even though both present a single measurement per row. The filesystem
+    bar must stop growing once it reaches the memory bars' own width
+    (``panels._MEMORY_BAR_WIDTH``, currently 44), continuing to flex only
+    below that cap -- which the width-80 and width-100 tests above already
+    cover.
+    """
+    out = _text(panels.system_status(_fs_regression_resource(), Config()), width=215)
+    fs_block = out[out.index("FILESYSTEM USAGE"):]
+
+    bar_lines = [line for line in fs_block.splitlines() if "█" in line or "░" in line]
+    assert len(bar_lines) == 2
+    for line in bar_lines:
+        bar_width = line.count("█") + line.count("░")
+        assert bar_width == panels._MEMORY_BAR_WIDTH

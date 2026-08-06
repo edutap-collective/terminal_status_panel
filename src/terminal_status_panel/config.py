@@ -6,6 +6,8 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 
+from . import platform_defaults
+
 #: Docker service label read as the per-service description column.
 #: Vendor-neutral, as befits a public package.
 DEFAULT_DESCRIPTION_LABEL = "status.description"
@@ -23,7 +25,7 @@ DEFAULT_CONFIG_PATH = "/etc/terminal-status-panel/config.toml"
 class Thresholds:
     memory_warning: float = 75.0
     memory_critical: float = 90.0
-    swap_warning: float = 1.0
+    swap_warning: float = field(default_factory=platform_defaults.swap_warning)
     filesystem_warning: float = 80.0
     filesystem_critical: float = 90.0
     load_warning: float = 0.8  # per-CPU multiplier
@@ -117,6 +119,9 @@ class Config:
     infra_ui_services: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRA_UI_SERVICES)
     )
+    ignore_mountpoints: list[str] = field(
+        default_factory=platform_defaults.ignore_mountpoints
+    )
     thresholds: Thresholds = field(default_factory=Thresholds)
     health: HealthConfig = field(default_factory=HealthConfig)
     traefik: TraefikApiConfig = field(default_factory=TraefikApiConfig)
@@ -127,6 +132,29 @@ def _section(data: dict, *keys: str) -> dict:
     for key in keys:
         node = node.get(key, {}) if isinstance(node, dict) else {}
     return node if isinstance(node, dict) else {}
+
+
+def _list_setting(value: object, default: list) -> list:
+    """Coerce a list-shaped config *value* to a list, forgiving one typo.
+
+    ``ignore_mountpoints = "/System/Volumes/"`` is valid TOML for a key that
+    is meant to hold a list, and it is a plausible mistake -- there is only
+    one value, so why wrap it in brackets? ``list(...)`` on that string does
+    not raise; it splits it into its characters, and the lone "/" element
+    then prefix-matches everything, blanking a whole config-driven list with
+    no error. A bare string is special-cased into a one-element list, rather
+    than rejected, because what the author meant is unambiguous. Anything
+    else that is not a list -- a number, a table, a missing key (``None``) --
+    is not that typo, so it falls back to *default* instead of guessing.
+
+    Always returns a fresh list: neither *value* nor *default* is handed back
+    by reference, so the caller's copy can never be mutated through this one.
+    """
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str):
+        return [value]
+    return list(default)
 
 
 def _health_config(data: dict) -> HealthConfig:
@@ -196,6 +224,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     services = _section(data, "services")
     infra = docker.get("infrastructure_stacks", services.get("infrastructure", None))
     infra_uis = docker.get("infra_ui_services", None)
+    resources = _section(data, "resources")
+    # Presence, not truthiness: an explicit [] means "hide nothing" and must not
+    # be replaced by the platform defaults it was written to override.
+    ignore = resources.get("ignore_mountpoints", None)
     traefik_section = _section(data, "traefik")
     traefik = TraefikApiConfig(
         url=traefik_section.get("url") or None,
@@ -206,13 +238,12 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
-        critical_services=list(services.get("critical", [])),
+        critical_services=_list_setting(services.get("critical"), []),
         description_label=str(docker.get("description_label",
                                         DEFAULT_DESCRIPTION_LABEL)),
-        infrastructure_stacks=list(infra) if infra is not None
-        else list(DEFAULT_INFRASTRUCTURE_STACKS),
-        infra_ui_services=list(infra_uis) if infra_uis is not None
-        else list(DEFAULT_INFRA_UI_SERVICES),
+        infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
+        infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),
+        ignore_mountpoints=_list_setting(ignore, platform_defaults.ignore_mountpoints()),
         thresholds=thresholds,
         health=_health_config(data),
         traefik=traefik,
