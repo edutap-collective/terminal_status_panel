@@ -201,6 +201,18 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             labels = container_labels(container)
             if SWARM_SERVICE_LABEL in labels:
                 continue
+            # NOT sparse-safe, unlike `container_labels` right above it.
+            # `containers.list()` inspects, so `.name` is a real string here.
+            # Under `containers.list(sparse=True)` -- which `ContainerIndex` in
+            # clusters.py uses -- docker-py's `Container.name` reads `Name`,
+            # which the list API does not send, and the attribute is `None`:
+            # this would then silently yield an empty origin *and* an empty
+            # target, with no error and no failing test -- the sparse-shape
+            # test in tests/test_collectors_traefik.py passes only because its
+            # fake sets `.name`, which a real sparse object does not. Anyone
+            # switching this collector to sparse must read the name through
+            # `clusters.container_name`, which looks at the list response's
+            # `Names` array as well.
             name = getattr(container, "name", "") or ""
             # origin (who declared this router) and docker_name (what
             # ServiceStatus.name calls it) differ for a Compose container: the
