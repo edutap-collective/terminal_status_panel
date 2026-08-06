@@ -23,8 +23,8 @@ ARGS = [
     "--entryPoints.login_example_net.forwardedHeaders.trustedIPs=0.0.0.0/0",
     "--entryPoints.portalmgmt.address=:2020",
     "--entryPoints.portalmgmt.forwardedHeaders.trustedIPs=0.0.0.0/0",
-    "--entryPoints.www_portal_uni_muenchen_de.address=:2010",
-    "--entryPoints.www_portal_uni_muenchen_de.forwardedHeaders.trustedIPs=0.0.0.0/0",
+    "--entryPoints.www_example_net.address=:2010",
+    "--entryPoints.www_example_net.forwardedHeaders.trustedIPs=0.0.0.0/0",
     "--entryPoints.db-ui.address=:2008",
     "--entryPoints.kafbat.address=:2006",
 ]
@@ -36,7 +36,7 @@ def test_both_spellings_of_the_prefix_are_found():
     names = {ep.name for ep in parse.parse_entrypoints(ARGS)}
     assert names == {
         "dashboard", "ping", "default", "https",
-        "login_example_net", "portalmgmt", "www_portal_uni_muenchen_de",
+        "login_example_net", "portalmgmt", "www_example_net",
         "db-ui", "kafbat",
     }
 
@@ -55,7 +55,7 @@ def test_entrypoints_keep_the_order_the_arguments_declare_them_in():
     names = [ep.name for ep in parse.parse_entrypoints(ARGS)]
     assert names[:4] == ["dashboard", "ping", "default", "https"]
     assert names[4:] == [
-        "login_example_net", "portalmgmt", "www_portal_uni_muenchen_de",
+        "login_example_net", "portalmgmt", "www_example_net",
         "db-ui", "kafbat",
     ]
 
@@ -254,7 +254,7 @@ http:
             entryPoints:
             - login_example_net
             - portalmgmt
-            - www_portal_uni_muenchen_de
+            - www_example_net
             - db-ui
             - kafbat
             - default
@@ -295,7 +295,7 @@ def test_the_capitalised_entrypoints_key_is_also_read():
     routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
     ping = [r for r in routers if r.name == "ping-router"][0]
     assert ping.entrypoints == [
-        "login_example_net", "portalmgmt", "www_portal_uni_muenchen_de",
+        "login_example_net", "portalmgmt", "www_example_net",
         "db-ui", "kafbat", "default",
     ]
 
