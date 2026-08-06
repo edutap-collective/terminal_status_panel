@@ -573,16 +573,23 @@ service, on a `docker compose` container, or on a bare `docker run`
 container. The panel reads all three.
 
 A router coming from a container carries two different names, and the panel
-keeps them apart on purpose. Its **origin** — shown in brackets next to the
-router's name, `[course-statistics-db]` for example — is the container's own
-name, exactly as `docker ps` shows it, so a human can trace the router back
-to what declared it. Its **target**, the name matched against Docker to
-produce the `✅ 1/1`-style verdict, is a different string for a Compose
-container: Compose sets `com.docker.compose.service` to the *service* name
-(`db`), not the container's own name (`course-statistics-db`), and `db` is
-also what `collectors/docker.py` calls that container everywhere else in the
-panel. Matching a router's target against the container's own name instead
-would render a false `✗ no such service` for a target that is running and
+keeps them apart on purpose. Its **origin** is the container's own name,
+exactly as `docker ps` shows it, so a human can trace the router back to
+what declared it — but the tree only ever shows it for a router that lands
+in **ORPHANED ROUTERS**, in brackets after the finding, `[course-statistics-db]`
+for example. A correctly-wired router — the common case — appears in the
+normal per-entrypoint tree with no origin shown at all; `_router_lines`,
+which renders that tree, never reads `router.origin`. Brackets are therefore
+a property of the orphan listing, not a mark of where a router came from in
+general, and their absence next to a healthy router does not mean the origin
+was not read. Its **target**, the name matched against Docker to produce the
+`✅ 1/1`-style verdict shown on every router regardless of where it landed,
+is a different string for a Compose container: Compose sets
+`com.docker.compose.service` to the *service* name (`db`), not the
+container's own name (`course-statistics-db`), and `db` is also what
+`collectors/docker.py` calls that container everywhere else in the panel.
+Matching a router's target against the container's own name instead would
+render a false `✗ no such service` for a target that is running and
 correctly wired — origin and target answer "who declared this?" and "what
 does it point at?", and only one of those two questions is "the container's
 own name". `compose_identity()` in `collectors/_labels.py` computes the
@@ -688,21 +695,30 @@ signal that their absence below is a read failure, not a finding.
 
 Reading labels from containers (above) means a router can now be *declared*
 anywhere. Two other things this collector reads, it still reads only from
-the Traefik **Swarm service** — and on a host where Traefik itself runs as a
-container rather than a Swarm service, both of these go quiet instead of
-loud, which is the opposite of how a genuine gap should behave.
+the Traefik **Swarm service**, and a host where Traefik runs as a container
+rather than a Swarm service loses both — though not in the same way, as the
+two paragraphs below show: one announces the gap loudly, the other can stay
+completely silent about it.
 
 **Entrypoints.** `--entryPoints.*` is read from the Traefik service's own
 `TaskTemplate.ContainerSpec.Args`, a piece of the Docker API that only a
 Swarm *service* carries. A container-hosted Traefik has no such spec, so
-`info.entrypoints` comes back empty, the tree cannot be drawn at all, and
-every router — however it was declared — lands in the **ORPHANED ROUTERS**
-block instead. There it reads, in yellow, ``⚠️ … entrypoint `https` — no
-entrypoint could be read``, never the red ``✗ … entrypoint `https` does not
-exist`` a router with a genuine typo gets: with no entrypoint list to check
+`info.entrypoints` comes back empty — and the section says so plainly: a
+yellow `⚠️ no entrypoints found — the tree cannot be drawn, the routers
+below could not be placed` banner opens the section whenever this happens,
+so the *cause* is never quiet. What the banner does not spell out is its
+second-order effect: with no entrypoint list, every router — however it was
+declared — falls into the **ORPHANED ROUTERS** block instead of the tree,
+where it reads, in yellow, ``⚠️ … entrypoint `https` — no entrypoint could
+be read``, never the red ``✗ … entrypoint `https` does not exist`` a router
+with a genuinely missing entrypoint gets: with no entrypoint list to check
 against, the code cannot tell "not on this one" from "nothing was read" and
-declines to accuse. **The absence of red orphan findings on such a host is
-not a clean bill of health — the check that would produce them never ran.**
+declines to accuse. So while the section is loud about not having read the
+entrypoints, it says nothing further about whether any router points at one
+that does not exist — that specific check simply does not run, for any
+router, on such a host. **A container-hosted Traefik with no red orphan
+findings has not been shown clean; the check that would have found a
+problem never ran.**
 
 **The file provider.** This collector reaches `traefik.yml` only through a
 Docker Config mounted into a Swarm service; it never reads a container's
