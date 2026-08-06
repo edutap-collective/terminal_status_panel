@@ -15,11 +15,11 @@ import docker
 
 from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
 from ..model import ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
+from ._labels import SWARM_SERVICE_LABEL, container_labels
 
 STACK_LABEL = "com.docker.stack.namespace"
 COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
-SWARM_SERVICE_LABEL = "com.docker.swarm.service.name"
 
 #: Raw Docker states a container without Compose labels must be in to appear at
 #: all. Anything else is a leftover from a one-off `docker run`, and on a
@@ -127,30 +127,6 @@ def _swarm_services(client, critical: set[str], description_label: str,
     return services
 
 
-def _container_labels(container) -> dict:
-    """Every label on *container*, whichever response shape produced it.
-
-    ``containers.list()`` -- what this collector calls today -- issues a full
-    inspect per container (docker-py implements ``list()`` as one ``get()``
-    per result) and carries labels under ``attrs["Config"]["Labels"]``, with
-    ``Config`` present. ``containers.list(sparse=True)`` -- the optimisation
-    ``ContainerIndex`` in ``clusters.py`` already uses for the health checks,
-    and the one an unwary caller would reach for here too, since
-    ``containers.list(all=True)`` is the one place this branch increases
-    login-path runtime -- returns the raw list-API response instead: labels
-    sit at the top level, ``attrs["Labels"]``, and there is no ``Config`` key
-    at all. Preferring ``Config.Labels`` and falling back to the top-level key
-    keeps this working under either shape; switching to sparse without this
-    guard would silently strip every container of its stack, description and
-    criticality, and break the ``SWARM_SERVICE_LABEL`` filter so Swarm
-    services appeared twice -- with no error and no failing test.
-    """
-    attrs = getattr(container, "attrs", {}) or {}
-    if "Config" in attrs:
-        return dict((attrs["Config"] or {}).get("Labels") or {})
-    return dict(attrs.get("Labels") or {})
-
-
 def _raw_state(container) -> str:
     """The Docker state, ignoring any healthcheck verdict."""
     attrs = getattr(container, "attrs", {}) or {}
@@ -189,7 +165,7 @@ def _container_groups(client) -> dict[tuple[str | None, str], list]:
     """
     groups: dict[tuple[str | None, str], list] = {}
     for container in client.containers.list(all=True):
-        labels = _container_labels(container)
+        labels = container_labels(container)
         if SWARM_SERVICE_LABEL in labels:
             continue  # already reported through services.list()
         if _is_completed_job(container):
