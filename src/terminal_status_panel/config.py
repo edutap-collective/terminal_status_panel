@@ -134,6 +134,29 @@ def _section(data: dict, *keys: str) -> dict:
     return node if isinstance(node, dict) else {}
 
 
+def _list_setting(value: object, default: list) -> list:
+    """Coerce a list-shaped config *value* to a list, forgiving one typo.
+
+    ``ignore_mountpoints = "/System/Volumes/"`` is valid TOML for a key that
+    is meant to hold a list, and it is a plausible mistake -- there is only
+    one value, so why wrap it in brackets? ``list(...)`` on that string does
+    not raise; it splits it into its characters, and the lone "/" element
+    then prefix-matches everything, blanking a whole config-driven list with
+    no error. A bare string is special-cased into a one-element list, rather
+    than rejected, because what the author meant is unambiguous. Anything
+    else that is not a list -- a number, a table, a missing key (``None``) --
+    is not that typo, so it falls back to *default* instead of guessing.
+
+    Always returns a fresh list: neither *value* nor *default* is handed back
+    by reference, so the caller's copy can never be mutated through this one.
+    """
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, str):
+        return [value]
+    return list(default)
+
+
 def _health_config(data: dict) -> HealthConfig:
     """Parse the [health] block. A malformed value falls back to its default."""
     health = _section(data, "health")
@@ -215,15 +238,12 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
-        critical_services=list(services.get("critical", [])),
+        critical_services=_list_setting(services.get("critical"), []),
         description_label=str(docker.get("description_label",
                                         DEFAULT_DESCRIPTION_LABEL)),
-        infrastructure_stacks=list(infra) if infra is not None
-        else list(DEFAULT_INFRASTRUCTURE_STACKS),
-        infra_ui_services=list(infra_uis) if infra_uis is not None
-        else list(DEFAULT_INFRA_UI_SERVICES),
-        ignore_mountpoints=list(ignore) if ignore is not None
-        else platform_defaults.ignore_mountpoints(),
+        infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
+        infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),
+        ignore_mountpoints=_list_setting(ignore, platform_defaults.ignore_mountpoints()),
         thresholds=thresholds,
         health=_health_config(data),
         traefik=traefik,
