@@ -546,10 +546,15 @@ this blind spot is specific to the health section's per-node view.
 Traefik's entrypoint → router → middleware → service wiring straight from the
 Docker API: the entrypoints from the Traefik service's own command arguments,
 the routers/middlewares/services from every Swarm service's `traefik.http.*`
-labels, and the file-provider routers from the mounted Docker configs
-(`traefik_dynamic*`) — the `api` and `ping-router` entries live only there. No
-credentials beyond the Docker socket are needed, and no change to the Traefik
-deployment.
+labels **and** from every plain or Compose container's — a Traefik router can
+be declared on a service, a `docker compose` container, or a bare
+`docker run` container, and the panel reads all three the same way — and the
+file-provider routers from the mounted Docker configs (`traefik_dynamic*`) —
+the `api` and `ping-router` entries live only there. A container that is
+itself a Swarm task is skipped: its labels are its service's own, already
+read once from the services list, and reading them again from the container
+list would double-count every Swarm-hosted router. No credentials beyond the
+Docker socket are needed, and no change to the Traefik deployment.
 
 **Only the config generations the Traefik service actually mounts are read.**
 Swarm keeps every generation of a config — `traefik_dynamic_yml_v1` through
@@ -561,11 +566,53 @@ be found at all, no generation is guessed: the file-provider routers are
 reported as missing, with the reason named, rather than shown as if they were
 current.
 
+### Labels from containers, not only Swarm services
+
+A `traefik.http.*` label works the same wherever it is declared: on a Swarm
+service, on a `docker compose` container, or on a bare `docker run`
+container. The panel reads all three.
+
+A router coming from a container carries two different names, and the panel
+keeps them apart on purpose. Its **origin** — shown in brackets next to the
+router's name, `[course-statistics-db]` for example — is the container's own
+name, exactly as `docker ps` shows it, so a human can trace the router back
+to what declared it. Its **target**, the name matched against Docker to
+produce the `✅ 1/1`-style verdict, is a different string for a Compose
+container: Compose sets `com.docker.compose.service` to the *service* name
+(`db`), not the container's own name (`course-statistics-db`), and `db` is
+also what `collectors/docker.py` calls that container everywhere else in the
+panel. Matching a router's target against the container's own name instead
+would render a false `✗ no such service` for a target that is running and
+correctly wired — origin and target answer "who declared this?" and "what
+does it point at?", and only one of those two questions is "the container's
+own name". `compose_identity()` in `collectors/_labels.py` computes the
+target name once, and both the Docker collector and the Traefik collector
+call it, so the two cannot silently drift apart. A container with no Compose
+label — a bare `docker run` — has no second name: origin and target are the
+same string.
+
+**A known ambiguity, not fixed here.** A container's target name is unique
+only *within* the Compose project (or stack) that started it — the panel has
+no notion of a project-qualified identity. Two unrelated Compose projects
+that each define a service called `db` both produce a target named `db`, and
+a router pointing at `db` matches both: the verdict sums their replica
+counts into one number, observed live as `✅ 2/2` where a single,
+correctly-wired container should have read `✅ 1/1`. An inflated count for a
+common service name (`db`, `web`, `api`, …) is this ambiguity showing up, not
+the panel double-counting a healthy service or Traefik being misconfigured.
+It predates this work and lives in `collectors/docker.py`'s choice to key a
+container's identity by service name alone, not by (project, service) —
+fixing it would mean deciding how a router should express *which* project's
+`db` it means, which is a design question for another day.
+
 The panel renders one branch per entrypoint (sorted by port), each listing
 its routers (dimmed when they come from the file provider), their
-middlewares, and the Docker service each one points at — cross-checked
-against the same Swarm service data the DOCKER INFOS section uses, through
-the same `service_verdict`, so one service never gets two verdicts. That
+middlewares, and the Docker service or container each one points at —
+cross-checked against the same Swarm service **and container** data the
+DOCKER INFOS section uses, through the same `service_verdict`, so one target
+never gets two verdicts. A target that matches neither a service nor a
+container, on a daemon that actually answered, still reads `✗ no such
+service`, in red. That
 data is collected whenever the `traefik` section runs, including for a bare
 `status-traefik`; the DOCKER INFOS block itself is *not* rendered as a side
 effect. When the Docker daemon gives no answer at all — no client, or an
@@ -636,6 +683,49 @@ all, a `file provider unreadable: …` warning appears above the tree — a
 partial-read failure, distinct from the routers simply being empty. Because
 `api` and `ping-router` live only in the file provider, this warning is the
 signal that their absence below is a read failure, not a finding.
+
+### What is still not read when Traefik itself runs as a container
+
+Reading labels from containers (above) means a router can now be *declared*
+anywhere. Two other things this collector reads, it still reads only from
+the Traefik **Swarm service** — and on a host where Traefik itself runs as a
+container rather than a Swarm service, both of these go quiet instead of
+loud, which is the opposite of how a genuine gap should behave.
+
+**Entrypoints.** `--entryPoints.*` is read from the Traefik service's own
+`TaskTemplate.ContainerSpec.Args`, a piece of the Docker API that only a
+Swarm *service* carries. A container-hosted Traefik has no such spec, so
+`info.entrypoints` comes back empty, the tree cannot be drawn at all, and
+every router — however it was declared — lands in the **ORPHANED ROUTERS**
+block instead. There it reads, in yellow, ``⚠️ … entrypoint `https` — no
+entrypoint could be read``, never the red ``✗ … entrypoint `https` does not
+exist`` a router with a genuine typo gets: with no entrypoint list to check
+against, the code cannot tell "not on this one" from "nothing was read" and
+declines to accuse. **The absence of red orphan findings on such a host is
+not a clean bill of health — the check that would produce them never ran.**
+
+**The file provider.** This collector reaches `traefik.yml` only through a
+Docker Config mounted into a Swarm service; it never reads a container's
+filesystem or its bind mounts. A container-hosted Traefik's `traefik.yml`,
+mounted the ordinary Compose way, is invisible to the Docker API entirely —
+there is no path to it. Concretely: if no `traefik_dynamic*` Docker config
+exists at all, which is the normal state for a deployment that never created
+one, the section prints **no warning whatsoever**; `api@internal` and the
+ping router are simply absent from the tree, exactly as they would be for a
+Swarm deployment that genuinely declares no file provider. The two cases are
+not distinguishable from the panel's output. Only when a *stale*
+`traefik_dynamic*` config survives from an earlier, Swarm-based deployment
+of the same Traefik does the `file provider unreadable: traefik service not
+found, so which config generations are mounted cannot be determined` warning
+above fire — because in that case the collector can see a config, just not
+one it can still tie to a live service.
+
+A third, narrower gap: a `containers.list()` call that fails is recorded on
+`TraefikInfo.container_error`, the container-side counterpart of
+`file_provider_error`. Nothing in the panel currently renders it, unlike its
+counterpart — a Docker permission or connectivity problem that blocks
+reading container labels degrades silently to "labels from Swarm services
+only," with no line anywhere telling you that happened.
 
 ### The optional live cross-check
 
