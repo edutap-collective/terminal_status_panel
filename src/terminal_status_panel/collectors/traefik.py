@@ -207,8 +207,8 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             # container is named "course-statistics-db", the service it
             # matches against is "db". compose_identity computes the same
             # name collectors/docker.py gives that container's ServiceStatus,
-            # so the two stay in step without a second, drifting copy of that
-            # rule here.
+            # the project-label condition included, so the two stay in step
+            # without a second, drifting copy of that rule here.
             routers, middlewares, refs = parse_labels(
                 labels, origin=name, docker_name=compose_identity(labels, name)
             )

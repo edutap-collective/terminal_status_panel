@@ -1,7 +1,10 @@
 import httpx
 
 from terminal_status_panel.collectors import traefik as collector
-from terminal_status_panel.collectors._labels import COMPOSE_SERVICE_LABEL
+from terminal_status_panel.collectors._labels import (
+    COMPOSE_PROJECT_LABEL,
+    COMPOSE_SERVICE_LABEL,
+)
 from terminal_status_panel.config import Config, TraefikApiConfig
 from terminal_status_panel.model import TraefikRouter
 
@@ -135,6 +138,9 @@ def test_a_compose_container_s_router_matches_the_compose_service_name():
             "traefik.http.routers.db.rule": "Host(`stats.example.net`)",
             "traefik.http.routers.db.entrypoints": "https",
             "traefik.http.services.db.loadbalancer.server.port": "5432",
+            # Both labels, which is the only shape Compose produces: the
+            # service name identifies this container within its project.
+            COMPOSE_PROJECT_LABEL: "course-statistics",
             COMPOSE_SERVICE_LABEL: "db",
         }),
     ])

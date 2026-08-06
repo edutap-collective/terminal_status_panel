@@ -15,10 +15,14 @@ import docker
 
 from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
 from ..model import ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
-from ._labels import SWARM_SERVICE_LABEL, compose_identity, container_labels
+from ._labels import (
+    COMPOSE_PROJECT_LABEL,
+    SWARM_SERVICE_LABEL,
+    compose_identity,
+    container_labels,
+)
 
 STACK_LABEL = "com.docker.stack.namespace"
-COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 
 #: Raw Docker states a container without Compose labels must be in to appear at
 #: all. Anything else is a leftover from a one-off `docker run`, and on a
@@ -178,9 +182,12 @@ def _container_groups(client) -> dict[tuple[str | None, str], list]:
             # every one-off `docker run` ever left behind would pile up here.
             if _raw_state(container) not in _LIVE_STATES:
                 continue
-            key = (None, container.name)
-        else:
-            key = (project, compose_identity(labels, container.name))
+        # Only the *visibility* rule above turns on the project label; the
+        # name comes from compose_identity either way, which weighs the same
+        # label itself. Deciding the name here as well would be a second copy
+        # of that rule, free to drift from the one the Traefik collector
+        # matches its router targets against.
+        key = (project, compose_identity(labels, container.name))
         groups.setdefault(key, []).append((container, labels))
     return groups
 

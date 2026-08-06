@@ -533,3 +533,37 @@ def test_containers_can_be_marked_critical(monkeypatch):
     result = docker_collector.collect_docker(critical=["web"])
 
     assert result.containers[0].critical is True
+
+
+def test_a_service_label_without_a_project_label_names_the_container_the_same_way(
+    monkeypatch,
+):
+    """Both collectors must call this container by one name.
+
+    Compose always sets the project label beside the service one, so this shape
+    takes a hand-written `com.docker.compose.service`. The Docker collector
+    only groups by service name inside a project; a container that names a
+    service but no project is not part of a Compose project at all, so it keeps
+    its own name -- and the Traefik collector, which matches router targets
+    against exactly those names, has to agree. Reading the service label alone
+    made the router render a red "no such service" for a container sitting
+    right there in the same listing.
+    """
+    from terminal_status_panel.collectors import traefik as traefik_collector
+
+    labels = {
+        COMPOSE_SERVICE_LABEL: "db",
+        "traefik.http.routers.db.rule": "Host(`stats.example.net`)",
+        "traefik.http.services.db.loadbalancer.server.port": "5432",
+    }
+    container = _FakeContainer("legacy-box", labels=labels)
+
+    client = _FakeClient("inactive", containers=[container])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    docker_name = docker_collector.collect_docker().containers[0].name
+
+    traefik_info = traefik_collector.collect_traefik(client)
+    target = traefik_info.services["db"].docker_service
+
+    assert docker_name == "legacy-box"
+    assert target == docker_name
