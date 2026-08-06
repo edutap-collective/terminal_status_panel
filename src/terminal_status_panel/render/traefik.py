@@ -54,17 +54,19 @@ def _service_state(router: TraefikRouter, info: TraefikInfo,
             line.append(f"  {url}", style="dim")
         line.append(f"  {icons.UNKNOWN}", style="dim")
         return icons.UNKNOWN, line
-    if swarm is None or not swarm.reachable or not swarm.enabled:
+    if swarm is None or not swarm.reachable:
         # Nobody looked at Docker, or the look came back empty-handed: no
-        # client (`swarm is None`), no answer from the daemon
-        # (`reachable=False`), or no Swarm at all (`enabled=False`, where
-        # `services` holds container names that can never match a Swarm
-        # service). Claiming the service does not exist would be asserting what
-        # was never measured — show the neutral dot, no count.
+        # client (`swarm is None`) or no answer from the daemon
+        # (`reachable=False`). Claiming the service does not exist would be
+        # asserting what was never measured — show the neutral dot, no count.
         line.append(f"  {icons.UNKNOWN}", style="dim")
         return icons.UNKNOWN, line
     docker_name = ref.docker_service if ref else None
-    matching = [s for s in swarm.services if s.name == docker_name]
+    # Swarm services and containers both carry router labels, so a target may
+    # legitimately be either. Matching only `services` would report every
+    # Compose-hosted target as missing on a host that runs no Swarm services.
+    targets = list(swarm.services) + list(swarm.containers)
+    matching = [s for s in targets if s.name == docker_name]
     if not matching:
         line.append(f"  {icons.FAILED} no such service", style="red")
         return icons.FAILED, line

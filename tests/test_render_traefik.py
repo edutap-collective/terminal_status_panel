@@ -234,12 +234,67 @@ def test_an_unreachable_swarm_shows_unknown_not_a_missing_service():
     assert icons.FAILED not in out
 
 
-def test_a_swarm_that_is_not_enabled_shows_unknown_not_a_missing_service():
-    """Off a Swarm, `services` holds container names, so no Swarm service name
-    can ever match — every router would read "no such service"."""
+def test_a_swarm_that_is_not_enabled_but_holds_no_matching_container_is_reported_missing():
+    """`enabled=False` no longer means nothing can match: containers live in
+    their own field now, searched alongside services. With neither holding the
+    target, a reachable daemon really did not find it, and saying so is
+    correct rather than premature."""
     out = _render(_wired(), swarm=SwarmInfo(reachable=True, enabled=False))
-    assert icons.UNKNOWN in out
-    assert icons.FAILED not in out
+    assert icons.FAILED in out
+    assert "no such service" in out
+
+
+def test_a_router_pointing_at_a_compose_container_is_confirmed():
+    """A Compose host has no Swarm services; its targets live in `containers`."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="web", service="web", entrypoints=["https"])],
+        services={"web": TraefikServiceRef(name="web", docker_service="web")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=False,
+        containers=[ServiceStatus(name="web", running_replicas=1, desired_replicas=1)],
+    )
+    assert "no such service" not in _render(info, swarm)
+
+
+def test_a_router_pointing_nowhere_is_still_reported_missing():
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="web", service="web", entrypoints=["https"])],
+        services={"web": TraefikServiceRef(name="web", docker_service="web")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=False,
+        containers=[ServiceStatus(name="something-else", running_replicas=1,
+                                  desired_replicas=1)],
+    )
+    assert "no such service" in _render(info, swarm)
+
+
+def test_nothing_is_claimed_when_docker_was_not_reached():
+    """Unmeasured is not the same as missing."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="web", service="web", entrypoints=["https"])],
+        services={"web": TraefikServiceRef(name="web", docker_service="web")},
+    )
+    assert "no such service" not in _render(info, SwarmInfo(reachable=False))
+    assert "no such service" not in _render(info, None)
+
+
+def test_a_swarm_service_target_still_matches():
+    """The pre-existing path must not regress."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="api", service="api", entrypoints=["https"])],
+        services={"api": TraefikServiceRef(name="api", docker_service="api")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_count=1,
+        services=[ServiceStatus(name="api", running_replicas=1, desired_replicas=1)],
+    )
+    assert "no such service" not in _render(info, swarm)
 
 
 def test_a_global_service_uses_the_reported_node_count_like_docker_infos():
