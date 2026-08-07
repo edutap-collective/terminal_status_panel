@@ -772,12 +772,27 @@ found, so which config generations are mounted cannot be determined` warning
 above fire — because in that case the collector can see a config, just not
 one it can still tie to a live service.
 
-A third, narrower gap: a `containers.list()` call that fails is recorded on
-`TraefikInfo.container_error`, the container-side counterpart of
-`file_provider_error`. Nothing in the panel currently renders it, unlike its
-counterpart — a Docker permission or connectivity problem that blocks
-reading container labels degrades silently to "labels from Swarm services
-only," with no line anywhere telling you that happened.
+Two further, narrower gaps, one on each side of the container-label read: a
+`containers.list()` call that fails is recorded on `TraefikInfo.container_error`,
+and a `services.list()` call that fails is recorded on the symmetric
+`TraefikInfo.service_error` — both distinct from `error`, which is reserved
+for the case where *neither* listing could be read and there is genuinely
+nothing to show. Either one failing alone degrades rather than aborts: the
+labels the other listing did read still stand, and the panel renders a dim
+notice above the tree naming which side failed — `container labels
+unreadable: …` or `Swarm service labels unreadable: …` — so a Docker
+permission or connectivity problem never degrades silently to "labels from
+the other source only."
+
+The service-listing notice has one deliberate exception: it stays silent
+when Swarm is not active on the node running the panel. A `services.list()`
+call failing with "this node is not a swarm manager" is not a Docker problem
+at all on a Compose-only host — it is the expected, permanent answer on
+every single run there, and a warning that fires every time trains the
+reader to stop reading it. The section only shows the notice when Swarm
+reports itself active and the services listing still failed — a Swarm
+manager or worker that genuinely could not be queried, which is worth a
+line precisely because it is not supposed to happen.
 
 ### The optional live cross-check
 
