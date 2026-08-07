@@ -190,20 +190,71 @@ def test_a_swarm_task_container_is_not_read_twice():
 
 
 def test_a_failing_container_listing_keeps_the_service_results():
-    class _Boom:
-        def list(self, *a, **k):
+    """Containers raise, services succeed: unchanged from before the
+    services-side fix -- `container_error` is set, service routers stand.
+
+    A subclass, not a monkeypatch of `_FakeClient.containers` itself: see
+    `test_a_failing_swarm_listing_still_returns_container_routers` for why
+    overwriting the shared class's property outlives this one test."""
+    class _NoContainers(_FakeClient):
+        @property
+        def containers(self):
             raise RuntimeError("no containers for you")
 
-    client = _FakeClient(services=[
+    client = _NoContainers(services=[
         _FakeService("api", labels={"traefik.http.routers.api.entrypoints": "https"}),
     ])
-    client.__class__.containers = property(lambda self: _Boom())
-    try:
-        info = collector.collect_traefik(client)
-        assert [r.name for r in info.routers] == ["api"]
-        assert info.reachable is True
-    finally:
-        del client.__class__.containers
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["api"]
+    assert info.reachable is True
+    assert info.error is None
+    assert "no containers for you" in info.container_error
+
+
+def test_a_failing_swarm_listing_still_returns_container_routers():
+    """`services.list()` raising `This node is not a swarm manager` is the
+    normal answer on a Compose-only host -- the case this branch exists to
+    serve. It must not blank out the routers a container declares.
+
+    A subclass, not a monkeypatch of `_FakeClient.services` itself: that
+    property is defined once on the shared class, and overwriting it on the
+    class object (even with a `finally: del`) would drop the original
+    definition for every test that runs afterward in this process, not just
+    this one."""
+    class _NoSwarmManager(_FakeClient):
+        @property
+        def services(self):
+            raise RuntimeError("This node is not a swarm manager")
+
+    client = _NoSwarmManager(containers=[
+        _FakeContainer("portal-web-1", {
+            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+            "traefik.http.routers.web.entrypoints": "https",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["web"]
+    assert info.reachable is True
+    assert info.error is None
+    assert "swarm manager" in info.service_error
+
+
+def test_both_listings_failing_yields_an_error_naming_both():
+    """Only when neither listing can be read is there genuinely nothing to
+    show -- the one case that still aborts like the old code always did."""
+    class _BrokenClient(_FakeClient):
+        @property
+        def services(self):
+            raise RuntimeError("services down")
+
+        @property
+        def containers(self):
+            raise RuntimeError("containers down")
+
+    info = collector.collect_traefik(_BrokenClient())
+    assert info.reachable is False
+    assert "services down" in info.error
+    assert "containers down" in info.error
 
 
 def test_collect_reads_the_file_provider_configs():
@@ -415,7 +466,12 @@ def test_the_socket_timeout_is_restored_even_when_the_call_fails():
             raise RuntimeError("socket gone")
 
     client = _Broken()
-    assert "socket gone" in collector.collect_traefik(client, timeout=1.5).error
+    # `.error` stays unset here -- the container listing this fake inherits
+    # from `_FakeClient` still succeeds (trivially, with none), so this is a
+    # partial failure, not the "nothing could be read at all" case. What this
+    # test actually checks is the timeout restoration below; `service_error`
+    # only confirms the failing call was genuinely exercised.
+    assert "socket gone" in collector.collect_traefik(client, timeout=1.5).service_error
     assert client.api.timeout == 4.0
 
 

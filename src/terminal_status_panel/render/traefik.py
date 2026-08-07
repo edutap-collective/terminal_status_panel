@@ -253,6 +253,21 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
             style="dim",
         ))
         parts.append(Text(""))
+    if data.service_error and swarm is not None and swarm.enabled:
+        # A Swarm services listing failing is the *expected*, permanent
+        # outcome on a Compose-only host — Swarm inactive, no manager to ask.
+        # Rendering that every time would be a warning nobody reads twice.
+        # `swarm.enabled` says whether the local node believes Swarm is
+        # active, so it is what tells that case apart from the one worth
+        # showing: a Swarm manager or worker that genuinely could not be
+        # queried. Silence when `swarm` is missing or unreachable too — an
+        # accusation this section cannot back up with a real measurement.
+        parts.append(Text(
+            f"{icons.WARN} Swarm service labels unreadable: {data.service_error}"
+            " — routers declared by Swarm services are missing",
+            style="dim",
+        ))
+        parts.append(Text(""))
     if data.entrypoints:
         # Declaration order, which the collector preserves: the four
         # entrypoints every cluster has come before this cluster's own.

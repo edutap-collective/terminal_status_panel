@@ -430,6 +430,51 @@ def test_the_container_error_changes_no_verdict():
     assert with_error[:notice] + with_error[notice + 2:] == without
 
 
+def test_service_error_is_hidden_on_a_compose_only_host():
+    """A Swarm services listing failing is the expected, permanent outcome on
+    a Compose-only host -- `swarm.enabled` is False there, since the local
+    node is not part of a swarm at all. Showing this warning on every render
+    would be noise the reader learns to skip past."""
+    info = _wired()
+    info.service_error = "RuntimeError: This node is not a swarm manager"
+    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=False))
+    assert "service labels unreadable" not in out
+
+
+def test_service_error_is_hidden_when_swarm_state_is_unmeasured():
+    """No `swarm` at all, or one whose own collection failed, means Swarm's
+    activity could not be established either way -- silence here matches the
+    rest of the section's rule against accusing what was never measured."""
+    info = _wired()
+    info.service_error = "RuntimeError: boom"
+    assert "service labels unreadable" not in _render(info, swarm=None)
+    assert "service labels unreadable" not in _render(
+        info, swarm=SwarmInfo(reachable=False, enabled=False))
+
+
+def test_service_error_is_shown_when_swarm_is_active_but_unreadable():
+    """Swarm believes itself active (`enabled=True`) yet this collector could
+    not list its services -- a surprising failure worth a line, unlike the
+    Compose-only case above where the same failure is expected every time."""
+    info = _wired()
+    info.service_error = "PermissionError: access denied"
+    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=True))
+    lines = out.splitlines()
+    warning_idx = next(i for i, ln in enumerate(lines) if "service labels unreadable" in ln)
+    assert "PermissionError: access denied" in lines[warning_idx]
+    # The tree still renders beneath the warning.
+    tree_idx = next(i for i, ln in enumerate(lines) if "kafbat-ui" in ln)
+    assert tree_idx > warning_idx
+
+
+def test_no_service_warning_when_the_services_were_read():
+    """The line is a notice about a failed read, so it must be absent on the
+    normal path -- where `service_error` is None -- even with Swarm active."""
+    assert _wired().service_error is None
+    out = _render(_wired(), swarm=SwarmInfo(reachable=True, enabled=True))
+    assert "service labels unreadable" not in out
+
+
 def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
     """Stacked vertically they run to some seventy lines on cluster-a while two
     thirds of the terminal stay empty — the same arrangement CLUSTER HEALTH

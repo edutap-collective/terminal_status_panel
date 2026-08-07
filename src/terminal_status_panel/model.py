@@ -265,6 +265,9 @@ class TraefikInfo:
     # router by design, which is the one case where "— no router" is not a
     # finding.
     ping_entrypoint: str | None = None
+    # Set only when neither the Swarm services nor the container listing
+    # could be read -- the one case with genuinely nothing to show. Either
+    # one failing alone is a partial read, recorded below instead.
     error: str | None = None
     # A partial failure: the labels were read but the file provider was not.
     # Distinct from `error`, which means nothing could be read at all.
@@ -272,6 +275,11 @@ class TraefikInfo:
     # Labels were read from services but not from containers. Distinct from
     # `error`, which means nothing could be read at all.
     container_error: str | None = None
+    # Labels were read from containers but not from Swarm services. Distinct
+    # from `error`, which means nothing could be read at all. Expected and
+    # permanent on a host with no Swarm manager to ask -- see how the
+    # renderer decides whether this is worth a line.
+    service_error: str | None = None
 
 
 @dataclass

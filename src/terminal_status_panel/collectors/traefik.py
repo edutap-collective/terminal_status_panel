@@ -120,6 +120,18 @@ def _note_file_provider_error(info: TraefikInfo, message: str) -> None:
         info.file_provider_error = message
 
 
+def _combined_listing_error(service_error: str, container_error: str) -> str:
+    """One line for the state where nothing at all could be read.
+
+    Reached only when both the Swarm services and the container listing
+    failed. Either one failing alone is tolerated and recorded on its own
+    field -- a Swarm services listing failing by itself is what a Compose-only
+    host with no swarm manager returns on every call, not a sign the daemon is
+    unreachable.
+    """
+    return f"services: {service_error}; containers: {container_error}"
+
+
 @contextmanager
 def _socket_timeout(client, timeout: float):
     """Bound this collector's own Docker calls, then restore the client's own.
@@ -168,12 +180,19 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
     """
     info = TraefikInfo()
     mounted: set[str] | None = None
+    services: list = []
     with _socket_timeout(client, timeout):
         try:
             services = client.services.list()
         except Exception as exc:
-            return TraefikInfo(error=f"{type(exc).__name__}: {exc}")
-        info.reachable = True
+            # A Swarm services listing failing on its own is not a dead
+            # daemon -- it is exactly what a Compose-only host with no swarm
+            # manager to ask returns on every call. Degrade like the
+            # container pass below already does; only the two failing
+            # together means genuinely nothing could be read.
+            info.service_error = f"{type(exc).__name__}: {exc}"
+        else:
+            info.reachable = True
 
         for service in services:
             name = getattr(service, "name", "") or ""
@@ -196,6 +215,14 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             # discard what was already read.
             info.container_error = f"{type(exc).__name__}: {exc}"
             containers = []
+        else:
+            info.reachable = True
+
+        if not info.reachable:
+            # Both listings failed: there is no wiring left to show, unlike
+            # either one failing alone.
+            info.error = _combined_listing_error(info.service_error, info.container_error)
+            return info
 
         for container in containers:
             labels = container_labels(container)
