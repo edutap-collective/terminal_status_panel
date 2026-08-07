@@ -1,6 +1,10 @@
 import httpx
 
 from terminal_status_panel.collectors import traefik as collector
+from terminal_status_panel.collectors._labels import (
+    COMPOSE_PROJECT_LABEL,
+    COMPOSE_SERVICE_LABEL,
+)
 from terminal_status_panel.config import Config, TraefikApiConfig
 from terminal_status_panel.model import TraefikRouter
 
@@ -30,10 +34,27 @@ class _FakeConfig:
         self.attrs = {"Spec": {"Data": base64.b64encode(data.encode()).decode()}}
 
 
+class _FakeContainer:
+    """Labels in the inspect shape, which is what `containers.list()` returns."""
+
+    def __init__(self, name, labels=None):
+        self.name = name
+        self.attrs = {"Config": {"Labels": dict(labels or {})}}
+
+
+class _SparseFakeContainer:
+    """Labels in the `sparse=True` shape: top level, no Config key."""
+
+    def __init__(self, name, labels=None):
+        self.name = name
+        self.attrs = {"Labels": dict(labels or {})}
+
+
 class _FakeClient:
-    def __init__(self, services=None, configs=None):
+    def __init__(self, services=None, configs=None, containers=None):
         self._services = services or []
         self._configs = configs or []
+        self._containers = containers or []
 
     class _Coll:
         def __init__(self, items):
@@ -49,6 +70,10 @@ class _FakeClient:
     @property
     def configs(self):
         return self._Coll(self._configs)
+
+    @property
+    def containers(self):
+        return self._Coll(self._containers)
 
 
 def test_unknown_entrypoints_reports_only_the_missing_ones():
@@ -87,6 +112,149 @@ def test_collect_joins_labels_from_every_service():
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["kafbat-ui"]
     assert info.services["kafbat-ui"].port == 8080
+
+
+def test_router_labels_are_read_from_containers():
+    client = _FakeClient(containers=[
+        _FakeContainer("portal-web-1", {
+            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+            "traefik.http.routers.web.entrypoints": "https",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    by_name = {r.name: r for r in info.routers}
+    assert "web" in by_name
+    assert by_name["web"].entrypoints == ["https"]
+    assert by_name["web"].origin == "portal-web-1"
+
+
+def test_a_compose_container_s_router_matches_the_compose_service_name():
+    """The container's own name (`origin`, for display) and the Compose
+    service name (`docker_service`, matched against ServiceStatus.name by the
+    renderer) are two different strings -- collectors/docker.py names this
+    container's ServiceStatus "db", not "course-statistics-db"."""
+    client = _FakeClient(containers=[
+        _FakeContainer("course-statistics-db", {
+            "traefik.http.routers.db.rule": "Host(`stats.example.net`)",
+            "traefik.http.routers.db.entrypoints": "https",
+            "traefik.http.services.db.loadbalancer.server.port": "5432",
+            # Both labels, which is the only shape Compose produces: the
+            # service name identifies this container within its project.
+            COMPOSE_PROJECT_LABEL: "course-statistics",
+            COMPOSE_SERVICE_LABEL: "db",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    router = next(r for r in info.routers if r.name == "db")
+    assert router.origin == "course-statistics-db"
+    assert info.services["db"].docker_service == "db"
+
+
+def test_a_container_without_compose_labels_yields_the_same_name_twice():
+    """No Compose service label to prefer, so the container's own name is the
+    only identity there is -- for both `origin` and `docker_service`."""
+    client = _FakeClient(containers=[
+        _FakeContainer("standalone-proxy", {
+            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+            "traefik.http.routers.web.entrypoints": "https",
+            "traefik.http.services.web.loadbalancer.server.port": "80",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    router = next(r for r in info.routers if r.name == "web")
+    assert router.origin == "standalone-proxy"
+    assert info.services["web"].docker_service == "standalone-proxy"
+
+
+def test_container_labels_are_read_in_the_sparse_shape_too():
+    client = _FakeClient(containers=[
+        _SparseFakeContainer("portal-web-1", {
+            "traefik.http.routers.web.entrypoints": "https",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["web"]
+
+
+def test_a_swarm_task_container_is_not_read_twice():
+    """The task carries its service's labels; services.list() already had them."""
+    labels = {"traefik.http.routers.api.entrypoints": "https"}
+    client = _FakeClient(
+        services=[_FakeService("api", labels=labels)],
+        containers=[_FakeContainer("api.1.abcdef",
+                                   {**labels, "com.docker.swarm.service.name": "api"})],
+    )
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["api"]
+    assert [r.origin for r in info.routers] == ["api"]
+
+
+def test_a_failing_container_listing_keeps_the_service_results():
+    """Containers raise, services succeed: unchanged from before the
+    services-side fix -- `container_error` is set, service routers stand.
+
+    A subclass, not a monkeypatch of `_FakeClient.containers` itself: see
+    `test_a_failing_swarm_listing_still_returns_container_routers` for why
+    overwriting the shared class's property outlives this one test."""
+    class _NoContainers(_FakeClient):
+        @property
+        def containers(self):
+            raise RuntimeError("no containers for you")
+
+    client = _NoContainers(services=[
+        _FakeService("api", labels={"traefik.http.routers.api.entrypoints": "https"}),
+    ])
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["api"]
+    assert info.reachable is True
+    assert info.error is None
+    assert "no containers for you" in info.container_error
+
+
+def test_a_failing_swarm_listing_still_returns_container_routers():
+    """`services.list()` raising `This node is not a swarm manager` is the
+    normal answer on a Compose-only host -- the case this branch exists to
+    serve. It must not blank out the routers a container declares.
+
+    A subclass, not a monkeypatch of `_FakeClient.services` itself: that
+    property is defined once on the shared class, and overwriting it on the
+    class object (even with a `finally: del`) would drop the original
+    definition for every test that runs afterward in this process, not just
+    this one."""
+    class _NoSwarmManager(_FakeClient):
+        @property
+        def services(self):
+            raise RuntimeError("This node is not a swarm manager")
+
+    client = _NoSwarmManager(containers=[
+        _FakeContainer("portal-web-1", {
+            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+            "traefik.http.routers.web.entrypoints": "https",
+        }),
+    ])
+    info = collector.collect_traefik(client)
+    assert [r.name for r in info.routers] == ["web"]
+    assert info.reachable is True
+    assert info.error is None
+    assert "swarm manager" in info.service_error
+
+
+def test_both_listings_failing_yields_an_error_naming_both():
+    """Only when neither listing can be read is there genuinely nothing to
+    show -- the one case that still aborts like the old code always did."""
+    class _BrokenClient(_FakeClient):
+        @property
+        def services(self):
+            raise RuntimeError("services down")
+
+        @property
+        def containers(self):
+            raise RuntimeError("containers down")
+
+    info = collector.collect_traefik(_BrokenClient())
+    assert info.reachable is False
+    assert "services down" in info.error
+    assert "containers down" in info.error
 
 
 def test_collect_reads_the_file_provider_configs():
@@ -298,7 +466,12 @@ def test_the_socket_timeout_is_restored_even_when_the_call_fails():
             raise RuntimeError("socket gone")
 
     client = _Broken()
-    assert "socket gone" in collector.collect_traefik(client, timeout=1.5).error
+    # `.error` stays unset here -- the container listing this fake inherits
+    # from `_FakeClient` still succeeds (trivially, with none), so this is a
+    # partial failure, not the "nothing could be read at all" case. What this
+    # test actually checks is the timeout restoration below; `service_error`
+    # only confirms the failing call was genuinely exercised.
+    assert "socket gone" in collector.collect_traefik(client, timeout=1.5).service_error
     assert client.api.timeout == 4.0
 
 

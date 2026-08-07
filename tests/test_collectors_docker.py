@@ -1,4 +1,5 @@
 from terminal_status_panel.collectors import docker as docker_collector
+from terminal_status_panel.collectors._labels import COMPOSE_SERVICE_LABEL
 from terminal_status_panel.model import SwarmInfo
 from terminal_status_panel.render import icons
 from terminal_status_panel.render.verdict import service_verdict
@@ -264,7 +265,7 @@ def _compose(project, service, **kwargs):
         f"{project}-{service}-1",
         labels={
             docker_collector.COMPOSE_PROJECT_LABEL: project,
-            docker_collector.COMPOSE_SERVICE_LABEL: service,
+            COMPOSE_SERVICE_LABEL: service,
         },
         **kwargs,
     )
@@ -318,7 +319,7 @@ def test_a_sparsely_shaped_container_is_still_grouped_by_compose_labels(monkeypa
         "portal-web-1",
         labels={
             docker_collector.COMPOSE_PROJECT_LABEL: "portal",
-            docker_collector.COMPOSE_SERVICE_LABEL: "web",
+            COMPOSE_SERVICE_LABEL: "web",
         },
     )
     client = _FakeClient("inactive", containers=[sparse])
@@ -491,7 +492,7 @@ def test_containers_use_the_same_description_label_as_services(monkeypatch):
                 "web",
                 labels={
                     docker_collector.COMPOSE_PROJECT_LABEL: "portal",
-                    docker_collector.COMPOSE_SERVICE_LABEL: "web",
+                    COMPOSE_SERVICE_LABEL: "web",
                     "status.description": "the public front end",
                 },
             )
@@ -512,7 +513,7 @@ def test_containers_honour_the_legacy_description_label(monkeypatch):
                 "web",
                 labels={
                     docker_collector.COMPOSE_PROJECT_LABEL: "portal",
-                    docker_collector.COMPOSE_SERVICE_LABEL: "web",
+                    COMPOSE_SERVICE_LABEL: "web",
                     docker_collector.LEGACY_DESCRIPTION_LABEL: "from the old key",
                 },
             )
@@ -532,3 +533,37 @@ def test_containers_can_be_marked_critical(monkeypatch):
     result = docker_collector.collect_docker(critical=["web"])
 
     assert result.containers[0].critical is True
+
+
+def test_a_service_label_without_a_project_label_names_the_container_the_same_way(
+    monkeypatch,
+):
+    """Both collectors must call this container by one name.
+
+    Compose always sets the project label beside the service one, so this shape
+    takes a hand-written `com.docker.compose.service`. The Docker collector
+    only groups by service name inside a project; a container that names a
+    service but no project is not part of a Compose project at all, so it keeps
+    its own name -- and the Traefik collector, which matches router targets
+    against exactly those names, has to agree. Reading the service label alone
+    made the router render a red "no such service" for a container sitting
+    right there in the same listing.
+    """
+    from terminal_status_panel.collectors import traefik as traefik_collector
+
+    labels = {
+        COMPOSE_SERVICE_LABEL: "db",
+        "traefik.http.routers.db.rule": "Host(`stats.example.net`)",
+        "traefik.http.services.db.loadbalancer.server.port": "5432",
+    }
+    container = _FakeContainer("legacy-box", labels=labels)
+
+    client = _FakeClient("inactive", containers=[container])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    docker_name = docker_collector.collect_docker().containers[0].name
+
+    traefik_info = traefik_collector.collect_traefik(client)
+    target = traefik_info.services["db"].docker_service
+
+    assert docker_name == "legacy-box"
+    assert target == docker_name

@@ -143,6 +143,17 @@ def test_service_port_and_scheme_are_parsed():
     assert services["kafbat-ui"].docker_service == "kafbat-ui_kafbat-ui"
 
 
+def test_docker_name_can_differ_from_origin():
+    """A Compose container's own name (who declared it) and the Compose
+    service name (what ServiceStatus.name calls it) are two different
+    strings -- this is the case the container collector needs."""
+    routers, _, services = parse.parse_labels(
+        KAFBAT_LABELS, origin="course-statistics-db", docker_name="db",
+    )
+    assert routers[0].origin == "course-statistics-db"
+    assert services["kafbat-ui"].docker_service == "db"
+
+
 def test_a_middleware_keeps_its_kind_and_first_key():
     _, middlewares, _ = parse.parse_labels(IMAGE_API_LABELS, origin="x")
     mw = middlewares["image_api_stripprefix"]

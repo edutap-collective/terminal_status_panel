@@ -18,6 +18,7 @@ import httpx
 import yaml
 
 from ..model import TraefikInfo, TraefikRouter
+from ._labels import SWARM_SERVICE_LABEL, compose_identity, container_labels
 from .traefik_parse import (
     parse_api_rawdata,
     parse_dynamic_yaml,
@@ -119,6 +120,18 @@ def _note_file_provider_error(info: TraefikInfo, message: str) -> None:
         info.file_provider_error = message
 
 
+def _combined_listing_error(service_error: str, container_error: str) -> str:
+    """One line for the state where nothing at all could be read.
+
+    Reached only when both the Swarm services and the container listing
+    failed. Either one failing alone is tolerated and recorded on its own
+    field -- a Swarm services listing failing by itself is what a Compose-only
+    host with no swarm manager returns on every call, not a sign the daemon is
+    unreachable.
+    """
+    return f"services: {service_error}; containers: {container_error}"
+
+
 @contextmanager
 def _socket_timeout(client, timeout: float):
     """Bound this collector's own Docker calls, then restore the client's own.
@@ -167,12 +180,19 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
     """
     info = TraefikInfo()
     mounted: set[str] | None = None
+    services: list = []
     with _socket_timeout(client, timeout):
         try:
             services = client.services.list()
         except Exception as exc:
-            return TraefikInfo(error=f"{type(exc).__name__}: {exc}")
-        info.reachable = True
+            # A Swarm services listing failing on its own is not a dead
+            # daemon -- it is exactly what a Compose-only host with no swarm
+            # manager to ask returns on every call. Degrade like the
+            # container pass below already does; only the two failing
+            # together means genuinely nothing could be read.
+            info.service_error = f"{type(exc).__name__}: {exc}"
+        else:
+            info.reachable = True
 
         for service in services:
             name = getattr(service, "name", "") or ""
@@ -182,6 +202,55 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
                 info.ping_entrypoint = parse_ping_entrypoint(args)
                 mounted = _mounted_config_names(service)
             routers, middlewares, refs = parse_labels(_labels_of(service), origin=name)
+            info.routers.extend(routers)
+            info.middlewares.update(middlewares)
+            info.services.update(refs)
+
+        try:
+            containers = client.containers.list()
+        except Exception as exc:
+            # Compose and plain containers are an addition, not a
+            # precondition: a daemon that answered for services but not for
+            # containers still yields real wiring, so degrade rather than
+            # discard what was already read.
+            info.container_error = f"{type(exc).__name__}: {exc}"
+            containers = []
+        else:
+            info.reachable = True
+
+        if not info.reachable:
+            # Both listings failed: there is no wiring left to show, unlike
+            # either one failing alone.
+            info.error = _combined_listing_error(info.service_error, info.container_error)
+            return info
+
+        for container in containers:
+            labels = container_labels(container)
+            if SWARM_SERVICE_LABEL in labels:
+                continue
+            # NOT sparse-safe, unlike `container_labels` right above it.
+            # `containers.list()` inspects, so `.name` is a real string here.
+            # Under `containers.list(sparse=True)` -- which `ContainerIndex` in
+            # clusters.py uses -- docker-py's `Container.name` reads `Name`,
+            # which the list API does not send, and the attribute is `None`:
+            # this would then silently yield an empty origin *and* an empty
+            # target, with no error and no failing test -- the sparse-shape
+            # test in tests/test_collectors_traefik.py passes only because its
+            # fake sets `.name`, which a real sparse object does not. Anyone
+            # switching this collector to sparse must read the name through
+            # `clusters.container_name`, which looks at the list response's
+            # `Names` array as well.
+            name = getattr(container, "name", "") or ""
+            # origin (who declared this router) and docker_name (what
+            # ServiceStatus.name calls it) differ for a Compose container: the
+            # container is named "course-statistics-db", the service it
+            # matches against is "db". compose_identity computes the same
+            # name collectors/docker.py gives that container's ServiceStatus,
+            # the project-label condition included, so the two stay in step
+            # without a second, drifting copy of that rule here.
+            routers, middlewares, refs = parse_labels(
+                labels, origin=name, docker_name=compose_identity(labels, name)
+            )
             info.routers.extend(routers)
             info.middlewares.update(middlewares)
             info.services.update(refs)
