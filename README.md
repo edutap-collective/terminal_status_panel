@@ -406,14 +406,19 @@ is why `status-server` on its own shows IDs rather than names: it never
 opens the Docker socket, deliberately, so it has nothing to resolve the ID
 against.
 
-**On a narrow terminal, `SERVICE` gives way first.** At width 200 both
-tables — `MEM` column included — render in full beside each other, with
-only `SERVICE`'s own 22-character cap ever cutting a long unit or service
-name. At 120 columns the two six-column tables no longer fit side by side at
-their natural width, and Rich shrinks the flexible columns to make them fit;
-`SERVICE` is the one that gives, while `PROCESS` and the numeric columns
-stay intact. That is deliberate: a shortened service name still identifies
-its service, where a shortened number would simply be wrong.
+**On a narrow terminal, `SERVICE` is the column most likely to give first.**
+At width 200 both tables — `MEM` column included — render in full beside
+each other, with only `SERVICE`'s own 22-character cap ever cutting a long
+unit or service name. At 120 columns the two six-column tables no longer fit
+side by side at their natural width: the panel has already truncated
+`SERVICE` to at most 22 characters before Rich ever sees it, and Rich then
+shrinks whatever flexible columns still do not fit — `SERVICE` first, since
+it is usually the widest column left, but a long `PROCESS` name is squeezed
+too (`containerd-shim`, unremarkable on a Docker host, reads in full at 200
+and as `containerd-sh…` at 120). What does not move are the numeric
+columns — `%CPU`, `%MEM`, `MEM`, `PID` keep their values undamaged at either
+width, which is the guarantee worth making: a shortened name is still
+shorter, but a shortened number would simply be wrong.
 
 The panel excludes its own process from both rankings — the same reason
 `ps` habitually ranks itself first: it is the one process guaranteed to be
