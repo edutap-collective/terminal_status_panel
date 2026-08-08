@@ -1130,8 +1130,9 @@ def test_an_absent_memory_figure_shows_the_dash_not_n_a():
                                 memory_bytes=None)],
         sampled=0.3)
     out = _render_status(processes=snapshot)
-    # The process row should use dashes for absent figures, not "n/a".
-    # Only check that the "app" row doesn't have "n/a".
+    # The process row should use dashes for absent figures, not "n/a". Other
+    # sections like MEMORY & SWAP legitimately print "n/a" when values are
+    # unset; so check only the "app" row to isolate the memory_bytes formatting.
     app_line = next(
         line for line in out.splitlines()
         if "app" in line and "top" not in line.lower()
