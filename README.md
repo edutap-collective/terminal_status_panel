@@ -114,10 +114,12 @@ out in five tiers:
   declare them — the four every cluster has (`dashboard`, `ping`, `default`,
   `https`) before this cluster's per-vhost ones. Routers whose entrypoint
   does not exist get their own block below, at full width, since a tree
-  keyed by entrypoint would otherwise drop them silently. See
+  keyed by entrypoint would otherwise drop them silently. An entrypoint head
+  and a router name become clickable when `[traefik.links]` configures where
+  that entrypoint is actually reached. See
   [Traefik wiring](#traefik-wiring) below for what "as
-  configured" means and for the optional (currently dormant) live cross-check
-  against Traefik itself.
+  configured" means, for the clickable links, and for the optional (currently
+  dormant) live cross-check against Traefik itself.
 
 The panel itself opens no database or broker connection and holds no
 credentials. Its only privilege is the Docker socket: the Docker section
@@ -200,7 +202,7 @@ a placeholder instead of erroring.
 |---------------|---------|-------------|
 | `--sections`  | *(per command)* | Comma-separated sections to render: `server`, `docker`, `health`, `traefik`. On `status-full` the default is all four; the dedicated commands fix their own section. The wiring block renders identically however it is selected. |
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
-| `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
+| `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). Also suppresses the entrypoint/router hyperlinks in TRAEFIK WIRING (see [Traefik wiring](#traefik-wiring)), for a terminal that renders OSC-8 badly. |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
 | `-f`, `--follow` | off | Keep the panel on screen and refresh it, on all five commands. See [Follow mode](#follow-mode) below. |
 | `--interval N` | *(see below)* | Seconds between refreshes under `--follow`. Overrides both the config and the built-in default; values below 1 second are raised to 1 second. Ignored without `--follow`. |
@@ -285,6 +287,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see [Traefik wiring](#traefik-wiring) for why it cannot work on today's app servers. |
 | `traefik.cert` / `traefik.key` | *(unset)* | Client certificate/key for that endpoint (mTLS). Both `url` and `cert` must be set for the cross-check to run at all. |
 | `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate. Unset, httpx falls back to **certifi's** bundle, *not* the system trust store — a corporate CA installed in `/etc/ssl/certs` is not picked up (only `SSL_CERT_FILE`/`SSL_CERT_DIR` in the environment override it). Set this explicitly for a privately signed endpoint. |
+| `traefik.links` | `{}` | Table mapping an entrypoint **name** to the `http://` or `https://` base URL it is actually reached at, e.g. `login_example_de = "https://login.example.de"`. Independent of `traefik.url`/`cert`/`key`/`ca` above — it needs no connection to Traefik at all. See [Traefik wiring](#traefik-wiring) for why this has to be configured rather than derived. A value that is not a string, or does not start with `http://`/`https://`, is dropped; that entrypoint then simply has no links, the same as leaving it out. |
 
 ### Full example
 
@@ -333,6 +336,10 @@ dns = 2.5
 [[health.dns.expect]]
 name = "login.example.net"
 addresses = ["10.9.9.9"]
+
+[traefik.links]
+login_example_de = "https://login.example.de"
+portal_dept_uni_example_de = "https://portal.dept.uni-example.de"
 
 [resources]
 process_sample = 0.3
@@ -725,6 +732,50 @@ along with the routers, and the upstream URL is shown in place of a Docker
 verdict, with a `·`: nothing about that target was measured. Matching them
 against Swarm service names instead reported `✗ no such service` for something
 that was never supposed to be a Swarm service.
+
+### Clickable entrypoints and routers
+
+When `[traefik.links]` names a base URL for an entrypoint, that entrypoint's
+head becomes a clickable link, and so does the name of every router on it
+whose rule names exactly one path. Nothing else in the block is ever
+clickable — the service line names a container and a port inside the
+cluster, an address no browser reaches, linked or not.
+
+```toml
+[traefik.links]
+login_example_de = "https://login.example.de"
+portal_dept_uni_example_de = "https://portal.dept.uni-example.de"
+```
+
+One entry per **entrypoint name**, not per router: every router hanging off
+an entrypoint shares that entrypoint's base, only the path differs. The key
+is the entrypoint's own name, exactly as Traefik reports it; the value must
+start with `http://` or `https://` — anything else (a bare hostname, a
+non-string, a typo'd scheme) is silently dropped, and that entrypoint is
+left with no links at all rather than a broken one.
+
+**The base cannot be derived — it has to be configured.** Traefik's routers
+match on path alone: the reference cluster has no `Host()` rule at all, so
+no hostname appears anywhere in the routing configuration this panel reads.
+And the entrypoint's own name is not a hostname with underscores standing in
+for dots, even though it can look like one: in a name such as
+`portal_dept_uni_example_de`, one underscore is a dot and the next is a
+hyphen, and nothing in the name itself says which is which —
+`portal.dept.uni-example.de` is only recoverable by checking DNS, not by
+substitution. A link that goes somewhere plausible but wrong is worse than
+no link, because the reader cannot tell which until they click it. That is
+why an entrypoint absent from `[traefik.links]` gets no links, rather than a
+guessed one.
+
+A router whose rule names more than one path — an alternation such as
+``PathPrefix(`/a`) || PathPrefix(`/b`)`` — or negates a path —
+``!Path(`/health`)``, which names the one path the router does *not* serve —
+keeps no link of its own; there is no single sub-path left to join onto the
+base. Its entrypoint's head stays clickable regardless: the host is known
+even where the sub-path is not.
+
+`--no-color` suppresses these hyperlinks along with every other colour, the
+escape hatch for a terminal that renders OSC-8 hyperlinks badly.
 
 ### What "as configured" means, and its limit
 
