@@ -91,3 +91,43 @@ def test_a_column_stacks_its_blocks_without_a_gap_between_them():
 
 def test_no_blocks_render_to_nothing():
     assert _render(PackedColumns([]), width=80) == []
+
+
+def test_the_alternative_is_drawn_when_it_packs_shorter():
+    # Four one-line, 30-cell blocks: two fit side by side in 64 cells
+    # (30 + 4 + 30), three do not (3*30 + 2*4 = 98), so the primary packs
+    # into two columns of two blocks each — height 2.
+    primary = [[Text("p" * 30)] for _ in range(4)]
+    # Four one-line, 10-cell blocks: all four fit side by side in 64 cells
+    # (4*10 + 3*4 = 52), so the alternative packs into four columns of one
+    # block each — height 1, strictly shorter than the primary's 2.
+    alternative = [[Text("a" * 10)] for _ in range(4)]
+    lines = _render(PackedColumns(primary, alternative=alternative), width=64)
+    assert len(lines) == 1
+    assert "a" in lines[0]
+    assert "p" not in lines[0]
+
+
+def test_the_primary_is_drawn_when_it_packs_shorter():
+    # Same two candidates as above, roles reversed: now the narrow one is the
+    # primary, so it is the primary that packs shorter (height 1 against the
+    # alternative's height 2), and the primary must win on its own merits, not
+    # merely by tie-break.
+    primary = [[Text("p" * 10)] for _ in range(4)]
+    alternative = [[Text("a" * 30)] for _ in range(4)]
+    lines = _render(PackedColumns(primary, alternative=alternative), width=64)
+    assert len(lines) == 1
+    assert "p" in lines[0]
+    assert "a" not in lines[0]
+
+
+def test_a_tie_is_drawn_from_the_primary():
+    # Identical shapes on both sides — same widths, same heights, so both
+    # pack to the same two-column, height-2 layout. Nothing but the tie-break
+    # decides, and the primary must win it.
+    primary = [[Text("p" * 30)] for _ in range(4)]
+    alternative = [[Text("a" * 30)] for _ in range(4)]
+    lines = _render(PackedColumns(primary, alternative=alternative), width=64)
+    assert len(lines) == 2
+    assert any("p" in line for line in lines)
+    assert not any("a" in line for line in lines)

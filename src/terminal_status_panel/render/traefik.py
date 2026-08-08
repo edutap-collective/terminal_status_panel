@@ -84,7 +84,7 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
 
 
 def _router_lines(router: TraefikRouter, info: TraefikInfo,
-                  swarm: SwarmInfo | None) -> list[Text]:
+                  swarm: SwarmInfo | None, *, fold: bool = True) -> list[Text]:
     style = "dim" if router.source == "file" else ""
     head = Text(f"  └─ {router.name}", style=style)
     if router.rule:
@@ -110,7 +110,7 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         kind = f" ({mw.kind})" if mw.kind else ""
         lines.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
     glyph, service = _service_state(router, info, swarm)
-    if not glyph and not router.middlewares:
+    if fold and not glyph and not router.middlewares:
         # An empty glyph means the line makes no claim at all — Traefik's own
         # `@internal` endpoints, which nobody measured. A whole line for a name
         # and nothing else, repeated on every entrypoint the ping router hangs
@@ -120,6 +120,14 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         # moving the target up would put the flow out of order. And only for
         # the empty glyph — a file-provider service returns UNKNOWN and carries
         # its configured upstreams, which is real content and stays put.
+        #
+        # Folding it in is not always the shorter path to the screen, though:
+        # it widens the block by the width of the target name, and a wider
+        # block can push a column over the terminal width and cost the section
+        # a whole column back. `traefik_section` therefore builds this branch
+        # both ways — folded and not — and hands both to `PackedColumns`,
+        # which measures and draws whichever one is actually shorter once
+        # packed. `fold=False` is what produces the unfolded alternative.
         head.append("  " + service.plain.strip().removeprefix("└─ "))
         return lines
     lines.append(service)
@@ -142,7 +150,7 @@ def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
 
 
 def _entrypoint_block(entrypoint, info: TraefikInfo,
-                      swarm: SwarmInfo | None) -> list[Text]:
+                      swarm: SwarmInfo | None, *, fold: bool = True) -> list[Text]:
     """This entrypoint's branch, as the flat list of lines it occupies.
 
     Lines rather than a ``Group`` because the packer has to know how tall and
@@ -169,7 +177,7 @@ def _entrypoint_block(entrypoint, info: TraefikInfo,
         head.append(f"   {worst}")
     lines = [head]
     for router in attached:
-        lines.extend(_router_lines(router, info, swarm))
+        lines.extend(_router_lines(router, info, swarm, fold=fold))
     return lines
 
 
@@ -267,8 +275,17 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         # Declaration order, which the collector preserves: the four
         # entrypoints every cluster has come before this cluster's own. The
         # packer may put them in any column, but never out of order within one.
-        blocks = [_entrypoint_block(ep, data, swarm) for ep in data.entrypoints]
-        parts.append(PackedColumns(blocks))
+        #
+        # Two candidate renderings, folded and not: folding a router's
+        # `@internal` target onto its own line saves a row per branch but
+        # widens the block, and a wider block can force the packer to a
+        # column fewer — paying several lines to save one. `PackedColumns`
+        # packs both at print time and draws whichever is actually shorter.
+        folded = [_entrypoint_block(ep, data, swarm) for ep in data.entrypoints]
+        unfolded = [
+            _entrypoint_block(ep, data, swarm, fold=False) for ep in data.entrypoints
+        ]
+        parts.append(PackedColumns(folded, alternative=unfolded))
         parts.append(Text(""))
     orphans = _orphan_block(data, swarm)
     if orphans is not None:

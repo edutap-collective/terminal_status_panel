@@ -1,4 +1,4 @@
-from rich.console import Console
+from rich.console import Console, Group
 from rich.text import Text
 
 from terminal_status_panel.config import Config
@@ -13,7 +13,9 @@ from terminal_status_panel.model import (
     TraefikServiceRef,
 )
 from terminal_status_panel.render import icons
-from terminal_status_panel.render.traefik import traefik_section
+from terminal_status_panel.render.packing import PackedColumns
+from terminal_status_panel.render.panels import section
+from terminal_status_panel.render.traefik import _entrypoint_block, traefik_section
 
 
 def _render(info, swarm=None, width=120):
@@ -522,6 +524,18 @@ def test_an_internal_target_folds_onto_the_router_line():
     assert "ping@internal" in heads[0]
 
 
+def test_the_folded_head_carries_only_its_own_branch_glyph():
+    """The fold strips the service line's own ``└─ `` prefix by string surgery
+    (``service.plain.strip().removeprefix("└─ ")``) so that gluing it onto the
+    router head does not leave a second, orphaned branch glyph behind. That
+    surgery is coupled to the exact text ``_service_state`` produces; this
+    guards it against silently breaking if that text ever changes shape.
+    """
+    out = _render(_internal())
+    head = next(line for line in out.splitlines() if "ping-router" in line)
+    assert head.count("└─") == 1
+
+
 def test_a_middleware_keeps_the_internal_target_on_its_own_line():
     info = _internal(middlewares=["strip"],
                      mw_defs={"strip": TraefikMiddleware(name="strip",
@@ -542,6 +556,70 @@ def test_a_measured_service_keeps_its_own_line():
     head = next(line for line in out.splitlines()
                 if "└─ kafbat-ui" in line and "→" not in line)
     assert "kafbat-ui_kafbat-ui" not in head
+
+
+def _six_ping():
+    """Six entrypoints whose only router is the shared ping router.
+
+    The design's own reference shape: one ``TraefikRouter`` naming all six
+    entrypoints, pointing at ``ping@internal``, declared in the file
+    provider — the case the fold exists for.
+    """
+    names = ["dashboard", "ping", "default", "https", "portal_admin", "status_public"]
+    entrypoints = [
+        TraefikEntrypoint(name=name, address=f":{2000 + index}", port=2000 + index)
+        for index, name in enumerate(names)
+    ]
+    router = TraefikRouter(
+        name="ping-router", entrypoints=names, rule="Path(`/_traefik_ping_`)",
+        service="ping@internal", source="file",
+    )
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=entrypoints,
+        routers=[router],
+        services={"ping@internal": TraefikServiceRef(name="ping@internal", source="file")},
+    )
+
+
+def test_folding_never_costs_the_six_ping_router_shape_a_column():
+    """Folded, each branch is 2 lines and 64 cells wide (head + folded router
+    line, e.g. ``dashboard  :2000`` / `` └─ ping-router  Path(...)  → ping@
+    internal``). Two folded columns need 64 + 4 + 64 = 132 cells, which does
+    not fit at width 120, so a packer that only ever sees the folded blocks
+    falls back to one column: 6 branches * 2 lines = 12 content lines, plus
+    the section's own rule and trailing blank = 14.
+
+    Unfolded, each branch grows to 3 lines (router line and service line
+    split again) but narrows to roughly 47 cells: two columns need
+    47 + 4 + 47 = 98, which fits comfortably at 120. Two columns of 3
+    branches * 3 lines = 9, plus the section's 2 chrome lines = 11 — shorter
+    than the folded fallback despite the extra line per branch. Packing both
+    candidates and drawing whichever is shorter must reach this 11, not the
+    14 a folded-only packer produces.
+    """
+    out = _render(_six_ping(), width=120)
+    lines = out.splitlines()
+    assert len(lines) == 11
+    # Never taller at 120 than at any wider width: widening a terminal must
+    # not cost lines.
+    for wider in (140, 160, 190, 200, 215):
+        wider_lines = _render(_six_ping(), width=wider).splitlines()
+        assert len(lines) >= len(wider_lines)
+    # And specifically no taller than a section built only from the unfolded
+    # blocks (no alternative, so PackedColumns has nothing to choose between)
+    # — the same chrome (rule and trailing blank) around the same six
+    # branches, forced always-unfolded.
+    info = _six_ping()
+    unfolded_blocks = [
+        _entrypoint_block(ep, info, None, fold=False) for ep in info.entrypoints
+    ]
+    unfolded_section = section("TRAEFIK WIRING", Group(PackedColumns(unfolded_blocks), Text("")))
+    unfolded_console = Console(width=120, force_terminal=False, color_system=None)
+    with unfolded_console.capture() as capture:
+        unfolded_console.print(unfolded_section)
+    unfolded_lines = capture.get().splitlines()
+    assert len(lines) <= len(unfolded_lines)
 
 
 def test_the_section_fills_most_of_a_wide_terminal():
