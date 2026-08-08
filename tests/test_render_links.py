@@ -1,0 +1,152 @@
+from terminal_status_panel.render.links import link_for, path_from_rule, router_link
+
+
+def test_a_path_prefix_yields_its_prefix():
+    assert path_from_rule("PathPrefix(`/account`)") == "/account"
+
+
+def test_an_exact_path_yields_itself():
+    assert path_from_rule("Path(`/health`)") == "/health"
+
+
+def test_a_regexp_yields_its_literal_head():
+    """Everything up to the first metacharacter is a path; the rest is pattern."""
+    assert path_from_rule("PathRegexp(`^/portal/app(?:/.*)?$`)") == "/portal/app"
+
+
+def test_a_regexp_that_starts_with_a_pattern_yields_nothing():
+    assert path_from_rule("PathRegexp(`^(?:/a|/b)$`)") is None
+
+
+def test_two_paths_in_one_rule_yield_nothing():
+    """One link cannot represent two, so the honest answer is none."""
+    assert path_from_rule("PathPrefix(`/a`) || PathPrefix(`/b`)") is None
+
+
+def test_a_rule_with_no_path_yields_nothing():
+    assert path_from_rule("Headers(`X-Test`, `yes`)") is None
+
+
+def test_no_rule_yields_nothing():
+    assert path_from_rule(None) is None
+    assert path_from_rule("") is None
+
+
+def test_a_path_prefix_is_not_read_as_a_path_matcher():
+    """`Path` is a prefix of `PathPrefix`; a careless alternation reads every
+    PathPrefix( as a Path matcher whose argument happens to start with
+    `Prefix(`, and then a single-path rule looks like two."""
+    assert path_from_rule("PathPrefix(`/portal`)") == "/portal"
+    assert path_from_rule("PathRegexp(`^/portal`)") == "/portal"
+
+
+def test_a_base_and_a_path_join_into_a_url():
+    assert link_for("https://login.example.de", "/account") == \
+        "https://login.example.de/account"
+
+
+def test_a_trailing_slash_on_the_base_changes_nothing():
+    assert link_for("https://login.example.de/", "/account") == \
+        link_for("https://login.example.de", "/account")
+
+
+def test_no_path_yields_the_base_itself():
+    assert link_for("https://login.example.de/", None) == "https://login.example.de"
+
+
+def test_no_base_yields_no_link():
+    assert link_for(None, "/account") is None
+    assert link_for("", "/account") is None
+
+
+def test_a_path_without_a_leading_slash_still_joins_cleanly():
+    assert link_for("https://login.example.de", "account") == \
+        "https://login.example.de/account"
+
+
+def test_a_negated_rule_yields_nothing():
+    """A negation names the one path the router does *not* serve.
+
+    Counting matchers cannot see it -- the count is still one -- so this is
+    the case where the count alone would hand a reader a link to precisely
+    the address the rule excludes.
+    """
+    assert path_from_rule("!PathPrefix(`/health`)") is None
+
+
+def test_a_negation_anywhere_in_the_rule_yields_nothing():
+    assert path_from_rule("Method(`GET`) && !Path(`/metrics`)") is None
+
+
+def test_an_exclamation_mark_inside_a_path_is_not_a_negation():
+    """The grammar is outside the backticks; the argument is not grammar."""
+    assert path_from_rule("PathPrefix(`/a!b`)") == "/a!b"
+
+
+# -- A `PathRegexp`'s literal head is only a prefix when the router actually
+# -- serves that prefix: everything past it must be the end of the string or
+# -- a demonstrably optional continuation, never a tail that narrows the
+# -- match to a longer, different address.
+
+def test_a_regexp_whose_tail_narrows_to_a_longer_exact_path_yields_nothing():
+    """`/foo` is not a sub-case of `/foo.bar` -- it is a different address,
+    and the router matching `^/foo\\.bar$` does not serve `/foo`."""
+    assert path_from_rule(r"PathRegexp(`^/foo\.bar$`)") is None
+
+
+def test_a_regexp_whose_tail_restricts_to_an_extension_yields_nothing():
+    """The router serves only paths ending `.js`; `/static/` is not one of
+    them, only a directory a request there would never reach."""
+    assert path_from_rule(r"PathRegexp(`^/static/.*\.js$`)") is None
+
+
+def test_a_regexp_with_a_character_class_tail_yields_nothing():
+    assert path_from_rule("PathRegexp(`^/a/[0-9]+$`)") is None
+
+
+def test_a_regexp_with_an_optional_tail_still_yields_its_head():
+    """The tail matches nothing but more of the same path, so the head
+    really is what the router serves."""
+    assert path_from_rule("PathRegexp(`^/portal/app(?:/.*)?$`)") == "/portal/app"
+
+
+def test_a_bare_anchored_regexp_yields_its_exact_path():
+    assert path_from_rule("PathRegexp(`^/exact$`)") == "/exact"
+
+
+# -- `router_link` additionally rejects a link when a literal `Host()` names
+# -- a host other than the configured base, or when the host is a pattern
+# -- (`HostRegexp`/`HostSNI`) nobody can compare.
+
+def test_router_link_behaves_like_path_from_rule_and_link_for_composed():
+    assert router_link("https://login.example.de", "PathPrefix(`/account`)") == \
+        "https://login.example.de/account"
+
+
+def test_a_host_matching_the_base_still_links():
+    rule = "Host(`login.example.de`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) == \
+        "https://login.example.de/account"
+
+
+def test_a_host_other_than_the_base_yields_no_link():
+    """`Host() && PathPrefix()` on a shared entrypoint is the most common rule
+    shape in Traefik deployments; without this check every router on the
+    entrypoint would link to the one configured host, wrong for all but one."""
+    rule = "Host(`other.example.de`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) is None
+
+
+def test_a_host_regexp_yields_no_link():
+    """A pattern is not a hostname anyone can compare."""
+    rule = "HostRegexp(`^.+\\.example\\.de$`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) is None
+
+
+def test_a_host_sni_yields_no_link():
+    rule = "HostSNI(`login.example.de`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) is None
+
+
+def test_router_link_with_no_derivable_path_yields_nothing():
+    assert router_link("https://login.example.de", "Headers(`X-Test`, `yes`)") is None

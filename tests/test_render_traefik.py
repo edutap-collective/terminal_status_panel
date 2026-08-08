@@ -1,3 +1,5 @@
+import re
+
 from rich.console import Console, Group
 from rich.text import Text
 
@@ -640,3 +642,180 @@ def test_the_section_fills_most_of_a_wide_terminal():
     out = _render(_ragged(), width=120).splitlines()
     ink = sum(Text(line.rstrip()).cell_len for line in out)
     assert ink / (len(out) * 120) > 0.50
+
+
+#: An OSC-8 opener and its target. The `+` matters: OSC-8 closes with
+#: `ESC ] 8 ; ; ESC \`, an opener with an empty target, and a `*` here would
+#: match that too and put an empty string in the list for every link.
+_OSC8 = re.compile("\x1b]8;[^;]*;([^\x1b]+)\x1b\\\\")
+
+
+def _render_linked(info, cfg=None, swarm=None, width=200) -> str:
+    console = Console(width=width, force_terminal=True, color_system="truecolor")
+    with console.capture() as capture:
+        console.print(traefik_section(info, cfg or Config(), swarm))
+    return capture.get()
+
+
+def _link_targets(out: str) -> list[str]:
+    """Every OSC-8 target in the rendered output, in order."""
+    return _OSC8.findall(out)
+
+
+def _linked():
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
+                                       port=2009)],
+        routers=[
+            TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
+                          rule="PathPrefix(`/account`)", service="account-spa"),
+            TraefikRouter(name="odd-one", entrypoints=["login_example_de"],
+                          rule="PathPrefix(`/a`) || PathPrefix(`/b`)",
+                          service="odd-one"),
+        ],
+        services={"account-spa": TraefikServiceRef(name="account-spa", port=8080),
+                  "odd-one": TraefikServiceRef(name="odd-one", port=8081)},
+    )
+
+
+def _cfg_with_links():
+    cfg = Config()
+    cfg.traefik.links = {"login_example_de": "https://login.example.de"}
+    return cfg
+
+
+def test_a_configured_entrypoint_links_its_head_and_its_routers():
+    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
+    assert "https://login.example.de" in targets
+    assert "https://login.example.de/account" in targets
+
+
+def test_without_a_configured_base_nothing_is_linked():
+    """No base means no link -- never a guessed one."""
+    assert _link_targets(_render_linked(_linked(), Config())) == []
+
+
+def test_a_router_traefik_rejected_carries_no_link():
+    """A router Traefik measurably rejected asserts the route does not exist;
+    a link beside that claim would offer to take you there anyway, even
+    though its rule would otherwise yield a perfectly good path."""
+    info = _linked()
+    info.api_consulted = True
+    info.routers[0].rejected = True  # account-spa, whose rule links cleanly
+    out = _render_linked(info, _cfg_with_links())
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert not any("account-spa" in span for span in linked_spans)
+    # The entrypoint head is unaffected -- only this one router was rejected.
+    assert "https://login.example.de" in _link_targets(out)
+
+
+def test_a_router_whose_rule_has_no_single_path_is_not_linked():
+    """Not "no target ends in /a or /b" -- that also passes if the router got
+    linked to the bare base, which is `link_for(base, None)`'s answer for an
+    entrypoint whose sub-path is merely unknown, not for a router that could
+    not name one. The span-matching approach from
+    `test_the_verdict_glyph_is_outside_the_clickable_region` is what actually
+    tells "linked to the wrong thing" and "not linked" apart."""
+    out = _render_linked(_linked(), _cfg_with_links())
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    # Not `span == "odd-one"`: rendered with `source="file"` the name is dim,
+    # so the span carries style codes around the text and the equality could
+    # never hold either way. A substring check stays true regardless of style.
+    assert not any("odd-one" in span for span in linked_spans)
+
+
+def test_the_entrypoint_head_is_linked_even_when_a_router_is_not():
+    """The host is known even where the sub-path is not."""
+    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
+    assert "https://login.example.de" in targets
+
+
+def test_the_service_line_is_never_linked():
+    """It names a container port inside the cluster, which no browser reaches.
+
+    Asserting on the *targets* is not enough: a link on the service line
+    would carry ``base + path`` like any other, and a URL built that way
+    never contains a port -- so a defect that links the service line anyway
+    would leave every target still portless and this test still green. The
+    span-matching approach from `test_the_verdict_glyph_is_outside_the_
+    clickable_region` is what actually tells "linked" from "not linked".
+
+    The router name and the service name are made to differ (`account-spa`
+    routes to `account-backend`) so that the router head's own, legitimate
+    link -- which necessarily contains the router name -- cannot be mistaken
+    for the service line getting linked too.
+    """
+    info = TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
+                                       port=2009)],
+        routers=[TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
+                               rule="PathPrefix(`/account`)", service="account-backend")],
+        services={"account-backend": TraefikServiceRef(name="account-backend", port=8080)},
+    )
+    out = _render_linked(info, _cfg_with_links())
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert linked_spans, "expected the router name to be linked"
+    assert not any("→" in span or "account-backend" in span for span in linked_spans)
+
+
+def test_no_colour_means_no_hyperlinks():
+    """--no-color already means plain text, and a hyperlink is markup."""
+    console = Console(width=200, force_terminal=True, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(_linked(), _cfg_with_links(), None))
+    assert _link_targets(capture.get()) == []
+
+
+def test_the_verdict_glyph_is_outside_the_clickable_region():
+    """Both heads are built by appending. Linking the whole Text would make the
+    verdict part of the link, and a reader aiming at the state would open a
+    browser instead."""
+    out = _render_linked(_linked(), _cfg_with_links())
+    # `+`, not `*`, for the same reason as in _OSC8: a `*` also matches the
+    # empty-target closer and the spans come out shifted by one.
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert linked_spans, "expected at least one linked span"
+    for span in linked_spans:
+        assert icons.OK not in span
+        assert icons.DEAD not in span
+        assert icons.UNKNOWN not in span
+        assert "PathPrefix" not in span
+        # Same logic as the verdict glyph: the entrypoint head's own address
+        # (`:2009`) is a cluster-internal port and must sit outside the link
+        # to a public URL, just like the router heads' rule text does.
+        assert ":2009" not in span
+
+
+def _linked_without_routers():
+    """An entrypoint that nothing attaches to -- the "-- no router" append
+    path, which `_linked()` above never exercises because it always has
+    `account-spa` and `odd-one` hanging on it."""
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="metrics_example_de", address=":2010",
+                                       port=2010)],
+        routers=[],
+        services={},
+    )
+
+
+def _cfg_with_links_for_empty_entrypoint():
+    cfg = Config()
+    cfg.traefik.links = {"metrics_example_de": "https://metrics.example.de"}
+    return cfg
+
+
+def test_an_entrypoint_with_no_routers_is_still_linked():
+    """The verdict-glyph test above only ever renders the worst-verdict append
+    path, since `_linked()`'s entrypoint always has routers attached. This
+    pins the other two append paths -- "-- no router" here, and the
+    ping-entrypoint's own health-check note the same way -- as an established
+    fact rather than something traced by eye."""
+    out = _render_linked(_linked_without_routers(), _cfg_with_links_for_empty_entrypoint())
+    assert "https://metrics.example.de" in _link_targets(out)
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert linked_spans, "expected the entrypoint head to be linked"
+    for span in linked_spans:
+        assert "no router" not in span

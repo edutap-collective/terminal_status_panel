@@ -15,6 +15,7 @@ from ..collectors.traefik import unknown_entrypoints
 from ..config import Config
 from ..model import SwarmInfo, TraefikInfo, TraefikRouter
 from . import icons
+from .links import link_for, router_link
 from .packing import PackedColumns
 from .panels import section
 from .verdict import service_verdict, severity, verdict_icon
@@ -84,12 +85,31 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
 
 
 def _router_lines(router: TraefikRouter, info: TraefikInfo,
-                  swarm: SwarmInfo | None, *, fold: bool = True) -> list[Text]:
+                  swarm: SwarmInfo | None, *, fold: bool = True,
+                  base: str | None = None) -> list[Text]:
     style = "dim" if router.source == "file" else ""
-    head = Text(f"  └─ {router.name}", style=style)
+    head = Text("  └─ ", style=style)
+    start = len(head.plain)
+    head.append(router.name)
+    # Unlike the entrypoint head below, a router with no derivable path, or
+    # one whose Host() names a different host than *base*, gets no link at
+    # all rather than one to the bare base: `link_for(base, None)` returns
+    # the base by design, which is exactly right for a whole entrypoint whose
+    # sub-path is merely unknown, but wrong for one router among several on
+    # it -- linking it to the root would claim it serves the root, and
+    # nothing measured that.
+    rejected = bool(info.api_consulted and router.rejected)
+    # A router Traefik measurably rejected asserts the route does not exist;
+    # a link beside that claim would offer to take you there anyway.
+    url = None if rejected else router_link(base, router.rule)
+    if url:
+        # Applied to the name's span alone, and now rather than later: the rule
+        # and the rejection notice are appended below, and a link laid over the
+        # whole line would swallow both.
+        head.stylize(f"link {url}", start, len(head.plain))
     if router.rule:
         head.append(f"        {router.rule}", style="dim")
-    if info.api_consulted and router.rejected:
+    if rejected:
         # Traefik was asked and said no: a measured failure, not a suspicion.
         # The accepted case stays silent — the tree already reads as
         # configured-and-accepted — and an unconsulted router (`rejected is
@@ -150,14 +170,23 @@ def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
 
 
 def _entrypoint_block(entrypoint, info: TraefikInfo,
-                      swarm: SwarmInfo | None, *, fold: bool = True) -> list[Text]:
+                      swarm: SwarmInfo | None, *, fold: bool = True,
+                      links: dict[str, str] | None = None) -> list[Text]:
     """This entrypoint's branch, as the flat list of lines it occupies.
 
     Lines rather than a ``Group`` because the packer has to know how tall and
     how wide this branch is before anything is drawn, and a ``Group`` only
     answers that by being rendered.
     """
-    head = Text(f"{entrypoint.name}  {entrypoint.address}", style="bold cyan")
+    head = Text(entrypoint.name, style="bold cyan")
+    base = (links or {}).get(entrypoint.name)
+    root = link_for(base, None)
+    if root:
+        # Scoped to the name alone, as with the router heads below: the
+        # address is a cluster-internal port, and a link swallowing it would
+        # put that port inside a link meant for a public URL.
+        head.stylize(f"link {root}", 0, len(head.plain))
+    head.append(f"  {entrypoint.address}", style="bold cyan")
     attached = _attached(entrypoint, info)
     if not attached:
         if entrypoint.name == info.ping_entrypoint:
@@ -177,7 +206,7 @@ def _entrypoint_block(entrypoint, info: TraefikInfo,
         head.append(f"   {worst}")
     lines = [head]
     for router in attached:
-        lines.extend(_router_lines(router, info, swarm, fold=fold))
+        lines.extend(_router_lines(router, info, swarm, fold=fold, base=base))
     return lines
 
 
@@ -281,9 +310,11 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         # widens the block, and a wider block can force the packer to a
         # column fewer — paying several lines to save one. `PackedColumns`
         # packs both at print time and draws whichever is actually shorter.
-        folded = [_entrypoint_block(ep, data, swarm) for ep in data.entrypoints]
+        folded = [_entrypoint_block(ep, data, swarm, links=cfg.traefik.links)
+                  for ep in data.entrypoints]
         unfolded = [
-            _entrypoint_block(ep, data, swarm, fold=False) for ep in data.entrypoints
+            _entrypoint_block(ep, data, swarm, fold=False, links=cfg.traefik.links)
+            for ep in data.entrypoints
         ]
         parts.append(PackedColumns(folded, alternative=unfolded))
         parts.append(Text(""))
