@@ -1,3 +1,5 @@
+import re
+
 from rich.console import Console, Group
 from rich.text import Text
 
@@ -640,3 +642,96 @@ def test_the_section_fills_most_of_a_wide_terminal():
     out = _render(_ragged(), width=120).splitlines()
     ink = sum(Text(line.rstrip()).cell_len for line in out)
     assert ink / (len(out) * 120) > 0.50
+
+
+#: An OSC-8 opener and its target. The `+` matters: OSC-8 closes with
+#: `ESC ] 8 ; ; ESC \`, an opener with an empty target, and a `*` here would
+#: match that too and put an empty string in the list for every link.
+_OSC8 = re.compile("\x1b]8;[^;]*;([^\x1b]+)\x1b\\\\")
+
+
+def _render_linked(info, cfg=None, swarm=None, width=200) -> str:
+    console = Console(width=width, force_terminal=True, color_system="truecolor")
+    with console.capture() as capture:
+        console.print(traefik_section(info, cfg or Config(), swarm))
+    return capture.get()
+
+
+def _link_targets(out: str) -> list[str]:
+    """Every OSC-8 target in the rendered output, in order."""
+    return _OSC8.findall(out)
+
+
+def _linked():
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
+                                       port=2009)],
+        routers=[
+            TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
+                          rule="PathPrefix(`/account`)", service="account-spa"),
+            TraefikRouter(name="odd-one", entrypoints=["login_example_de"],
+                          rule="PathPrefix(`/a`) || PathPrefix(`/b`)",
+                          service="odd-one"),
+        ],
+        services={"account-spa": TraefikServiceRef(name="account-spa", port=8080),
+                  "odd-one": TraefikServiceRef(name="odd-one", port=8081)},
+    )
+
+
+def _cfg_with_links():
+    cfg = Config()
+    cfg.traefik.links = {"login_example_de": "https://login.example.de"}
+    return cfg
+
+
+def test_a_configured_entrypoint_links_its_head_and_its_routers():
+    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
+    assert "https://login.example.de" in targets
+    assert "https://login.example.de/account" in targets
+
+
+def test_without_a_configured_base_nothing_is_linked():
+    """No base means no link -- never a guessed one."""
+    assert _link_targets(_render_linked(_linked(), Config())) == []
+
+
+def test_a_router_whose_rule_has_no_single_path_is_not_linked():
+    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
+    assert not any(t.endswith("/a") or t.endswith("/b") for t in targets)
+
+
+def test_the_entrypoint_head_is_linked_even_when_a_router_is_not():
+    """The host is known even where the sub-path is not."""
+    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
+    assert "https://login.example.de" in targets
+
+
+def test_the_service_line_is_never_linked():
+    """It names a container port inside the cluster, which no browser reaches."""
+    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
+    assert not any(":8080" in t or ":8081" in t for t in targets)
+
+
+def test_no_colour_means_no_hyperlinks():
+    """--no-color already means plain text, and a hyperlink is markup."""
+    console = Console(width=200, force_terminal=True, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(_linked(), _cfg_with_links(), None))
+    assert _link_targets(capture.get()) == []
+
+
+def test_the_verdict_glyph_is_outside_the_clickable_region():
+    """Both heads are built by appending. Linking the whole Text would make the
+    verdict part of the link, and a reader aiming at the state would open a
+    browser instead."""
+    out = _render_linked(_linked(), _cfg_with_links())
+    # `+`, not `*`, for the same reason as in _OSC8: a `*` also matches the
+    # empty-target closer and the spans come out shifted by one.
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert linked_spans, "expected at least one linked span"
+    for span in linked_spans:
+        assert icons.OK not in span
+        assert icons.DEAD not in span
+        assert icons.UNKNOWN not in span
+        assert "PathPrefix" not in span

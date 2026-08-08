@@ -384,3 +384,43 @@ def test_follow_mode_keeps_the_panels_colour(monkeypatch):
     # land in the same order of magnitude, not a bare few against over a
     # hundred.
     assert follow_sgr > one_shot_sgr / 2
+
+
+def test_follow_mode_keeps_the_panels_hyperlinks(monkeypatch):
+    """The frame is carried as segments, so a link in a style survives it.
+
+    Before 0.5.0's colour fix the loop flattened each frame to plain strings,
+    and this feature would have worked once and gone silent here — which is
+    why it is worth a test of its own rather than an assumption.
+    """
+    from terminal_status_panel.model import (
+        PanelData,
+        TraefikEntrypoint,
+        TraefikInfo,
+        TraefikRouter,
+        TraefikServiceRef,
+    )
+
+    info = TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
+                                       port=2009)],
+        routers=[TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
+                               rule="PathPrefix(`/account`)", service="account-spa")],
+        services={"account-spa": TraefikServiceRef(name="account-spa", port=8080)},
+    )
+    cfg = Config()
+    cfg.traefik.links = {"login_example_de": "https://login.example.de"}
+
+    monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "collect_all", lambda *a, **k: PanelData(traefik=info))
+
+    buffer = io.StringIO()
+    capturing = Console(file=buffer, force_terminal=True, width=100, height=30,
+                        color_system="standard")
+    monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
+    monkeypatch.setattr(follow.time, "sleep", _StopAfter(1))
+
+    follow.run_follow(cfg, ("traefik",), width=100, no_color=False, interval=5.0)
+
+    assert "\x1b]8;" in buffer.getvalue(), "the frame carries no hyperlink"
