@@ -62,3 +62,22 @@ def test_no_base_yields_no_link():
 def test_a_path_without_a_leading_slash_still_joins_cleanly():
     assert link_for("https://login.example.de", "account") == \
         "https://login.example.de/account"
+
+
+def test_a_negated_rule_yields_nothing():
+    """A negation names the one path the router does *not* serve.
+
+    Counting matchers cannot see it -- the count is still one -- so this is
+    the case where the count alone would hand a reader a link to precisely
+    the address the rule excludes.
+    """
+    assert path_from_rule("!PathPrefix(`/health`)") is None
+
+
+def test_a_negation_anywhere_in_the_rule_yields_nothing():
+    assert path_from_rule("Method(`GET`) && !Path(`/metrics`)") is None
+
+
+def test_an_exclamation_mark_inside_a_path_is_not_a_negation():
+    """The grammar is outside the backticks; the argument is not grammar."""
+    assert path_from_rule("PathPrefix(`/a!b`)") == "/a!b"

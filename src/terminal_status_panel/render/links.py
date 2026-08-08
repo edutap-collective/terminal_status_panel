@@ -22,6 +22,9 @@ import re
 #: one path starts to look like a rule naming two.
 _MATCHER = re.compile(r"(PathPrefix|PathRegexp|Path)\(`([^`]*)`\)")
 
+#: Backtick-quoted argument, for detecting negations in grammar (not path content).
+_ARGUMENT = re.compile(r"`[^`]*`")
+
 #: Where a regular expression stops being a literal path. Everything from the
 #: first of these onwards is a pattern, and guessing what it matches is exactly
 #: the guessing this module exists to avoid.
@@ -38,6 +41,14 @@ def path_from_rule(rule: str | None) -> str | None:
     """
     if not rule:
         return None
+
+    # Strip backtick-quoted arguments, which are content not grammar. A negation
+    # in the grammar (outside backticks) means the one matcher names a path the
+    # router does *not* serve, so the honest answer is None.
+    grammar = _ARGUMENT.sub("", rule)
+    if "!" in grammar:
+        return None
+
     matches = _MATCHER.findall(rule)
     if len(matches) != 1:
         return None
