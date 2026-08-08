@@ -6,8 +6,10 @@ best run from a `profile.d` snippet so it uses the full terminal width (see
 out in five tiers:
 
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
-- **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
-  usage table.
+- **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, a filesystem
+  usage table, and a **TOP CPU** / **TOP RAM** row: the five processes
+  ranked by each. See [Top processes](#top-processes) below for what that
+  ranking measures and what it costs.
 - **DOCKER INFOS** — Swarm key facts (summary + node health) above the node
   matrices: an *Infrastructure* and a *Service* table per origin — under
   **SWARM STACKS** and **COMPOSE PROJECTS**, each block omitted entirely when
@@ -181,11 +183,11 @@ check what Traefik is actually wired to serve.
 ## Usage
 
 ```bash
-status-full    [--sections server,docker,health,traefik] [--width N] [--no-color] [--config PATH]
-status-server  [--width N] [--no-color] [--config PATH]
-status-docker  [--width N] [--no-color] [--config PATH]
-status-health  [--width N] [--no-color] [--config PATH]
-status-traefik [--width N] [--no-color] [--config PATH]
+status-full    [--sections server,docker,health,traefik] [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-server  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-docker  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-health  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-traefik [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
 ```
 
 The command **always exits 0** so it can never break a login shell. If a
@@ -200,6 +202,8 @@ a placeholder instead of erroring.
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
 | `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
+| `-f`, `--follow` | off | Keep the panel on screen and refresh it, on all five commands. See [Follow mode](#follow-mode) below. |
+| `--interval N` | *(see below)* | Seconds between refreshes under `--follow`. Overrides both the config and the built-in default; values below 1 second are raised to 1 second. Ignored without `--follow`. |
 
 Colours are always **forced on** (unless `--no-color`), because at MOTD
 generation time there is no TTY to auto-detect a colour terminal.
@@ -217,6 +221,39 @@ The width is resolved in this order (first match wins):
 
 > The panel is designed for wide terminals. Narrow widths still render but wrap.
 
+### Follow mode
+
+`-f` / `--follow` keeps the panel on screen and redraws it on an interval,
+on all five commands, in place of a single one-shot render.
+
+**The default interval depends on which sections are collected, not on which
+command you ran.** If `health` is among the requested sections, the default
+is 20 s (config key `[follow] health_interval`); otherwise it is 5 s (`[follow]
+interval`). That is a rule about sections rather than a per-command table, so
+it is also correct for a combination like `--sections docker,health` on
+`status-full`. `--interval N` on the command line overrides both.
+
+The health section earns the longer default: it runs `docker exec` probes
+inside the cluster's containers, and the Kafka probe alone carries roughly
+2.6 s of JVM startup (see [Cluster health checks](#cluster-health-checks)).
+Measured on a five-node reference cluster at width 200, median of three runs:
+`status-health` takes 3.43 s per pass against `status-server`'s 0.49 s — a
+5 s cadence would start a new JVM on the cluster every five seconds, forever.
+
+**Ctrl-C stops it.** There is no `q` key or other in-panel control; reading a
+single keypress would need raw mode, and Ctrl-C already does the job.
+
+**The panel is cropped to the screen**, with a status line at the bottom
+naming what does not fit — `↓ 82 more lines · every 20s · Ctrl-C to stop` —
+and the `↓` clause absent once everything fits. On the same reference
+cluster, `status-full` renders 131 lines at width 200, taller than a normal
+terminal, so it will be cropped there; each of the four section commands
+(22 to 51 lines) fits on an ordinary screen.
+
+**Without a TTY, `--follow` renders one frame and returns**, the same as a
+plain run — piping the output to a file or generating a cached MOTD still
+works, rather than looping forever inside a pipe.
+
 ## Configuration
 
 Zero configuration is required. Settings are read from
@@ -231,6 +268,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
 | `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `resources.ignore_mountpoints` | platform-dependent | Mountpoint prefixes hidden from the filesystem table. Defaults to `["/System/Volumes/", "/Library/Developer/CoreSimulator/"]` on macOS and to `[]` elsewhere. An explicitly empty list hides nothing rather than falling back to the default. |
+| `resources.process_sample` | `0.3` | Seconds to sample process CPU usage over for the TOP CPU row (see [Top processes](#top-processes)). `0` or less disables the CPU ranking; TOP RAM is unaffected. |
 | `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A **stack** (or Compose project) whose name matches goes into that origin's **Infrastructure** table; every other stack goes into **Service**. An entry with no stack at all is never classified this way — it has no project to be filed under, so `docker run -d redis` lands in **Standalone containers** like any other stackless entry, however infrastructural its name. |
 | `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastructure** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
@@ -242,6 +280,8 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
 | `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
+| `follow.interval` | `5.0` | Refresh interval in seconds for `--follow` when the `health` section is **not** among those requested (see [Follow mode](#follow-mode)). |
+| `follow.health_interval` | `20.0` | Refresh interval in seconds for `--follow` when the `health` section **is** among those requested. |
 | `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see [Traefik wiring](#traefik-wiring) for why it cannot work on today's app servers. |
 | `traefik.cert` / `traefik.key` | *(unset)* | Client certificate/key for that endpoint (mTLS). Both `url` and `cert` must be set for the cross-check to run at all. |
 | `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate. Unset, httpx falls back to **certifi's** bundle, *not* the system trust store — a corporate CA installed in `/etc/ssl/certs` is not picked up (only `SSL_CERT_FILE`/`SSL_CERT_DIR` in the environment override it). Set this explicitly for a privately signed endpoint. |
@@ -293,7 +333,48 @@ dns = 2.5
 [[health.dns.expect]]
 name = "login.example.net"
 addresses = ["10.9.9.9"]
+
+[resources]
+process_sample = 0.3
+
+[follow]
+interval = 5.0          # sections without health
+health_interval = 20.0  # sections including health
 ```
+
+## Top processes
+
+The SYSTEM STATUS block ends with two five-row tables side by side, **TOP
+CPU** and **TOP RAM**, each with `%CPU`, `%MEM`, `PID`, `PROCESS` and
+`SERVICE` columns.
+
+**`%CPU` is sampled over a window, not the lifetime average `ps` reports.**
+`ps -eo %cpu` divides total CPU time by elapsed time since the process
+started, so a container that has been running for weeks barely moves
+whatever it is doing right now. This panel primes every process, waits, and
+reads instead, so the figure is the share of CPU actually used during that
+window — and the `TOP CPU` heading names the window it used, e.g.
+`TOP CPU (0.3s)`.
+
+That window is the `[resources] process_sample` config key, `0.3` seconds by
+default, and it is real cost on a login path: sampling roughly 400 processes
+measured at 0.32 s wall clock on a five-node reference cluster. Set it to `0`
+or less and the CPU ranking turns off entirely — the row then reads
+`CPU sampling is off` in place of a table, rather than five rows of `0.0`
+that would read as a measurement rather than its absence — and **TOP RAM**
+alone remains.
+
+**`SERVICE` is read from `/proc/<pid>/cgroup`.** A process running under a
+systemd unit shows that unit's name verbatim. A process running inside a
+container shows the container's short ID, and that ID resolves to a service
+name only when the Docker section was also collected and can map it — which
+is why `status-server` on its own shows IDs rather than names: it never
+opens the Docker socket, deliberately, so it has nothing to resolve the ID
+against.
+
+The panel excludes its own process from both rankings — the same reason
+`ps` habitually ranks itself first: it is the one process guaranteed to be
+running while the measurement happens.
 
 ## Platform behaviour
 
