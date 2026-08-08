@@ -26,17 +26,23 @@ class _FakeProcess:
     called during priming (`_sample`), which has its own, separate
     swallow-and-continue -- raising there would test that path, not the row
     loop's.
+
+    `fails_at_memory_info=True` makes `memory_info()` raise instead, the way
+    a process that survives the first three reads but has already exited by
+    the time the resident memory is fetched would behave. This targets the
+    final read in the row loop's guarded block.
     """
 
     def __init__(self, pid: int, name: str, cpu_percent: float = 0.0,
                  memory_percent: float = 0.0, rss: int = 0,
-                 vanishes: bool = False) -> None:
+                 vanishes: bool = False, fails_at_memory_info: bool = False) -> None:
         self.pid = pid
         self._name = name
         self._cpu_percent = cpu_percent
         self._memory_percent = memory_percent
         self._rss = rss
         self._vanishes = vanishes
+        self._fails_at_memory_info = fails_at_memory_info
 
     def cpu_percent(self, interval: float | None = None) -> float:
         return self._cpu_percent
@@ -50,6 +56,8 @@ class _FakeProcess:
         return self._memory_percent
 
     def memory_info(self):
+        if self._fails_at_memory_info:
+            raise psutil.NoSuchProcess(self.pid)
         return SimpleNamespace(rss=self._rss)
 
 
@@ -218,6 +226,24 @@ def test_a_process_that_raises_while_being_read_is_still_skipped_whole(monkeypat
     monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
         _FakeProcess(101, "app", memory_percent=1.0, rss=1024),
         _FakeProcess(102, "gone", memory_percent=9.0, rss=4096, vanishes=True),
+    ])
+    snapshot = processes.collect_processes(sample=0.0)
+    assert snapshot is not None
+    assert [row.pid for row in snapshot.top_memory] == [101]
+
+
+def test_a_process_that_fails_at_the_memory_read_is_skipped_whole(tmp_path, monkeypatch):
+    """The row loop reads four attributes; the last one deserves its own guard.
+
+    The sibling test kills the process at `name()`, the first read, so it
+    passes whether or not the memory read is inside the `try` at all. This one
+    fails there specifically, which is what pins the read to the guarded block.
+    """
+    monkeypatch.setattr(processes, "PROC", str(tmp_path))
+    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
+        _FakeProcess(101, "app", memory_percent=1.0, rss=1024),
+        _FakeProcess(102, "gone", memory_percent=9.0, rss=4096,
+                     fails_at_memory_info=True),
     ])
     snapshot = processes.collect_processes(sample=0.0)
     assert snapshot is not None
