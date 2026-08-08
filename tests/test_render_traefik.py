@@ -756,6 +756,10 @@ def test_the_verdict_glyph_is_outside_the_clickable_region():
         assert icons.DEAD not in span
         assert icons.UNKNOWN not in span
         assert "PathPrefix" not in span
+        # Same logic as the verdict glyph: the entrypoint head's own address
+        # (`:2009`) is a cluster-internal port and must sit outside the link
+        # to a public URL, just like the router heads' rule text does.
+        assert ":2009" not in span
 
 
 def _linked_without_routers():

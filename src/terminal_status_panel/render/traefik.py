@@ -178,11 +178,15 @@ def _entrypoint_block(entrypoint, info: TraefikInfo,
     how wide this branch is before anything is drawn, and a ``Group`` only
     answers that by being rendered.
     """
-    head = Text(f"{entrypoint.name}  {entrypoint.address}", style="bold cyan")
+    head = Text(entrypoint.name, style="bold cyan")
     base = (links or {}).get(entrypoint.name)
     root = link_for(base, None)
     if root:
+        # Scoped to the name alone, as with the router heads below: the
+        # address is a cluster-internal port, and a link swallowing it would
+        # put that port inside a link meant for a public URL.
         head.stylize(f"link {root}", 0, len(head.plain))
+    head.append(f"  {entrypoint.address}", style="bold cyan")
     attached = _attached(entrypoint, info)
     if not attached:
         if entrypoint.name == info.ping_entrypoint:
