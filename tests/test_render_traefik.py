@@ -719,7 +719,10 @@ def test_a_router_whose_rule_has_no_single_path_is_not_linked():
     tells "linked to the wrong thing" and "not linked" apart."""
     out = _render_linked(_linked(), _cfg_with_links())
     linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
-    assert not any(span == "odd-one" for span in linked_spans)
+    # Not `span == "odd-one"`: rendered with `source="file"` the name is dim,
+    # so the span carries style codes around the text and the equality could
+    # never hold either way. A substring check stays true regardless of style.
+    assert not any("odd-one" in span for span in linked_spans)
 
 
 def test_the_entrypoint_head_is_linked_even_when_a_router_is_not():
@@ -729,9 +732,32 @@ def test_the_entrypoint_head_is_linked_even_when_a_router_is_not():
 
 
 def test_the_service_line_is_never_linked():
-    """It names a container port inside the cluster, which no browser reaches."""
-    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
-    assert not any(":8080" in t or ":8081" in t for t in targets)
+    """It names a container port inside the cluster, which no browser reaches.
+
+    Asserting on the *targets* is not enough: a link on the service line
+    would carry ``base + path`` like any other, and a URL built that way
+    never contains a port -- so a defect that links the service line anyway
+    would leave every target still portless and this test still green. The
+    span-matching approach from `test_the_verdict_glyph_is_outside_the_
+    clickable_region` is what actually tells "linked" from "not linked".
+
+    The router name and the service name are made to differ (`account-spa`
+    routes to `account-backend`) so that the router head's own, legitimate
+    link -- which necessarily contains the router name -- cannot be mistaken
+    for the service line getting linked too.
+    """
+    info = TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
+                                       port=2009)],
+        routers=[TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
+                               rule="PathPrefix(`/account`)", service="account-backend")],
+        services={"account-backend": TraefikServiceRef(name="account-backend", port=8080)},
+    )
+    out = _render_linked(info, _cfg_with_links())
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert linked_spans, "expected the router name to be linked"
+    assert not any("→" in span or "account-backend" in span for span in linked_spans)
 
 
 def test_no_colour_means_no_hyperlinks():
