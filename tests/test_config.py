@@ -291,3 +291,30 @@ def test_a_malformed_link_table_leaves_the_rest_of_the_config_intact(tmp_path):
     cfg = load_config(path)
     assert cfg.traefik.links == {}
     assert cfg.traefik.url == "https://api.example.de"
+
+
+def test_a_base_with_no_host_is_dropped(tmp_path):
+    """A scheme with nothing to reach is not a base anything can be joined
+    onto -- rendering it would produce a bare `http://something` fragment,
+    not a URL."""
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'bare_scheme = "http://:8080"\n'
+        'ok = "https://login.example.de"\n'
+    )
+    assert load_config(path).traefik.links == {"ok": "https://login.example.de"}
+
+
+def test_a_base_carrying_a_query_or_fragment_is_dropped(tmp_path):
+    """`link_for` only ever appends a path, so a query or fragment on the base
+    would land inside the joined URL instead of where it was written:
+    `https://x.de?q=1` + `/a` -> `https://x.de?q=1/a`."""
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'query = "https://x.example.de?q=1"\n'
+        'fragment = "https://x.example.de#top"\n'
+        'ok = "https://login.example.de"\n'
+    )
+    assert load_config(path).traefik.links == {"ok": "https://login.example.de"}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tomllib
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from . import platform_defaults
 
@@ -259,6 +260,16 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
             continue
         url = value.strip().rstrip("/")
         if not url.startswith(("http://", "https://")):
+            continue
+        parsed = urlsplit(url)
+        if not parsed.hostname:
+            # A scheme with nothing to reach -- `http://`, `http://:8080` --
+            # is not a base anything can be joined onto.
+            continue
+        if parsed.query or parsed.fragment:
+            # `link_for` only ever appends a path, so a query or fragment on
+            # the base would land inside the joined URL instead of where it
+            # was written: `https://x.de?q=1` + `/a` -> `https://x.de?q=1/a`.
             continue
         links[str(name)] = url
     traefik = TraefikApiConfig(
