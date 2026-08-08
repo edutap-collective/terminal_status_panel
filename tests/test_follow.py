@@ -1,4 +1,7 @@
+import io
+
 import pytest
+from rich.console import Console
 
 from terminal_status_panel import cli, follow
 from terminal_status_panel.config import Config
@@ -187,4 +190,33 @@ def test_an_interval_below_the_floor_is_raised(monkeypatch):
     # `time.monotonic()` calls with nothing between them differ). What this
     # test can actually show is that the floor was applied at all: a delay
     # near the 1s floor, not near the 0.1s that was asked for.
-    assert stopper.delays[0] > 0.5, "the interval floor was not applied"
+    assert stopper.delays[0] > follow.MIN_INTERVAL / 2, "the interval floor was not applied"
+
+
+def test_each_pass_redraws_the_whole_screen(monkeypatch):
+    """A frame shorter than the last must erase it, not scroll it away.
+
+    Without homing the cursor and padding to the full height, a short panel
+    leaves the previous frame's tail on screen underneath it.
+    """
+    monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "collect_resources", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
+
+    # A real `Console`, forced into terminal mode so it emits control codes,
+    # writing to a buffer instead of the real screen -- the seam this test
+    # needs to inspect the raw stream `run_follow` actually produces.
+    buffer = io.StringIO()
+    capturing = Console(file=buffer, force_terminal=True, width=100, height=24)
+    monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
+
+    stopper = _StopAfter(2)
+    monkeypatch.setattr(follow.time, "sleep", stopper)
+
+    follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=5.0)
+
+    # One home sequence comes from entering the alternate screen itself; one
+    # more per pass is what actually erases the previous frame. Two passes
+    # ran, so three in total -- a count stuck at one would mean later passes
+    # scrolled underneath the first instead of overwriting it.
+    assert buffer.getvalue().count("\x1b[H") == 3

@@ -10,6 +10,10 @@ from __future__ import annotations
 import sys
 import time
 
+from rich.console import Group
+from rich.control import Control
+from rich.text import Text
+
 from .config import Config
 from .render.layout import build_layout
 
@@ -152,7 +156,7 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
         return 0
 
     try:
-        with console.screen():
+        with console.screen() as screen:
             while True:
                 started = time.monotonic()
                 error: str | None = None
@@ -166,15 +170,24 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
                         for line in console.render_lines(
                             build_layout(data, cfg, sections), pad=False)
                     ]
-                except Exception as exc:  # noqa: BLE001 - reported, not raised
+                except Exception as exc:  # reported in the status line, not raised
                     # A pass that fails is a fact to show, not a reason to
                     # stop. The next one may well succeed.
                     rendered = []
                     error = f"{type(exc).__name__}: {exc}"
                 delay = next_delay(chosen, time.monotonic() - started)
                 kept, hidden = crop(rendered, console.size.height)
-                console.print("\n".join(
-                    kept + [status_line(hidden, delay, console.width, error)]))
+                lines = kept + [status_line(hidden, delay, console.width, error)]
+
+                # `console.print` does not reposition the cursor between passes,
+                # so a frame shorter than the last leaves the previous one's tail
+                # on screen underneath it rather than replacing it. Homing the
+                # cursor first, then updating through `Screen` -- which pads
+                # every line to the full width and fills to the full height --
+                # is what makes each pass actually overwrite the last, the way
+                # `top` does.
+                console.control(Control.home())
+                screen.update(Group(*[Text(line) for line in lines]))
                 time.sleep(delay)
     except KeyboardInterrupt:
         return 0
