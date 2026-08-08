@@ -394,9 +394,9 @@ That window is the `[resources] process_sample` config key, `0.3` seconds by
 default, and it is real cost on a login path: sampling roughly 400 processes
 measured at 0.32 s wall clock on a five-node reference cluster. Set it to `0`
 or less and the CPU ranking turns off entirely — the row then reads
-`CPU sampling is off` in place of a table, rather than five rows of `0.0`
-that would read as a measurement rather than its absence — and **TOP RAM**
-alone remains.
+`CPU sampling is off` in place of a table, rather than rows of `0.0` that
+would read as a measurement rather than its absence — and **TOP RAM** alone
+remains.
 
 **`SERVICE` is read from `/proc/<pid>/cgroup`.** A process running under a
 systemd unit shows that unit's name verbatim. A process running inside a
@@ -406,19 +406,21 @@ is why `status-server` on its own shows IDs rather than names: it never
 opens the Docker socket, deliberately, so it has nothing to resolve the ID
 against.
 
-**On a narrow terminal, `SERVICE` is the column most likely to give first.**
-At width 200 both tables — `MEM` column included — render in full beside
-each other, with only `SERVICE`'s own 22-character cap ever cutting a long
-unit or service name. At 120 columns the two six-column tables no longer fit
-side by side at their natural width: the panel has already truncated
-`SERVICE` to at most 22 characters before Rich ever sees it, and Rich then
-shrinks whatever flexible columns still do not fit — `SERVICE` first, since
-it is usually the widest column left, but a long `PROCESS` name is squeezed
-too (`containerd-shim`, unremarkable on a Docker host, reads in full at 200
-and as `containerd-sh…` at 120). What does not move are the numeric
-columns — `%CPU`, `%MEM`, `MEM`, `PID` keep their values undamaged at either
-width, which is the guarantee worth making: a shortened name is still
-shorter, but a shortened number would simply be wrong.
+**On a narrow terminal, the two tables stack instead of squeezing.** The
+panel measures each table's natural width and lays `TOP CPU` beside
+`TOP RAM`, with a gap between them, only when both fit the terminal as they
+are — verified at width 200 and at 120, where both render in full side by
+side, with only `SERVICE`'s own 22-character cap ever cutting a long unit or
+service name (`containerd-shim`, unremarkable on a Docker host, reads in
+full at either width). Once the pair no longer fits — verified at width 80,
+which is `Config.width`'s default and what `resolve_width` falls back to
+whenever stdout is not a TTY, the MOTD-generation path this README already
+names — `TOP RAM` moves below `TOP CPU` instead of beside it, each keeping
+the full terminal width and its own heading. Rich is never asked to shrink a
+pair that does not fit; a pair that does not fit is stacked instead. That is
+why the numeric columns — `%CPU`, `%MEM`, `MEM`, `PID` — keep their values
+undamaged at every width, which is the guarantee worth making: a shortened
+name is still shorter, but a shortened number would simply be wrong.
 
 The panel excludes its own process from both rankings — the same reason
 `ps` habitually ranks itself first: it is the one process guaranteed to be
