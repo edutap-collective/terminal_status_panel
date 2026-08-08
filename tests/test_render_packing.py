@@ -81,10 +81,12 @@ def test_no_rendered_line_exceeds_the_console_width():
 
 def test_a_column_stacks_its_blocks_without_a_gap_between_them():
     blocks = [[Text("tall")] * 5, [Text("a")], [Text("b")], [Text("c")]]
-    lines = _render(PackedColumns(blocks), width=30)
-    # The three one-line blocks share a column and follow one another
-    # immediately; the layout is only as tall as the tallest block.
+    # Only two columns fit in thirteen cells, so the three one-line blocks
+    # share the second one. They follow each other immediately: the layout is
+    # as tall as the tallest block, not as tall as the blocks stacked up.
+    lines = _render(PackedColumns(blocks), width=13)
     assert len(lines) == 5
+    assert [line.strip() for line in lines[:3]] == ["tall    a", "tall    b", "tall    c"]
 
 
 def test_no_blocks_render_to_nothing():
