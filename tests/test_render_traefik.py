@@ -542,3 +542,15 @@ def test_a_measured_service_keeps_its_own_line():
     head = next(line for line in out.splitlines()
                 if "└─ kafbat-ui" in line and "→" not in line)
     assert "kafbat-ui_kafbat-ui" not in head
+
+
+def test_the_section_fills_most_of_a_wide_terminal():
+    """The whole point of the packing, measured rather than asserted.
+
+    Row by row this shape rendered under half the rectangle it occupied. The
+    bound is deliberately loose — it guards against a regression to ragged
+    rows, not against a few cells of drift.
+    """
+    out = _render(_ragged(), width=120).splitlines()
+    ink = sum(Text(line).cell_len for line in out)
+    assert ink / (len(out) * 120) > 0.30
