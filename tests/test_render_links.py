@@ -1,4 +1,4 @@
-from terminal_status_panel.render.links import link_for, path_from_rule
+from terminal_status_panel.render.links import link_for, path_from_rule, router_link
 
 
 def test_a_path_prefix_yields_its_prefix():
@@ -112,3 +112,41 @@ def test_a_regexp_with_an_optional_tail_still_yields_its_head():
 
 def test_a_bare_anchored_regexp_yields_its_exact_path():
     assert path_from_rule("PathRegexp(`^/exact$`)") == "/exact"
+
+
+# -- `router_link` additionally rejects a link when a literal `Host()` names
+# -- a host other than the configured base, or when the host is a pattern
+# -- (`HostRegexp`/`HostSNI`) nobody can compare.
+
+def test_router_link_behaves_like_path_from_rule_and_link_for_composed():
+    assert router_link("https://login.example.de", "PathPrefix(`/account`)") == \
+        "https://login.example.de/account"
+
+
+def test_a_host_matching_the_base_still_links():
+    rule = "Host(`login.example.de`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) == \
+        "https://login.example.de/account"
+
+
+def test_a_host_other_than_the_base_yields_no_link():
+    """`Host() && PathPrefix()` on a shared entrypoint is the most common rule
+    shape in Traefik deployments; without this check every router on the
+    entrypoint would link to the one configured host, wrong for all but one."""
+    rule = "Host(`other.example.de`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) is None
+
+
+def test_a_host_regexp_yields_no_link():
+    """A pattern is not a hostname anyone can compare."""
+    rule = "HostRegexp(`^.+\\.example\\.de$`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) is None
+
+
+def test_a_host_sni_yields_no_link():
+    rule = "HostSNI(`login.example.de`) && PathPrefix(`/account`)"
+    assert router_link("https://login.example.de", rule) is None
+
+
+def test_router_link_with_no_derivable_path_yields_nothing():
+    assert router_link("https://login.example.de", "Headers(`X-Test`, `yes`)") is None

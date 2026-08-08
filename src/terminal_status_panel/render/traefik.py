@@ -15,7 +15,7 @@ from ..collectors.traefik import unknown_entrypoints
 from ..config import Config
 from ..model import SwarmInfo, TraefikInfo, TraefikRouter
 from . import icons
-from .links import link_for, path_from_rule
+from .links import link_for, router_link
 from .packing import PackedColumns
 from .panels import section
 from .verdict import service_verdict, severity, verdict_icon
@@ -91,14 +91,14 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
     head = Text("  └─ ", style=style)
     start = len(head.plain)
     head.append(router.name)
-    # Unlike the entrypoint head below, a router with no derivable path gets
-    # no link at all rather than one to the bare base: `link_for(base, None)`
-    # returns the base by design, which is exactly right for a whole
-    # entrypoint whose sub-path is merely unknown, but wrong for one router
-    # among several on it -- linking it to the root would claim it serves the
-    # root, and nothing measured that.
-    path = path_from_rule(router.rule)
-    url = link_for(base, path) if path else None
+    # Unlike the entrypoint head below, a router with no derivable path, or
+    # one whose Host() names a different host than *base*, gets no link at
+    # all rather than one to the bare base: `link_for(base, None)` returns
+    # the base by design, which is exactly right for a whole entrypoint whose
+    # sub-path is merely unknown, but wrong for one router among several on
+    # it -- linking it to the root would claim it serves the root, and
+    # nothing measured that.
+    url = router_link(base, router.rule)
     if url:
         # Applied to the name's span alone, and now rather than later: the rule
         # and the rejection notice are appended below, and a link laid over the

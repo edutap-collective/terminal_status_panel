@@ -1,19 +1,24 @@
 """Turn a Traefik rule and a configured base URL into a clickable address.
 
-The base cannot be derived from anything Traefik knows. Its routers match on
-path alone -- the reference cluster has no ``Host()`` rule at all -- so the
-public hostname appears nowhere in the routing configuration. The entrypoint's
-own name looks like a hostname with dots replaced by underscores, and is not:
-in a name like ``portal_dept_uni_example_de`` one underscore stands for a dot
-and the next for a hyphen, and nothing in the name says which. A link that
-goes somewhere plausible but wrong is worse than no link, because the reader
-cannot tell until they click it. The base therefore comes from configuration
-and from nowhere else.
+The base cannot be derived from anything Traefik knows. The reference cluster
+this was first built against has no ``Host()`` rule at all -- every router
+there matches on path alone -- but that is one installation's rule vocabulary,
+not a property of Traefik: ``Host(`a.example.de`) && PathPrefix(`/x`)`` is a
+common shape elsewhere, and a literal host still only says which *one* host a
+router answers on, never the scheme or port a reader would need to reach it.
+The entrypoint's own name looks like a hostname with dots replaced by
+underscores, and is not: in a name like ``portal_dept_uni_example_de`` one
+underscore stands for a dot and the next for a hyphen, and nothing in the name
+says which. A link that goes somewhere plausible but wrong is worse than no
+link, because the reader cannot tell until they click it. The base therefore
+comes from configuration and from nowhere else -- ``router_link`` only ever
+narrows a configured base down to ``None``, never guesses one.
 """
 
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 #: Traefik's three path matchers, with their backtick-quoted argument.
 #: ``PathPrefix`` and ``PathRegexp`` are tried before ``Path`` because ``Path``
@@ -24,6 +29,16 @@ _MATCHER = re.compile(r"(PathPrefix|PathRegexp|Path)\(`([^`]*)`\)")
 
 #: Backtick-quoted argument, for detecting negations in grammar (not path content).
 _ARGUMENT = re.compile(r"`[^`]*`")
+
+#: A literal `Host()` matcher's argument -- the one host name this rule can be
+#: compared against.
+_HOST_LITERAL = re.compile(r"Host\(`([^`]+)`\)")
+
+#: `HostRegexp` and `HostSNI` name a pattern, not a literal hostname. There is
+#: no comparing a pattern to a base URL's host without guessing what it
+#: matches -- exactly the guessing this module exists to avoid, so a rule
+#: carrying either yields no link at all.
+_HOST_PATTERN = re.compile(r"Host(?:Regexp|SNI)\(")
 
 #: Where a regular expression stops being a literal path. Everything from the
 #: first of these onwards is a pattern, and guessing what it matches is exactly
@@ -99,3 +114,29 @@ def link_for(base: str | None, path: str | None) -> str | None:
     if not path:
         return root
     return f"{root}/{path.lstrip('/')}"
+
+
+def router_link(base: str | None, rule: str | None) -> str | None:
+    """The URL this router serves under *base*, or ``None``.
+
+    Composes `path_from_rule` and `link_for` for the path, and additionally
+    checks the host: `PathPrefix`/`Path`/`PathRegexp` say nothing about which
+    host a rule applies to, so ``Host(`a.example.de`) && PathPrefix(`/x`)`` on
+    a shared entrypoint would otherwise link every router on it to whichever
+    one host happens to be configured -- wrong for all but one. A literal
+    `Host(`…`)` is compared to *base*'s own host; a different one yields
+    ``None``. `HostRegexp` or `HostSNI` yields ``None`` outright -- see
+    `_HOST_PATTERN`.
+    """
+    path = path_from_rule(rule)
+    if not path:
+        return None
+    url = link_for(base, path)
+    if not url:
+        return None
+    if rule and _HOST_PATTERN.search(rule):
+        return None
+    host = _HOST_LITERAL.search(rule) if rule else None
+    if host and host.group(1) != urlsplit(base).hostname:
+        return None
+    return url
