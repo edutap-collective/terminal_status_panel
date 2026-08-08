@@ -8,7 +8,6 @@ it silently — and the cluster has one today.
 
 from __future__ import annotations
 
-from rich.columns import Columns
 from rich.console import Group, RenderableType
 from rich.text import Text
 
@@ -16,6 +15,7 @@ from ..collectors.traefik import unknown_entrypoints
 from ..config import Config
 from ..model import SwarmInfo, TraefikInfo, TraefikRouter
 from . import icons
+from .packing import PackedColumns
 from .panels import section
 from .verdict import service_verdict, severity, verdict_icon
 
@@ -84,7 +84,7 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
 
 
 def _router_lines(router: TraefikRouter, info: TraefikInfo,
-                  swarm: SwarmInfo | None) -> Group:
+                  swarm: SwarmInfo | None) -> list[Text]:
     style = "dim" if router.source == "file" else ""
     head = Text(f"  └─ {router.name}", style=style)
     if router.rule:
@@ -95,7 +95,7 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         # configured-and-accepted — and an unconsulted router (`rejected is
         # None`, or `api_consulted` False) implies nothing either way.
         head.append(f"  {icons.DEAD} rejected by Traefik", style="red")
-    parts: list[RenderableType] = [head]
+    lines: list[Text] = [head]
     for name in router.middlewares:
         # Traefik appends `@provider` when a router references a middleware
         # from another provider; we parsed the bare name.
@@ -104,13 +104,13 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         if mw is None:
             # A reference to something that was never declared. Rendering it
             # like a resolved one makes a typo read as working wiring.
-            parts.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware",
+            lines.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware",
                               style="red"))
             continue
         kind = f" ({mw.kind})" if mw.kind else ""
-        parts.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
-    parts.append(_service_line(router, info, swarm))
-    return Group(*parts)
+        lines.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
+    lines.append(_service_line(router, info, swarm))
+    return lines
 
 
 def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
@@ -128,7 +128,14 @@ def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
     return attached
 
 
-def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) -> Group:
+def _entrypoint_block(entrypoint, info: TraefikInfo,
+                      swarm: SwarmInfo | None) -> list[Text]:
+    """This entrypoint's branch, as the flat list of lines it occupies.
+
+    Lines rather than a ``Group`` because the packer has to know how tall and
+    how wide this branch is before anything is drawn, and a ``Group`` only
+    answers that by being rendered.
+    """
     head = Text(f"{entrypoint.name}  {entrypoint.address}", style="bold cyan")
     attached = _attached(entrypoint, info)
     if not attached:
@@ -139,7 +146,7 @@ def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) ->
         else:
             # A published port nothing serves is a finding, not an absence.
             head.append("   — no router", style="dim")
-        return Group(head)
+        return [head]
     worst = max(
         (_service_state(r, info, swarm)[0] for r in attached), key=severity, default=""
     )
@@ -147,7 +154,10 @@ def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) ->
         # The column head carries the worst verdict below it, so a wall of
         # branches still says at a glance which one to read first.
         head.append(f"   {worst}")
-    return Group(head, *[_router_lines(r, info, swarm) for r in attached])
+    lines = [head]
+    for router in attached:
+        lines.extend(_router_lines(router, info, swarm))
+    return lines
 
 
 def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
@@ -203,10 +213,11 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
                     swarm: SwarmInfo | None = None) -> RenderableType:
     """The TRAEFIK WIRING block.
 
-    The entrypoint branches flow into as many columns as the width allows, the
-    same arrangement CLUSTER HEALTH uses: stacked vertically they run to some
-    seventy lines while two thirds of the terminal stay empty. The orphan block
-    stays full width below them — its lines are the longest in the section, and
+    The entrypoint branches are packed into height-balanced columns: stacked
+    vertically they run to some seventy lines while two thirds of the terminal
+    stay empty, and filled row by row — what ``rich.Columns`` does — a short
+    branch beside a tall one leaves the difference blank. The orphan block
+    stays full width below them: its lines are the longest in the section, and
     it holds the findings.
     """
     data = info or TraefikInfo()
@@ -241,9 +252,10 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         parts.append(Text(""))
     if data.entrypoints:
         # Declaration order, which the collector preserves: the four
-        # entrypoints every cluster has come before this cluster's own.
+        # entrypoints every cluster has come before this cluster's own. The
+        # packer may put them in any column, but never out of order within one.
         blocks = [_entrypoint_block(ep, data, swarm) for ep in data.entrypoints]
-        parts.append(Columns(blocks, padding=(0, 4), expand=False))
+        parts.append(PackedColumns(blocks))
         parts.append(Text(""))
     orphans = _orphan_block(data, swarm)
     if orphans is not None:

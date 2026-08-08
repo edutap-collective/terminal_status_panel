@@ -1,4 +1,5 @@
 from rich.console import Console
+from rich.text import Text
 
 from terminal_status_panel.config import Config
 from terminal_status_panel.model import (
@@ -421,3 +422,80 @@ def test_a_middleware_reference_with_a_provider_suffix_still_resolves():
     out = _render(info, width=120)
     assert "no such middleware" not in out
     assert "stripprefix" in out
+
+
+def _ragged():
+    """One tall entrypoint and three short ones — the shape that wastes space.
+
+    The tall block is eleven lines (its head plus five routers of two lines
+    each), the short ones three. Filled row by row into two columns that is
+    eleven lines then three; packed by height it is eleven, because the tall
+    block sets the height on its own and the three short ones stack beside it.
+
+    The two tests below that check the arrangement render this at width 120,
+    not wider: these blocks are narrow enough (40-49 cells) that a wider
+    terminal fits all four side by side, which is the correct, optimal
+    layout too — but it does not exercise the two-column case the tests are
+    about. At 120 only two columns fit, which is what forces the three short
+    blocks to share one column instead of a row each.
+    """
+    routers = [
+        TraefikRouter(name=f"busy_{index}", entrypoints=["portal_admin"],
+                      rule=f"PathPrefix(`/busy/{index}`)", service=f"busy_{index}")
+        for index in range(5)
+    ]
+    routers += [
+        TraefikRouter(name=f"quiet_{name}", entrypoints=[name],
+                      rule="PathPrefix(`/`)", service=f"quiet_{name}")
+        for name in ("status_public", "status_internal", "eam_dev")
+    ]
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[
+            TraefikEntrypoint(name="portal_admin", address=":2020", port=2020),
+            TraefikEntrypoint(name="status_public", address=":2011", port=2011),
+            TraefikEntrypoint(name="status_internal", address=":2012", port=2012),
+            TraefikEntrypoint(name="eam_dev", address=":2021", port=2021),
+        ],
+        routers=routers,
+        services={router.service: TraefikServiceRef(name=router.service, port=8080)
+                  for router in routers},
+    )
+
+
+def test_a_short_entrypoint_beside_a_tall_one_wastes_no_rows():
+    out = _render(_ragged(), width=120)
+    body = [line for line in out.splitlines() if line.strip()]
+    # Eleven lines of columns plus the section's own rule. Row-major filling
+    # would add the three-line second row on top of that.
+    assert len(body) == 12
+
+
+def test_short_entrypoints_stack_rather_than_share_a_row():
+    out = _render(_ragged(), width=120)
+    heads = [
+        index
+        for index, line in enumerate(out.splitlines())
+        if "status_internal  :2012" in line or "eam_dev  :2021" in line
+    ]
+    assert len(heads) == 2
+    assert heads[0] != heads[1]
+
+
+def test_every_entrypoint_and_router_is_rendered_exactly_once():
+    out = _render(_ragged(), width=200)
+    for name in ("portal_admin", "status_public", "status_internal", "eam_dev"):
+        assert out.count(f"{name}  :") == 1
+    for index in range(5):
+        assert _branch_heads(out, f"busy_{index}") == 1
+
+
+def test_no_rendered_line_exceeds_the_console_width():
+    for width in (80, 120, 200):
+        out = _render(_ragged(), width=width)
+        assert max(Text(line).cell_len for line in out.splitlines()) <= width
+
+
+def test_an_entrypoint_that_has_routers_never_reads_as_having_none():
+    out = _render(_ragged(), width=200)
+    assert "no router" not in out
