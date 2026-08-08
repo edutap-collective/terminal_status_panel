@@ -193,6 +193,34 @@ def test_an_interval_below_the_floor_is_raised(monkeypatch):
     assert stopper.delays[0] > follow.MIN_INTERVAL / 2, "the interval floor was not applied"
 
 
+def test_an_explicit_zero_interval_is_floored_not_ignored(monkeypatch):
+    """Zero is a value the user typed, not the absence of one.
+
+    A truthiness test cannot tell them apart, and mistaking an explicit zero
+    for silence turns the fastest interval the user can ask for into the
+    slowest one the section carries.
+    """
+    monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
+
+    # A stand-in for a pass, not a real one: the health section's own
+    # collectors reach a real Docker socket, which this test has no business
+    # doing just to read off a delay. Failing fast keeps `elapsed` near zero,
+    # so the recorded delay is `chosen` itself -- exactly what is under test
+    # here, and nothing about the render.
+    def boom(*args, **kwargs):
+        raise RuntimeError("collector stand-in")
+
+    monkeypatch.setattr(cli, "collect_all", boom)
+    stopper = _StopAfter(1)
+    monkeypatch.setattr(follow.time, "sleep", stopper)
+    follow.run_follow(Config(), ("health",), width=100, no_color=True,
+                      interval=0.0)
+    # An ignored zero would fall back to the 20s health default; a floored
+    # zero lands near MIN_INTERVAL instead, the same shape the floor test
+    # above checks for.
+    assert stopper.delays[0] < 5.0, "explicit --interval 0 was not floored"
+
+
 def test_each_pass_redraws_the_whole_screen(monkeypatch):
     """A frame shorter than the last must erase it, not scroll it away.
 

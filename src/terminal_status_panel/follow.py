@@ -146,7 +146,15 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
     """
     from . import cli  # module object, not its names -- see the note above
 
-    chosen = max(interval or default_interval(sections, cfg), MIN_INTERVAL)
+    # Not `interval or default_interval(...)`: 0.0 is falsy, so `or` cannot
+    # tell an explicit --interval 0 apart from no --interval at all, and
+    # would silently replace the fastest cadence a user can ask for with
+    # whichever section default is slowest. `None` is the one value argparse
+    # gives this parameter to mean "not given" -- everything else, including
+    # zero, is a value someone typed and is owed the floor below, not a
+    # fallback.
+    requested = interval if interval is not None else default_interval(sections, cfg)
+    chosen = max(requested, MIN_INTERVAL)
     console = cli.build_console(cli.resolve_width(width, cfg), no_color)
 
     if not sys.stdout.isatty():
