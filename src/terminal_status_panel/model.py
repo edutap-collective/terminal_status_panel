@@ -143,6 +143,10 @@ class SwarmInfo:
     # and so render/traefik.py, which filters `services` by name, is unaffected.
     containers: list[ServiceStatus] = field(default_factory=list)
     nodes: list[SwarmNode] = field(default_factory=list)
+    #: Container ID to the service name DOCKER INFOS shows for it. Collected
+    #: while the containers are being listed anyway; the process rows use it to
+    #: turn a cgroup's bare container ID into a name a reader recognises.
+    container_services: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
