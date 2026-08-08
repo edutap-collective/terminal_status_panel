@@ -44,6 +44,33 @@ class ResourceUsage:
 
 
 @dataclass
+class ProcessInfo:
+    """One process in the top-five lists.
+
+    ``cpu_percent`` is ``None`` rather than ``0.0`` when no sampling window was
+    used: a zero is a measurement, and nothing was measured. ``origin`` is the
+    systemd unit or the short container ID the process runs under, or ``None``
+    where neither could be read -- on Darwin and FreeBSD there is no cgroup to
+    read at all.
+    """
+
+    pid: int
+    name: str
+    cpu_percent: float | None = None
+    memory_percent: float | None = None
+    origin: str | None = None
+
+
+@dataclass
+class ProcessSnapshot:
+    top_cpu: list[ProcessInfo] = field(default_factory=list)
+    top_memory: list[ProcessInfo] = field(default_factory=list)
+    #: The window the CPU figures were measured over, in seconds. A percentage
+    #: without its window is an unanswered question, so the renderer shows it.
+    sampled: float = 0.0
+
+
+@dataclass
 class UpdateInfo:
     supported: bool = False
     available: int | None = None
