@@ -8,6 +8,7 @@ from terminal_status_panel.model import (
     SwarmInfo,
     TraefikEntrypoint,
     TraefikInfo,
+    TraefikMiddleware,
     TraefikRouter,
     TraefikServiceRef,
 )
@@ -499,3 +500,45 @@ def test_no_rendered_line_exceeds_the_console_width():
 def test_an_entrypoint_that_has_routers_never_reads_as_having_none():
     out = _render(_ragged(), width=200)
     assert "no router" not in out
+
+
+def _internal(middlewares=None, mw_defs=None):
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="default", address=":8088", port=8088)],
+        routers=[TraefikRouter(name="ping-router", entrypoints=["default"],
+                               rule="Path(`/_traefik_ping_`)", service="ping@internal",
+                               middlewares=middlewares or [], source="file")],
+        services={"ping@internal": TraefikServiceRef(name="ping@internal",
+                                                     source="file")},
+        middlewares=mw_defs or {},
+    )
+
+
+def test_an_internal_target_folds_onto_the_router_line():
+    out = _render(_internal())
+    heads = [line for line in out.splitlines() if "ping-router" in line]
+    assert len(heads) == 1
+    assert "ping@internal" in heads[0]
+
+
+def test_a_middleware_keeps_the_internal_target_on_its_own_line():
+    info = _internal(middlewares=["strip"],
+                     mw_defs={"strip": TraefikMiddleware(name="strip",
+                                                         kind="stripprefix")})
+    out = _render(info)
+    lines = out.splitlines()
+    head = next(line for line in lines if "ping-router" in line)
+    assert "ping@internal" not in head
+    assert any("ping@internal" in line and "ping-router" not in line for line in lines)
+
+
+def test_a_measured_service_keeps_its_own_line():
+    swarm = SwarmInfo(reachable=True, enabled=True, services=[
+        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                      tasks=[ServiceTask("srv-01", "running")]),
+    ])
+    out = _render(_wired(), swarm=swarm)
+    head = next(line for line in out.splitlines()
+                if "└─ kafbat-ui" in line and "→" not in line)
+    assert "kafbat-ui_kafbat-ui" not in head

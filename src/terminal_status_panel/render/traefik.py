@@ -109,7 +109,20 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
             continue
         kind = f" ({mw.kind})" if mw.kind else ""
         lines.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
-    lines.append(_service_line(router, info, swarm))
+    glyph, service = _service_state(router, info, swarm)
+    if not glyph and not router.middlewares:
+        # An empty glyph means the line makes no claim at all — Traefik's own
+        # `@internal` endpoints, which nobody measured. A whole line for a name
+        # and nothing else, repeated on every entrypoint the ping router hangs
+        # on. It fits on the end of the line above.
+        #
+        # Only without middlewares: with one between the head and the service,
+        # moving the target up would put the flow out of order. And only for
+        # the empty glyph — a file-provider service returns UNKNOWN and carries
+        # its configured upstreams, which is real content and stays put.
+        head.append("  " + service.plain.strip().removeprefix("└─ "))
+        return lines
+    lines.append(service)
     return lines
 
 
