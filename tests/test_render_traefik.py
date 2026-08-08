@@ -625,10 +625,18 @@ def test_folding_never_costs_the_six_ping_router_shape_a_column():
 def test_the_section_fills_most_of_a_wide_terminal():
     """The whole point of the packing, measured rather than asserted.
 
-    Row by row this shape rendered under half the rectangle it occupied. The
-    bound is deliberately loose — it guards against a regression to ragged
-    rows, not against a few cells of drift.
+    ``Text(line).cell_len`` counts the trailing spaces Rich pads every cell
+    with to reach its column width, which measures "how close each line is to
+    the console width" — a metric a *worse*, more ragged layout can score
+    *higher* on, since a tall ragged block pads more blank rows out to the
+    full width. Rstripping first counts actual ink instead. Measured on this
+    shape at width 120: the pre-packing layout (16 lines, row-major
+    ``rich.Columns``) scores 0.47 on ink against 0.79 on padding: the padded
+    metric would have called the worse layout better. The packed-and-folded
+    layout (13 lines) scores 0.57. The bound sits between the two, well clear
+    of either, so it genuinely discriminates rather than merely rewarding
+    padding.
     """
     out = _render(_ragged(), width=120).splitlines()
-    ink = sum(Text(line).cell_len for line in out)
-    assert ink / (len(out) * 120) > 0.30
+    ink = sum(Text(line.rstrip()).cell_len for line in out)
+    assert ink / (len(out) * 120) > 0.50
