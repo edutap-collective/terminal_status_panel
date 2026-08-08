@@ -102,6 +102,7 @@ def collect_processes(sample: float, limit: int = 5) -> ProcessSnapshot | None:
                 name=proc.name(),
                 cpu_percent=proc.cpu_percent(None) if sampling else None,
                 memory_percent=proc.memory_percent(),
+                memory_bytes=proc.memory_info().rss,
                 origin=cgroup_origin(proc.pid),
             ))
         except (psutil.Error, OSError):

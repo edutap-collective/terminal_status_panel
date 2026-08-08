@@ -7,9 +7,10 @@ out in five tiers:
 
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
 - **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, a filesystem
-  usage table, and a **TOP CPU** / **TOP RAM** row: the five processes
-  ranked by each. See [Top processes](#top-processes) below for what that
-  ranking measures and what it costs.
+  usage table, and a **TOP CPU** / **TOP RAM** row: the processes ranked by
+  each, five by default and configurable via `[resources] top_processes` or
+  `--processes`. See [Top processes](#top-processes) below for what that
+  ranking measures, what it costs, and how to size or turn off the block.
 - **DOCKER INFOS** — Swarm key facts (summary + node health) above the node
   matrices: an *Infrastructure* and a *Service* table per origin — under
   **SWARM STACKS** and **COMPOSE PROJECTS**, each block omitted entirely when
@@ -206,6 +207,7 @@ a placeholder instead of erroring.
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
 | `-f`, `--follow` | off | Keep the panel on screen and refresh it, on all five commands. See [Follow mode](#follow-mode) below. |
 | `--interval N` | *(see below)* | Seconds between refreshes under `--follow`. Overrides both the config and the built-in default; values below 1 second are raised to 1 second. Ignored without `--follow`. |
+| `--processes N` | *(see below)* | Rows per process list in the TOP CPU / TOP RAM row. Overrides `[resources] top_processes` (default `5`). `0` turns the whole row off — see [Top processes](#top-processes) below. A negative value counts as `0`. |
 
 Colours are always **forced on** (unless `--no-color`), because at MOTD
 generation time there is no TTY to auto-detect a colour terminal.
@@ -271,6 +273,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `resources.ignore_mountpoints` | platform-dependent | Mountpoint prefixes hidden from the filesystem table. Defaults to `["/System/Volumes/", "/Library/Developer/CoreSimulator/"]` on macOS and to `[]` elsewhere. An explicitly empty list hides nothing rather than falling back to the default. |
 | `resources.process_sample` | `0.3` | Seconds to sample process CPU usage over for the TOP CPU row (see [Top processes](#top-processes)). `0` or less disables the CPU ranking; TOP RAM is unaffected. |
+| `resources.top_processes` | `5` | Rows per process table in the TOP CPU / TOP RAM row (see [Top processes](#top-processes)). `--processes N` on the command line wins over this. A value that cannot be read as a whole number falls back to `5`; a negative value means `0`. `0` removes the whole row, and with it the `process_sample` sampling wait — a different switch from `process_sample`, which only removes the CPU ranking and leaves TOP RAM in place. |
 | `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A **stack** (or Compose project) whose name matches goes into that origin's **Infrastructure** table; every other stack goes into **Service**. An entry with no stack at all is never classified this way — it has no project to be filed under, so `docker run -d redis` lands in **Standalone containers** like any other stackless entry, however infrastructural its name. |
 | `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastructure** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
@@ -343,6 +346,7 @@ portal_dept_uni_example_de = "https://portal.dept.uni-example.de"
 
 [resources]
 process_sample = 0.3
+top_processes = 5
 
 [follow]
 interval = 5.0          # sections without health
@@ -351,9 +355,39 @@ health_interval = 20.0  # sections including health
 
 ## Top processes
 
-The SYSTEM STATUS block ends with two five-row tables side by side, **TOP
-CPU** and **TOP RAM**, each with `%CPU`, `%MEM`, `PID`, `PROCESS` and
-`SERVICE` columns.
+The SYSTEM STATUS block ends with two tables side by side, **TOP CPU** and
+**TOP RAM**, each with `%CPU`, `%MEM`, `MEM`, `PID`, `PROCESS` and `SERVICE`
+columns — five rows per table by default.
+
+**`MEM` is the resident set size, the same figure `%MEM` is a percentage
+of.** psutil's `memory_percent()` is computed from `rss`, and `MEM` shows
+that same `rss` value, formatted with the helper the MEMORY & SWAP block
+above uses (`format_bytes`), so a size reads the same everywhere in the
+panel — `2.0 GB` here is the same `2.0 GB` it would be up there. A process
+the collector could not read carries a dash, `—`, in both columns rather
+than mixing that with `format_bytes`'s own `n/a` for one row.
+
+**Row count: `[resources] top_processes`, or `--processes N` on the command
+line.** The default is `5`; the flag wins whenever both are given. A config
+value that cannot be read as a whole number falls back to `5`, the same as
+an unset one; a negative value — from either source — means `0`, not the
+default.
+
+**`0` turns the block off, and with it the CPU-sampling wait.** With
+`--processes 0` (or `top_processes = 0`), the TOP CPU / TOP RAM row does not
+render at all, and the collector skips the sampling window described below
+entirely rather than measuring it and discarding the result — that window is
+real cost on a login path, and removing it is the reason this knob exists.
+Measured on a development machine, `--processes 3` took about 0.69 s wall
+clock; `--processes 0` took about 0.29 s.
+
+**`top_processes` and `process_sample` are different switches, and they do
+different things at zero.** A row count of `0` removes the whole block,
+sampling wait included. A sample of `0` (or less) leaves the block in place
+and turns off only the CPU ranking: **TOP CPU** then reads
+`CPU sampling is off` and **TOP RAM** renders alone. Setting the wrong one
+either keeps paying the sampling cost while meaning to stop it, or drops
+**TOP RAM** along with **TOP CPU** while meaning to keep it.
 
 **`%CPU` is sampled over a window, not the lifetime average `ps` reports.**
 `ps -eo %cpu` divides total CPU time by elapsed time since the process
@@ -367,9 +401,9 @@ That window is the `[resources] process_sample` config key, `0.3` seconds by
 default, and it is real cost on a login path: sampling roughly 400 processes
 measured at 0.32 s wall clock on a five-node reference cluster. Set it to `0`
 or less and the CPU ranking turns off entirely — the row then reads
-`CPU sampling is off` in place of a table, rather than five rows of `0.0`
-that would read as a measurement rather than its absence — and **TOP RAM**
-alone remains.
+`CPU sampling is off` in place of a table, rather than rows of `0.0` that
+would read as a measurement rather than its absence — and **TOP RAM** alone
+remains.
 
 **`SERVICE` is read from `/proc/<pid>/cgroup`.** A process running under a
 systemd unit shows that unit's name verbatim. A process running inside a
@@ -378,6 +412,22 @@ name only when the Docker section was also collected and can map it — which
 is why `status-server` on its own shows IDs rather than names: it never
 opens the Docker socket, deliberately, so it has nothing to resolve the ID
 against.
+
+**On a narrow terminal, the two tables stack instead of squeezing.** The
+panel measures each table's natural width and lays `TOP CPU` beside
+`TOP RAM`, with a gap between them, only when both fit the terminal as they
+are — verified at width 200 and at 120, where both render in full side by
+side, with only `SERVICE`'s own 22-character cap ever cutting a long unit or
+service name (`containerd-shim`, unremarkable on a Docker host, reads in
+full at either width). Once the pair no longer fits — verified at width 80,
+which is `Config.width`'s default and what `resolve_width` falls back to
+whenever stdout is not a TTY, the MOTD-generation path this README already
+names — `TOP RAM` moves below `TOP CPU` instead of beside it, each keeping
+the full terminal width and its own heading. Rich is never asked to shrink a
+pair that does not fit; a pair that does not fit is stacked instead. That is
+why the numeric columns — `%CPU`, `%MEM`, `MEM`, `PID` — keep their values
+undamaged at every width, which is the guarantee worth making: a shortened
+name is still shorter, but a shortened number would simply be wrong.
 
 The panel excludes its own process from both rankings — the same reason
 `ps` habitually ranks itself first: it is the one process guaranteed to be

@@ -227,6 +227,30 @@ def test_a_malformed_process_sample_falls_back(tmp_path):
     assert load_config(path).process_sample == 0.3
 
 
+def test_the_row_count_defaults_to_five(tmp_path):
+    assert load_config(tmp_path / "missing.toml").top_processes == 5
+
+
+def test_the_row_count_is_configurable(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text("[resources]\ntop_processes = 12\n")
+    assert load_config(path).top_processes == 12
+
+
+def test_a_malformed_row_count_falls_back(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[resources]\ntop_processes = "lots"\n')
+    assert load_config(path).top_processes == 5
+
+
+def test_a_negative_row_count_is_zero(tmp_path):
+    """Below none is none. Treating it as a fallback to five would turn a
+    clumsy way of saying "off" into the opposite."""
+    path = tmp_path / "c.toml"
+    path.write_text("[resources]\ntop_processes = -3\n")
+    assert load_config(path).top_processes == 0
+
+
 def test_the_follow_intervals_have_defaults(tmp_path):
     cfg = load_config(tmp_path / "missing.toml")
     assert cfg.follow_interval == 5.0

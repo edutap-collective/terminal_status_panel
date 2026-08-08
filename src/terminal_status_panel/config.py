@@ -135,6 +135,9 @@ class Config:
     #: 0.3 s over roughly 400 processes measures at about 0.32 s wall clock.
     #: Zero or less disables the CPU ranking entirely.
     process_sample: float = 0.3
+    #: Rows per list in the process block. Zero turns the block off, and with
+    #: it the sampling window -- the cost this switch exists to remove.
+    top_processes: int = 5
     #: Refresh interval for --follow when the health section is not among the
     #: requested ones.
     follow_interval: float = 5.0
@@ -249,6 +252,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         process_sample = float(resources.get("process_sample", 0.3))
     except (TypeError, ValueError):
         process_sample = 0.3
+    try:
+        top_processes = max(0, int(resources.get("top_processes", 5)))
+    except (TypeError, ValueError):
+        top_processes = 5
     traefik_section = _section(data, "traefik")
     links: dict[str, str] = {}
     for name, value in _section(data, "traefik", "links").items():
@@ -301,6 +308,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         health=_health_config(data),
         traefik=traefik,
         process_sample=process_sample,
+        top_processes=top_processes,
         follow_interval=follow_interval,
         follow_health_interval=follow_health_interval,
     )
