@@ -697,8 +697,15 @@ def test_without_a_configured_base_nothing_is_linked():
 
 
 def test_a_router_whose_rule_has_no_single_path_is_not_linked():
-    targets = _link_targets(_render_linked(_linked(), _cfg_with_links()))
-    assert not any(t.endswith("/a") or t.endswith("/b") for t in targets)
+    """Not "no target ends in /a or /b" -- that also passes if the router got
+    linked to the bare base, which is `link_for(base, None)`'s answer for an
+    entrypoint whose sub-path is merely unknown, not for a router that could
+    not name one. The span-matching approach from
+    `test_the_verdict_glyph_is_outside_the_clickable_region` is what actually
+    tells "linked to the wrong thing" and "not linked" apart."""
+    out = _render_linked(_linked(), _cfg_with_links())
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert not any(span == "odd-one" for span in linked_spans)
 
 
 def test_the_entrypoint_head_is_linked_even_when_a_router_is_not():
@@ -735,3 +742,36 @@ def test_the_verdict_glyph_is_outside_the_clickable_region():
         assert icons.DEAD not in span
         assert icons.UNKNOWN not in span
         assert "PathPrefix" not in span
+
+
+def _linked_without_routers():
+    """An entrypoint that nothing attaches to -- the "-- no router" append
+    path, which `_linked()` above never exercises because it always has
+    `account-spa` and `odd-one` hanging on it."""
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="metrics_example_de", address=":2010",
+                                       port=2010)],
+        routers=[],
+        services={},
+    )
+
+
+def _cfg_with_links_for_empty_entrypoint():
+    cfg = Config()
+    cfg.traefik.links = {"metrics_example_de": "https://metrics.example.de"}
+    return cfg
+
+
+def test_an_entrypoint_with_no_routers_is_still_linked():
+    """The verdict-glyph test above only ever renders the worst-verdict append
+    path, since `_linked()`'s entrypoint always has routers attached. This
+    pins the other two append paths -- "-- no router" here, and the
+    ping-entrypoint's own health-check note the same way -- as an established
+    fact rather than something traced by eye."""
+    out = _render_linked(_linked_without_routers(), _cfg_with_links_for_empty_entrypoint())
+    assert "https://metrics.example.de" in _link_targets(out)
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert linked_spans, "expected the entrypoint head to be linked"
+    for span in linked_spans:
+        assert "no router" not in span
