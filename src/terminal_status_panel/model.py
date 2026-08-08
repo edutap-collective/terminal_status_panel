@@ -310,3 +310,4 @@ class PanelData:
     updates: UpdateInfo | None = None
     health: HealthInfo | None = None
     traefik: TraefikInfo | None = None
+    processes: ProcessSnapshot | None = None

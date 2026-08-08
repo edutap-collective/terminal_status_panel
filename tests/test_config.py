@@ -209,3 +209,19 @@ def test_critical_services_scalar_string_becomes_a_one_element_list(tmp_path):
     path.write_text('[services]\ncritical = "postgres"\n', encoding="utf-8")
     cfg = load_config(path)
     assert cfg.critical_services == ["postgres"]
+
+
+def test_the_process_sample_window_defaults_to_three_tenths(tmp_path):
+    assert load_config(tmp_path / "missing.toml").process_sample == 0.3
+
+
+def test_the_process_sample_window_is_configurable(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text("[resources]\nprocess_sample = 1.0\n")
+    assert load_config(path).process_sample == 1.0
+
+
+def test_a_malformed_process_sample_falls_back(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[resources]\nprocess_sample = "soon"\n')
+    assert load_config(path).process_sample == 0.3

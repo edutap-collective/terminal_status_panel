@@ -49,7 +49,12 @@ def server_section(data: PanelData, cfg: Config) -> RenderableType:
     top.add_column(ratio=3)
     top.add_column(ratio=2)
     top.add_row(system_overview(data.system), updates_panel(data.updates))
-    return Group(top, Text(""), system_status(data.resources, cfg))
+    # The origin map comes from the Docker section when it ran. Without it the
+    # process rows show container ids, which is what `status-server` alone can
+    # honestly say.
+    origins = data.swarm.container_services if data.swarm else None
+    return Group(top, Text(""),
+                 system_status(data.resources, cfg, data.processes, origins))
 
 
 def docker_section(data: PanelData, cfg: Config) -> RenderableType:

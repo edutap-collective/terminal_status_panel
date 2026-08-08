@@ -125,6 +125,10 @@ class Config:
     thresholds: Thresholds = field(default_factory=Thresholds)
     health: HealthConfig = field(default_factory=HealthConfig)
     traefik: TraefikApiConfig = field(default_factory=TraefikApiConfig)
+    #: Seconds to sample process CPU over. Cost on a login path, hence a dial:
+    #: 0.3 s over roughly 400 processes measures at about 0.32 s wall clock.
+    #: Zero or less disables the CPU ranking entirely.
+    process_sample: float = 0.3
 
 
 def _section(data: dict, *keys: str) -> dict:
@@ -228,6 +232,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     # Presence, not truthiness: an explicit [] means "hide nothing" and must not
     # be replaced by the platform defaults it was written to override.
     ignore = resources.get("ignore_mountpoints", None)
+    try:
+        process_sample = float(resources.get("process_sample", 0.3))
+    except (TypeError, ValueError):
+        process_sample = 0.3
     traefik_section = _section(data, "traefik")
     traefik = TraefikApiConfig(
         url=traefik_section.get("url") or None,
@@ -247,4 +255,5 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         thresholds=thresholds,
         health=_health_config(data),
         traefik=traefik,
+        process_sample=process_sample,
     )

@@ -26,12 +26,13 @@ from rich.console import Console
 
 from .collectors.docker import collect_docker
 from .collectors.health import collect_health
+from .collectors.processes import collect_processes
 from .collectors.resources import collect_resources
 from .collectors.system import collect_system
 from .collectors.traefik import collect_traefik, fetch_accepted, mark_rejected
 from .collectors.updates import collect_updates
 from .config import Config, load_config
-from .model import PanelData
+from .model import PanelData, ProcessSnapshot
 from .render.layout import SECTIONS, build_layout
 
 # The sections a bare `status-full` renders — every section the layout knows
@@ -153,6 +154,12 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
         swarm=swarm,
         health=health_info,
         traefik=traefik_info,
+        # `or ProcessSnapshot()` rather than letting None through: None means
+        # the row was never asked for, and an empty snapshot means it was asked
+        # and nothing came back. The renderer tells those two apart, and a
+        # failed collection has to stay visible.
+        processes=(collect_processes(cfg.process_sample) or ProcessSnapshot())
+        if server else None,
     )
 
 

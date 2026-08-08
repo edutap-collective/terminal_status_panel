@@ -273,3 +273,13 @@ def test_collect_all_skips_traefik_when_not_selected(isolated_cli):
     isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append(True))
     cli.collect_all(Config(), sections=("server",))
     assert called == []
+
+
+def test_processes_are_collected_only_for_the_server_section(isolated_cli, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda sample, **kw: calls.append(sample) or None)
+    cli.collect_all(Config(), ("docker",))
+    assert calls == []
+    cli.collect_all(Config(), ("server",))
+    assert calls == [Config().process_sample]
