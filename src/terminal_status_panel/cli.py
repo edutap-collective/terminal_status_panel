@@ -174,8 +174,9 @@ def _collect_process_rows(cfg: Config) -> ProcessSnapshot | None:
     """
     if not cfg.top_processes:
         return None
-    return collect_processes(cfg.process_sample, limit=cfg.top_processes) \
-        or ProcessSnapshot()
+    return (
+        collect_processes(cfg.process_sample, limit=cfg.top_processes) or ProcessSnapshot()
+    )
 
 
 def resolve_width(arg_width: int | None, cfg: Config) -> int:

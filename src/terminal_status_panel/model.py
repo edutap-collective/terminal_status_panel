@@ -45,7 +45,7 @@ class ResourceUsage:
 
 @dataclass
 class ProcessInfo:
-    """One process in the top-five lists.
+    """One process in the TOP CPU / TOP RAM lists.
 
     ``cpu_percent`` is ``None`` rather than ``0.0`` when no sampling window was
     used: a zero is a measurement, and nothing was measured. ``origin`` is the

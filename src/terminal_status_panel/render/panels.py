@@ -359,8 +359,9 @@ def _filesystem_body(res: ResourceUsage) -> RenderableType:
 
 
 #: Truncate a service name that will not fit rather than wrapping it. A wrapped
-#: cell would break the column alignment the eye uses to scan five rows, and
-#: five rows is the whole point of this block.
+#: cell would break the column alignment the eye uses to scan the block, and a
+#: readable row count -- configurable, five by default -- is the whole point
+#: of this block.
 _SERVICE_WIDTH = 22
 
 
@@ -406,26 +407,71 @@ def _process_table(rows: list[ProcessInfo],
     return table
 
 
+#: Gap between the TOP CPU and TOP RAM tables when they sit side by side.
+#: Used both to build the grid and to decide whether the pair fits -- the two
+#: must agree, or the decision and the render could disagree about what
+#: "fits" means. Matches the gap ``PackedColumns`` (``render/packing.py``)
+#: uses for the same reason.
+_PROCESS_TABLE_GAP = 4
+
+
+class _ProcessRow:
+    """TOP CPU / TOP RAM: side by side when both tables fit, stacked otherwise.
+
+    Needs the console to answer "does it fit", so this is a renderable rather
+    than a table builder -- the same shape ``PackedColumns`` uses for exactly
+    this reason: only the console's width answers that question, and only at
+    render time.
+
+    Below roughly 90 columns two six-column tables no longer fit side by
+    side. Hiding a column was rejected -- see the design doc's section 4 --
+    because it would shorten a number, which this panel never does:
+    ``_SERVICE_WIDTH`` truncates names for the opposite reason, a shortened
+    name still identifies its service, where a shortened number is simply
+    wrong. Stacking `TOP RAM` below `TOP CPU` instead costs height, not
+    digits, so every column keeps its full value at any width.
+    """
+
+    def __init__(self, snapshot: ProcessSnapshot,
+                origins: dict[str, str] | None) -> None:
+        self._snapshot = snapshot
+        self._origins = origins
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        snapshot, origins = self._snapshot, self._origins
+        if not snapshot.top_cpu and not snapshot.top_memory:
+            # Asked and came back empty-handed: no psutil, or no process table.
+            # Omitting the row silently would hide that it was tried at all.
+            yield Group(_subhead("TOP CPU"), Text("not available", style="dim"))
+            return
+        if snapshot.top_cpu:
+            left = Group(_subhead(f"TOP CPU ({snapshot.sampled:g}s)"),
+                        _process_table(snapshot.top_cpu, origins))
+        else:
+            # No window was sampled, so there is no ranking to show. Rows of
+            # 0.0 would read as a measurement rather than as its absence.
+            left = Group(_subhead("TOP CPU"),
+                        Text("CPU sampling is off", style="dim"))
+        right = Group(_subhead("TOP RAM"), _process_table(snapshot.top_memory, origins))
+
+        left_width = Measurement.get(console, options, left).maximum
+        right_width = Measurement.get(console, options, right).maximum
+        if left_width + right_width + _PROCESS_TABLE_GAP <= options.max_width:
+            grid = Table.grid(padding=(0, _PROCESS_TABLE_GAP),
+                             collapse_padding=True, pad_edge=False)
+            grid.add_column()
+            grid.add_column()
+            grid.add_row(left, right)
+            yield grid
+        else:
+            yield Group(left, Text(""), right)
+
+
 def _process_row(snapshot: ProcessSnapshot,
                  origins: dict[str, str] | None) -> RenderableType:
-    if not snapshot.top_cpu and not snapshot.top_memory:
-        # Asked and came back empty-handed: no psutil, or no process table.
-        # Omitting the row silently would hide that it was tried at all.
-        return Group(_subhead("TOP CPU"), Text("not available", style="dim"))
-    if snapshot.top_cpu:
-        left = Group(_subhead(f"TOP CPU ({snapshot.sampled:g}s)"),
-                     _process_table(snapshot.top_cpu, origins))
-    else:
-        # No window was sampled, so there is no ranking to show. Five rows of
-        # 0.0 would read as a measurement rather than as its absence.
-        left = Group(_subhead("TOP CPU"),
-                     Text("CPU sampling is off", style="dim"))
-    right = Group(_subhead("TOP RAM"), _process_table(snapshot.top_memory, origins))
-    grid = Table.grid(expand=True, padding=(0, 4))
-    grid.add_column(ratio=1)
-    grid.add_column(ratio=1)
-    grid.add_row(left, right)
-    return grid
+    return _ProcessRow(snapshot, origins)
 
 
 def system_status(res: ResourceUsage | None, cfg: Config,
@@ -445,7 +491,7 @@ def system_status(res: ResourceUsage | None, cfg: Config,
     if processes is None:
         return section("SYSTEM STATUS", grid)
     # A second row rather than a third column: SYSTEM LOAD and MEMORY & SWAP
-    # already fill the width, and squeezing five-column tables in beside them
+    # already fill the width, and squeezing six-column tables in beside them
     # would truncate every service name.
     return section("SYSTEM STATUS",
                    Group(grid, Text(""), _process_row(processes, origins)))
