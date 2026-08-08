@@ -155,13 +155,27 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
         swarm=swarm,
         health=health_info,
         traefik=traefik_info,
-        # `or ProcessSnapshot()` rather than letting None through: None means
-        # the row was never asked for, and an empty snapshot means it was asked
-        # and nothing came back. The renderer tells those two apart, and a
-        # failed collection has to stay visible.
-        processes=(collect_processes(cfg.process_sample) or ProcessSnapshot())
-        if server else None,
+        # `None` when the count is zero: nothing was asked, and the renderer
+        # already reads `None` as "this row was not requested". An empty
+        # snapshot would mean asked-and-got-nothing, which the section reports
+        # as a failure -- and a setting is not a failure.
+        processes=_collect_process_rows(cfg) if server else None,
     )
+
+
+def _collect_process_rows(cfg: Config) -> ProcessSnapshot | None:
+    """The process rows, or ``None`` when none were asked for.
+
+    ``None`` and an empty snapshot are different answers. ``None`` means the
+    rows were never requested -- the renderer omits the block. An empty
+    snapshot means the collector ran and found nothing, which the section
+    reports as ``not available``. A count of zero is a setting, not a failure,
+    so it must produce the first and never the second.
+    """
+    if not cfg.top_processes:
+        return None
+    return collect_processes(cfg.process_sample, limit=cfg.top_processes) \
+        or ProcessSnapshot()
 
 
 def resolve_width(arg_width: int | None, cfg: Config) -> int:
@@ -175,6 +189,17 @@ def resolve_width(arg_width: int | None, cfg: Config) -> int:
         if columns > 0:
             return columns
     return cfg.width
+
+
+def resolve_top_processes(arg_processes: int | None, cfg: Config) -> int:
+    """Rows per process list: the flag wins, else the configured value.
+
+    Negative is none. Below none is none, and falling back to the default
+    would turn a clumsy way of saying "off" into its opposite.
+    """
+    if arg_processes is not None:
+        return max(0, arg_processes)
+    return cfg.top_processes
 
 
 def build_console(width: int, no_color: bool) -> Console:
@@ -204,6 +229,8 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
                         help="keep the panel on screen and refresh it")
     parser.add_argument("--interval", type=float, default=None,
                         help="seconds between refreshes in --follow")
+    parser.add_argument("--processes", type=int, default=None,
+                        help="rows per process list; 0 turns the block off")
     return parser.parse_args(argv)
 
 
@@ -213,6 +240,10 @@ def main(argv: list[str] | None = None, sections: tuple[str, ...] = DEFAULT_SECT
     try:
         args = _parse_args(argv, prog)
         cfg = load_config(args.config)
+        # Written onto the config rather than passed along: `collect_all` is
+        # also called once per pass by follow mode, which never sees argv, and
+        # a flag that survived only the first pass would be worse than none.
+        cfg.top_processes = resolve_top_processes(args.processes, cfg)
         selected = _resolve_sections(args.sections, sections)
         if args.follow:
             return run_follow(cfg, selected, width=args.width,

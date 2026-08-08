@@ -323,3 +323,63 @@ def test_without_follow_nothing_loops(isolated_cli, monkeypatch):
     monkeypatch.setattr(cli, "run_follow",
                         lambda *a, **k: pytest.fail("must not be called"))
     assert cli.main(["--no-color", "--width", "100"]) == 0
+
+
+def test_the_processes_flag_overrides_the_configured_count():
+    cfg = Config(top_processes=5)
+    assert cli.resolve_top_processes(12, cfg) == 12
+    assert cli.resolve_top_processes(None, cfg) == 5
+
+
+def test_a_negative_flag_is_zero():
+    assert cli.resolve_top_processes(-2, Config(top_processes=5)) == 0
+
+
+def test_the_processes_flag_is_accepted_by_every_command():
+    for prog in ("status-full", "status-server", "status-docker",
+                 "status-health", "status-traefik"):
+        assert cli._parse_args(["--processes", "9"], prog).processes == 9
+
+
+def test_zero_rows_skips_the_collection_entirely(isolated_cli, monkeypatch):
+    """The switch is worth having because it removes the 0.3 s sampling window
+    from the login path, not merely because it hides a table."""
+    calls = []
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda *a, **k: calls.append(a) or None)
+    data = cli.collect_all(Config(top_processes=0), ("server",))
+    assert calls == []
+    assert data.processes is None
+
+
+def test_zero_rows_is_not_reported_as_a_failed_collection(isolated_cli, monkeypatch):
+    """`None` means never asked; an empty snapshot means asked and got nothing,
+    which the section reports as `not available`. A setting is not a failure."""
+    monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
+    assert cli.collect_all(Config(top_processes=0), ("server",)).processes is None
+
+
+def test_the_resolved_count_reaches_the_collector(isolated_cli, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda sample, limit=5: seen.update(limit=limit) or None)
+    cli.collect_all(Config(top_processes=9), ("server",))
+    assert seen["limit"] == 9
+
+
+def test_the_flag_survives_into_follow_mode(isolated_cli, monkeypatch):
+    """Follow mode collects once per pass and never sees argv.
+
+    The resolved count is written onto the config for exactly this reason: a
+    flag that held for the first frame and silently reverted on the second
+    would be worse than no flag, because nothing would say it had.
+    """
+    limits = []
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda sample, limit=5: limits.append(limit) or None)
+    monkeypatch.setattr(cli, "run_follow",
+                        lambda cfg, sections, **kw: [cli.collect_all(cfg, sections),
+                                                     cli.collect_all(cfg, sections)]
+                        and 0)
+    cli.main(["--sections", "server", "--processes", "7", "--follow", "--no-color"])
+    assert limits == [7, 7]
