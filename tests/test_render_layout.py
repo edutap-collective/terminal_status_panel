@@ -5,6 +5,8 @@ from terminal_status_panel.config import Config
 from terminal_status_panel.model import (
     HealthInfo,
     PanelData,
+    ProcessInfo,
+    ProcessSnapshot,
     ResourceUsage,
     SwarmInfo,
     SystemInfo,
@@ -14,9 +16,15 @@ from terminal_status_panel.render import layout
 from terminal_status_panel.render.layout import SECTIONS, build_layout
 
 
-def _render(data, width=100) -> str:
+def _render(renderable, width=100) -> str:
+    """Render an already-built layout (or any Rich renderable) to plain text.
+
+    Takes the renderable itself, not a ``PanelData``, so a caller that needs
+    non-default sections can build the layout with ``build_layout(...,
+    sections)`` and hand the result straight in.
+    """
     console = Console(width=width, force_terminal=True, color_system="truecolor", record=True)
-    console.print(layout.build_layout(data, Config()))
+    console.print(renderable)
     return console.export_text()
 
 
@@ -28,7 +36,7 @@ def test_build_layout_contains_all_sections():
         swarm=SwarmInfo(reachable=False),
         updates=UpdateInfo(supported=True, available=3, security=1, standard=2),
     )
-    out = _render(data)
+    out = _render(build_layout(data, Config()))
     assert "SYSTEM OVERVIEW" in out
     assert "UPDATES" in out
     assert "SYSTEM STATUS" in out
@@ -41,7 +49,7 @@ def test_build_layout_contains_all_sections():
 
 
 def test_build_layout_survives_all_none():
-    out = _render(PanelData())
+    out = _render(build_layout(PanelData(), Config()))
     assert "SYSTEM OVERVIEW" in out
     assert "DOCKER" in out
 
@@ -132,3 +140,17 @@ def test_the_wiring_renders_the_same_whether_it_is_alone_or_not():
     assert alone.count("\u2514\u2500 kafbat-ui") == 1
     assert beside.count("\u2514\u2500 kafbat-ui") == 1
     assert "TRAEFIK WIRING" in beside
+
+
+def test_the_server_section_hands_the_origin_map_to_the_process_rows():
+    data = PanelData(
+        resources=ResourceUsage(),
+        processes=ProcessSnapshot(
+            top_memory=[ProcessInfo(pid=1, name="java", memory_percent=7.0,
+                                    origin="container abcdef123456")],
+            sampled=0.3),
+        swarm=SwarmInfo(reachable=True, enabled=True,
+                        container_services={"abcdef123456789": "stack_app_backend"}),
+    )
+    out = _render(build_layout(data, Config(), ("server",)), width=200)
+    assert "stack_app_backend" in out
