@@ -30,7 +30,7 @@ def test_the_ordinary_delay_is_the_interval_less_the_work():
     assert follow.next_delay(20.0, 3.7) == pytest.approx(16.3)
 
 
-def test_a_pass_slower_than_the_interval_still_waits(monkeypatch):
+def test_a_pass_slower_than_the_interval_still_waits():
     """The floor. Never more than half the wall clock, whatever it is told.
 
     A hung Docker socket must not turn the loop into a busy one.
@@ -86,3 +86,26 @@ def test_the_status_line_never_exceeds_the_width():
     line = follow.status_line(hidden=999, interval=5.0, width=20,
                               error="a very long failure message indeed")
     assert len(line) <= 20
+
+
+def test_the_stop_hint_survives_a_long_error_in_a_narrow_row():
+    """The row's whole purpose is telling you how to leave it.
+
+    The error is the one unbounded part, so it is what gives way -- not the
+    hint a reader needs precisely when something has gone wrong.
+    """
+    line = follow.status_line(hidden=999, interval=5.0, width=40,
+                              error="a very long failure message indeed")
+    assert "Ctrl-C" in line
+    assert len(line) <= 40
+
+
+def test_the_stop_hint_in_a_width_too_narrow_for_the_full_message():
+    """When the width is too narrow even for the hint, truncate the hint itself
+    rather than omitting it entirely.
+
+    The user needs it more when errors occur and content doesn't fit.
+    """
+    line = follow.status_line(hidden=0, interval=5.0, width=10)
+    assert line == "Ctrl-C to "
+    assert len(line) <= 10
