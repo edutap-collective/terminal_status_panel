@@ -3,9 +3,41 @@ import re
 
 import pytest
 from rich.console import Console
+from rich.segment import Segment
 
 from terminal_status_panel import cli, follow
 from terminal_status_panel.config import Config
+
+
+def _line(text: str) -> list[Segment]:
+    """A one-segment line, standing in for what `Console.render_lines` returns.
+
+    `crop` only ever slices the outer list, so a single plain segment per line
+    is enough to pin its behaviour without dragging in a real render.
+    """
+    return [Segment(text)]
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    """The written stream with every control/colour sequence removed.
+
+    Used to read the plain text of a captured frame; `_count_sgr` below reads
+    the same stream for the sequences this one throws away.
+    """
+    return _ANSI.sub("", text)
+
+
+def _count_sgr(text: str) -> int:
+    """How many colour/style (SGR) sequences a captured frame carries.
+
+    Distinct from `_ANSI`, which also matches cursor-control sequences such as
+    the home command -- those exist whether or not the frame has any colour in
+    it, so counting them would not tell colour and plain text apart.
+    """
+    return len(re.findall(r"\x1b\[[0-9;]*m", text))
 
 
 def test_sections_without_health_refresh_every_five_seconds():
@@ -47,27 +79,27 @@ def test_instant_work_waits_the_whole_interval():
 
 
 def test_content_taller_than_the_screen_is_cropped_and_counted():
-    lines = [f"line {i}" for i in range(20)]
+    lines = [_line(f"line {i}") for i in range(20)]
     kept, hidden = follow.crop(lines, height=10)
     assert kept == lines[:9]      # one row belongs to the status line
     assert hidden == 11
 
 
 def test_content_that_fits_hides_nothing():
-    lines = ["a", "b", "c"]
+    lines = [_line("a"), _line("b"), _line("c")]
     kept, hidden = follow.crop(lines, height=10)
     assert kept == lines
     assert hidden == 0
 
 
 def test_a_screen_with_room_for_only_the_status_line():
-    kept, hidden = follow.crop(["a", "b"], height=1)
+    kept, hidden = follow.crop([_line("a"), _line("b")], height=1)
     assert kept == []
     assert hidden == 2
 
 
 def test_no_screen_reports_nothing():
-    assert follow.crop(["a", "b"], height=0) == ([], 0)
+    assert follow.crop([_line("a"), _line("b")], height=0) == ([], 0)
 
 
 def test_the_status_line_names_the_interval_and_how_to_stop():
@@ -252,14 +284,14 @@ def test_each_pass_redraws_the_whole_screen(monkeypatch):
 
 
 def _run_one_pass_and_capture(monkeypatch, *, interval: float,
-                              monotonic_calls: list[float]) -> tuple[str, float]:
+                              monotonic_calls: list[float]) -> str:
     """A single pass of `run_follow`, with a controlled elapsed time.
 
     `started`/`elapsed` inside the loop both come from `time.monotonic`,
     called exactly twice per pass with the stubbed collectors below doing
     nothing measurable in between -- so handing it a fixed two-value sequence
     is what lets a test dictate exactly how long a pass "took" without an
-    actual sleep. Returns the frame's plain text and the delay actually slept.
+    actual sleep. Returns the frame's plain text, ANSI sequences stripped.
     """
     monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(cli, "collect_resources", lambda *a, **k: None)
@@ -277,8 +309,7 @@ def _run_one_pass_and_capture(monkeypatch, *, interval: float,
 
     follow.run_follow(Config(), ("server",), width=100, no_color=True,
                       interval=interval)
-    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", buffer.getvalue())
-    return plain, stopper.delays[0]
+    return _strip_ansi(buffer.getvalue()), stopper.delays[0]
 
 
 def test_an_ordinary_pass_reports_the_configured_interval(monkeypatch):
@@ -314,3 +345,42 @@ def test_a_pass_that_overruns_reports_the_doubled_cadence_not_the_delay(monkeypa
     assert "every 5s" not in plain
     assert "every 8s" not in plain
     assert delay == 8.0
+
+
+def test_follow_mode_keeps_the_panels_colour(monkeypatch):
+    """Finding 2: joining segment text and re-rendering it plain threw every
+    style away -- thresholds, bars, rules and the OS logo all rendered grey in
+    the one mode built to watch a cluster change state.
+
+    Compares the follow-path frame against a one-shot render of the same
+    layout at the same width: both must carry SGR (colour/style) sequences,
+    and neither count should be anywhere near zero.
+    """
+    monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "collect_resources", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
+
+    buffer = io.StringIO()
+    capturing = Console(file=buffer, force_terminal=True, width=100, height=30,
+                        color_system="standard")
+    monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
+
+    stopper = _StopAfter(1)
+    monkeypatch.setattr(follow.time, "sleep", stopper)
+
+    follow.run_follow(Config(), ("server",), width=100, no_color=False, interval=5.0)
+    follow_sgr = _count_sgr(buffer.getvalue())
+
+    one_shot = Console(width=100, force_terminal=True, color_system="standard")
+    with one_shot.capture() as capture:
+        from terminal_status_panel.render.layout import build_layout
+        one_shot.print(build_layout(cli.collect_all(Config(), ("server",)),
+                                    Config(), ("server",)))
+    one_shot_sgr = _count_sgr(capture.get())
+
+    assert follow_sgr > 0, "follow mode's frame carries no colour at all"
+    # Not an exact match -- the status line and screen padding add a little
+    # noise -- but the two paths render the same layout, so the counts must
+    # land in the same order of magnitude, not a bare few against over a
+    # hundred.
+    assert follow_sgr > one_shot_sgr / 2

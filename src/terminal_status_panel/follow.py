@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import sys
 import time
+from itertools import chain
 
-from rich.console import Group
 from rich.control import Control
-from rich.text import Text
+from rich.segment import Segment, Segments
 
 from .config import Config
 from .render.layout import build_layout
@@ -46,12 +46,15 @@ def next_delay(interval: float, elapsed: float) -> float:
     return max(interval - elapsed, elapsed)
 
 
-def crop(lines: list[str], height: int) -> tuple[list[str], int]:
+def crop(lines: list[list[Segment]], height: int) -> tuple[list[list[Segment]], int]:
     """The lines that fit above the status row, and the count left out.
 
     Rich does not crop for us -- ``Console.render_lines`` returns all twenty
     lines of a twenty-line renderable on a ten-line console -- so the cut is
-    ours to make, and therefore ours to get right.
+    ours to make, and therefore ours to get right. Each line is the list of
+    segments Rich rendered it as, not a plain string: the cut is a slice of
+    that list, so every segment keeps the style it was rendered with, and the
+    colour a line was given survives the crop untouched.
     """
     if height <= 0:
         return [], 0
@@ -173,11 +176,14 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
                     # mid-run is picked up. resolve_width runs once otherwise.
                     console.width = cli.resolve_width(width, cfg)
                     data = cli.collect_all(cfg, sections)
-                    rendered = [
-                        "".join(segment.text for segment in line).rstrip()
-                        for line in console.render_lines(
-                            build_layout(data, cfg, sections), pad=False)
-                    ]
+                    # A list of segment lines, not joined text: joining threw
+                    # every segment's style away, which is why an earlier
+                    # version of this loop rendered the whole panel in grey.
+                    # `pad=False` means no line carries trailing blank
+                    # segments, so the `.rstrip()` an earlier version needed
+                    # on the joined string has nothing left to do here.
+                    rendered = console.render_lines(
+                        build_layout(data, cfg, sections), pad=False)
                 except Exception as exc:  # reported in the status line, not raised
                     # A pass that fails is a fact to show, not a reason to
                     # stop. The next one may well succeed.
@@ -195,7 +201,8 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
                 # interval and drifts on every pass.
                 cadence = elapsed + delay
                 kept, hidden = crop(rendered, console.size.height)
-                lines = kept + [status_line(hidden, cadence, console.width, error)]
+                status = [Segment(status_line(hidden, cadence, console.width, error))]
+                lines = [*kept, status]
 
                 # `console.print` does not reposition the cursor between passes,
                 # so a frame shorter than the last leaves the previous one's tail
@@ -203,9 +210,12 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
                 # cursor first, then updating through `Screen` -- which pads
                 # every line to the full width and fills to the full height --
                 # is what makes each pass actually overwrite the last, the way
-                # `top` does.
+                # `top` does. `render_lines` splits on line boundaries but
+                # drops the newline itself, so each line's segments need one
+                # put back before they are flattened into a single sequence.
                 console.control(Control.home())
-                screen.update(Group(*[Text(line) for line in lines]))
+                screen.update(Segments(
+                    chain.from_iterable((*line, Segment.line()) for line in lines)))
                 time.sleep(delay)
     except KeyboardInterrupt:
         return 0
