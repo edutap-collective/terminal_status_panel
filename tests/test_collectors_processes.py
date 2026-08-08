@@ -250,6 +250,22 @@ def test_a_process_that_fails_at_the_memory_read_is_skipped_whole(tmp_path, monk
     assert [row.pid for row in snapshot.top_memory] == [101]
 
 
+def test_the_percent_and_byte_columns_cannot_disagree(monkeypatch, tmp_path):
+    """The row with the larger `memory_percent` is also the row with the
+    larger `memory_bytes` -- both are read from the same `rss`, so the two
+    columns must never be seen to rank two processes differently."""
+    monkeypatch.setattr(processes, "PROC", str(tmp_path))
+    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
+        _FakeProcess(1, "small", memory_percent=1.0, rss=1024),
+        _FakeProcess(2, "big", memory_percent=9.0, rss=9 * 1024),
+    ])
+    snapshot = processes.collect_processes(sample=0.0)
+    assert snapshot is not None
+    by_percent = max(snapshot.top_memory, key=lambda row: row.memory_percent)
+    by_bytes = max(snapshot.top_memory, key=lambda row: row.memory_bytes)
+    assert by_percent.pid == by_bytes.pid
+
+
 def test_the_limit_is_honoured_above_the_default(monkeypatch, tmp_path):
     monkeypatch.setattr(processes, "PROC", str(tmp_path))
     monkeypatch.setattr(processes.psutil, "process_iter", lambda: [

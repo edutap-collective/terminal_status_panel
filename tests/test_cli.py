@@ -335,6 +335,20 @@ def test_a_negative_flag_is_zero():
     assert cli.resolve_top_processes(-2, Config(top_processes=5)) == 0
 
 
+def test_an_explicit_zero_flag_silences_the_block_for_one_run():
+    """Guards the falsy-zero trap: the guard must be `is not None`, not
+    truthiness.
+
+    A user with `top_processes = 12` configured, typing `--processes 0` to
+    silence the block for a single run, must get `0` back -- not `12`. The
+    obvious "simplification" `if arg_processes:` would treat `0` the same as
+    "not given" and silently fall back to the configured value, exactly the
+    trap `follow.py` documents for `--interval 0` (see the comment on
+    `run_follow`'s `requested = ...` line).
+    """
+    assert cli.resolve_top_processes(0, Config(top_processes=12)) == 0
+
+
 def test_the_processes_flag_is_accepted_by_every_command():
     for prog in ("status-full", "status-server", "status-docker",
                  "status-health", "status-traefik"):
