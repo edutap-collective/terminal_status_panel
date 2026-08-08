@@ -14,15 +14,20 @@ def isolated_cli(monkeypatch):
     and resolver happen to exist on the machine — invisible on a developer's
     macOS box, up to a full health budget per test on a Debian CI runner.
 
-    ``collect_updates`` shells out to apt-check for the same reason. The purely
-    local collectors (system, resources) are left alone: they read /proc and
-    psutil, so they are fast and cannot reach off the machine.
+    ``collect_updates`` shells out to apt-check for the same reason.
+    ``collect_processes`` reaches nothing off the machine either, but it is
+    stubbed too: it sleeps for ``cfg.process_sample`` — 0.3 s by default — to
+    sample CPU, and walks the whole process table on every call, so leaving it
+    real would tax every server-section test with that sleep and scan. The
+    purely local collectors that read state instantly (system, resources) are
+    left alone.
 
     A test that wants a specific ``collect_health`` simply overrides it again.
     """
     monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
     monkeypatch.setattr(cli, "collect_health", lambda *a, **k: None)
     monkeypatch.setattr(cli, "collect_updates", lambda timeout=None: None)
+    monkeypatch.setattr(cli, "collect_processes", lambda sample, **kw: None)
     return monkeypatch
 
 
@@ -283,3 +288,16 @@ def test_processes_are_collected_only_for_the_server_section(isolated_cli, monke
     assert calls == []
     cli.collect_all(Config(), ("server",))
     assert calls == [Config().process_sample]
+
+
+def test_an_unmeasurable_process_collection_still_yields_an_empty_snapshot(
+    isolated_cli,
+):
+    """``collect_processes`` returning ``None`` -- nothing at all could be
+    read -- must not leak through as ``None`` on ``PanelData.processes``: that
+    would read as "never asked" to the renderer, when the row was in fact
+    asked for and came back empty-handed."""
+    from terminal_status_panel.model import ProcessSnapshot
+
+    data = cli.collect_all(Config(), ("server",))
+    assert data.processes == ProcessSnapshot()
