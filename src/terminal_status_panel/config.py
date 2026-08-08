@@ -95,16 +95,21 @@ DEFAULT_HEALTH_TIMEOUTS = {
 
 @dataclass
 class TraefikApiConfig:
-    """The optional runtime cross-check. Off unless a URL and cert are given.
+    """Everything under ``[traefik]``.
 
-    Dormant today: the dashboard router requires a client certificate signed by
-    the webfe CA, and the Ansible role issues only app-server TinyCA ones.
+    The API cross-check is dormant today: the dashboard router requires a
+    client certificate signed by the web frontend's CA, and the Ansible role
+    issues only app-server ones. ``links`` is independent of it.
     """
 
     url: str | None = None
     cert: str | None = None
     key: str | None = None
     ca: str | None = None
+    #: Entrypoint name to the base URL its services are reached at. The panel
+    #: cannot derive this: Traefik's routers match on path alone, so no
+    #: hostname appears in the routing configuration at all.
+    links: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -244,11 +249,24 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     except (TypeError, ValueError):
         process_sample = 0.3
     traefik_section = _section(data, "traefik")
+    links: dict[str, str] = {}
+    for name, value in _section(data, "traefik", "links").items():
+        # Dropped rather than rejected, like every other malformed value here:
+        # this file must never fail a login. An entrypoint whose base is
+        # unusable gets no links, which is the same state as not configuring
+        # it -- and better than a link nobody can trust.
+        if not isinstance(value, str):
+            continue
+        url = value.strip().rstrip("/")
+        if not url.startswith(("http://", "https://")):
+            continue
+        links[str(name)] = url
     traefik = TraefikApiConfig(
         url=traefik_section.get("url") or None,
         cert=traefik_section.get("cert") or None,
         key=traefik_section.get("key") or None,
         ca=traefik_section.get("ca") or None,
+        links=links,
     )
     follow_section = _section(data, "follow")
     try:

@@ -247,3 +247,47 @@ def test_malformed_follow_intervals_fall_back(tmp_path):
     cfg = load_config(path)
     assert cfg.follow_interval == 5.0
     assert cfg.follow_health_interval == 20.0
+
+
+def test_no_link_table_yields_no_links(tmp_path):
+    assert load_config(tmp_path / "missing.toml").traefik.links == {}
+
+
+def test_the_link_table_is_read(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'login_example_de = "https://login.example.de"\n'
+        'portal_dept_uni_example_de = "https://portal.dept.uni-example.de"\n'
+    )
+    links = load_config(path).traefik.links
+    assert links["login_example_de"] == "https://login.example.de"
+    assert links["portal_dept_uni_example_de"] == "https://portal.dept.uni-example.de"
+
+
+def test_a_trailing_slash_is_removed_from_a_base(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[traefik.links]\nlogin_example_de = "https://login.example.de/"\n')
+    assert load_config(path).traefik.links["login_example_de"] == "https://login.example.de"
+
+
+def test_a_value_that_is_not_an_http_url_is_dropped(tmp_path):
+    """Dropped rather than rejected: this file must never fail a login, and an
+    entrypoint with no usable base simply gets no links."""
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'a = "login.example.de"\n'
+        'b = "ftp://login.example.de"\n'
+        "c = 42\n"
+        'd = "https://ok.example.de"\n'
+    )
+    assert load_config(path).traefik.links == {"d": "https://ok.example.de"}
+
+
+def test_a_malformed_link_table_leaves_the_rest_of_the_config_intact(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[traefik]\nlinks = "not a table"\nurl = "https://api.example.de"\n')
+    cfg = load_config(path)
+    assert cfg.traefik.links == {}
+    assert cfg.traefik.url == "https://api.example.de"
