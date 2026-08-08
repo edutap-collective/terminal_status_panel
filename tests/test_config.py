@@ -225,3 +225,25 @@ def test_a_malformed_process_sample_falls_back(tmp_path):
     path = tmp_path / "c.toml"
     path.write_text('[resources]\nprocess_sample = "soon"\n')
     assert load_config(path).process_sample == 0.3
+
+
+def test_the_follow_intervals_have_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.follow_interval == 5.0
+    assert cfg.follow_health_interval == 20.0
+
+
+def test_the_follow_intervals_are_configurable(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text("[follow]\ninterval = 2.5\nhealth_interval = 45\n")
+    cfg = load_config(path)
+    assert cfg.follow_interval == 2.5
+    assert cfg.follow_health_interval == 45.0
+
+
+def test_malformed_follow_intervals_fall_back(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[follow]\ninterval = "soon"\nhealth_interval = []\n')
+    cfg = load_config(path)
+    assert cfg.follow_interval == 5.0
+    assert cfg.follow_health_interval == 20.0

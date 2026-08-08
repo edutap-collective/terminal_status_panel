@@ -129,6 +129,13 @@ class Config:
     #: 0.3 s over roughly 400 processes measures at about 0.32 s wall clock.
     #: Zero or less disables the CPU ranking entirely.
     process_sample: float = 0.3
+    #: Refresh interval for --follow when the health section is not among the
+    #: requested ones.
+    follow_interval: float = 5.0
+    #: Refresh interval for --follow when it is. The health checks run docker
+    #: exec probes -- the Kafka one alone carries roughly 2.6 s of JVM startup
+    #: -- so a five-second cadence would keep a JVM starting forever.
+    follow_health_interval: float = 20.0
 
 
 def _section(data: dict, *keys: str) -> dict:
@@ -243,6 +250,15 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         key=traefik_section.get("key") or None,
         ca=traefik_section.get("ca") or None,
     )
+    follow_section = _section(data, "follow")
+    try:
+        follow_interval = float(follow_section.get("interval", 5.0))
+    except (TypeError, ValueError):
+        follow_interval = 5.0
+    try:
+        follow_health_interval = float(follow_section.get("health_interval", 20.0))
+    except (TypeError, ValueError):
+        follow_health_interval = 20.0
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
@@ -256,4 +272,6 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         health=_health_config(data),
         traefik=traefik,
         process_sample=process_sample,
+        follow_interval=follow_interval,
+        follow_health_interval=follow_health_interval,
     )
