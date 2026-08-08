@@ -107,12 +107,13 @@ out in five tiers:
   cannot see.
 - **TRAEFIK WIRING** — Traefik's wiring **as configured**: one branch per
   entrypoint, each with its routers, their middlewares, and the service they
-  point at. The branches flow into as many columns as the terminal allows, in
-  the order the Traefik service's own arguments declare them — the four every
-  cluster has (`dashboard`, `ping`, `default`, `https`) before this cluster's
-  per-vhost ones. Routers whose entrypoint does not exist get their own block
-  below, at full width, since a tree keyed by entrypoint would otherwise drop
-  them silently. See [Traefik wiring](#traefik-wiring) below for what "as
+  point at. The branches are packed into as many height-balanced columns as
+  the terminal allows, in the order the Traefik service's own arguments
+  declare them — the four every cluster has (`dashboard`, `ping`, `default`,
+  `https`) before this cluster's per-vhost ones. Routers whose entrypoint
+  does not exist get their own block below, at full width, since a tree
+  keyed by entrypoint would otherwise drop them silently. See
+  [Traefik wiring](#traefik-wiring) below for what "as
   configured" means and for the optional (currently dormant) live cross-check
   against Traefik itself.
 
@@ -168,8 +169,9 @@ but runs no `exec` and reaches no network beyond Docker unless the optional
 accepts `--sections` with any comma-separated subset to pick explicitly, e.g.
 `--sections docker,traefik` for the two Docker-facing blocks alone.
 
-The wiring block is the same either way — one rendering, flowed into columns
-— so nothing is visible in `status-traefik` that a login does not also show.
+The wiring block is the same either way — one rendering, packed into
+height-balanced columns — so nothing is visible in `status-traefik` that a
+login does not also show.
 
 Any of the five works in the profile.d snippet (see *Running it at login*) —
 e.g. call `status-docker` or `status-health` on Docker Swarm nodes,
@@ -579,13 +581,19 @@ absence.
 
 ### Layout and order
 
-The entrypoint branches flow into as many columns as the terminal allows —
-the same `Columns` arrangement CLUSTER HEALTH uses, three at 190 columns, one
-at 60. Stacked vertically they run to some seventy lines on a mid-sized
-cluster while two
-thirds of the width stays empty. The orphaned-router block stays full width
-below them: its lines are the longest in the section, and it is what you read
-first. Each entrypoint's head line carries the worst verdict among its
+The entrypoint branches are packed into as many columns as the terminal
+allows, balanced by height rather than filled row by row: `rich.Columns`,
+which CLUSTER HEALTH still uses, fills a grid row by row, so a row is as tall
+as its tallest cell and a three-line branch beside a twenty-line one leaves
+seventeen blank lines behind it. The packer used here fills column by column
+instead, putting the tallest branches each in a column of their own and
+stacking the short ones together, so the whole layout is only as tall as its
+fullest column. There is no fixed "three columns at 190, one at 60" to name,
+because the column count now falls out of which branches land in which
+column on the actual terminal width, not out of a uniform column width the
+way `Columns` computed it. The orphaned-router block stays full width below
+the columns: its lines are the longest in the section, and it is what you
+read first. Each entrypoint's head line carries the worst verdict among its
 routers, so a wall of branches still says at a glance which one to open.
 
 Entrypoints appear **in the order the Traefik service's arguments declare
@@ -593,6 +601,30 @@ them**, not by port. The Ansible role lists the four every cluster has —
 `dashboard`, `ping`, `default`, `https` — before appending this cluster's
 per-vhost ones, and that grouping is more useful than the numeric order, which
 would put `https` (443) first and `dashboard` (8082) last and scatter the four.
+
+### Folding endpoints that claim nothing
+
+A router pointing at one of Traefik's own `@internal` endpoints — the `ping`
+router that answers `/ping` is the everyday example — has nothing to report
+on its service line: nothing about `@internal` was ever measured, so there is
+no verdict to show, only the target's name. Rather than spend a whole row on
+that name, it is folded onto the router's own line instead:
+
+```
+  └─ ping-router        Path(`/_traefik_ping_`)  → ping@internal
+```
+
+Nothing is hidden and no verdict is dropped, because there was no verdict to
+drop in the first place; a router carrying a middleware, or pointing at a
+real service, keeps its service line on its own row exactly as before. The
+fold does cost the branch some width, though, and a wider branch can push a
+column over the terminal's width and cost the whole section a column back —
+paying several lines on screen to save one. So the panel builds both the
+folded and the unfolded form of every branch, packs each independently, and
+draws whichever one actually packs to fewer lines. On a shape of six
+entrypoints that share nothing but one `ping` router, folding unconditionally
+would cost a column at a terminal width of 120 (14 lines instead of 11);
+packing both and choosing avoids that.
 
 ### Entrypoints that are supposed to look empty
 

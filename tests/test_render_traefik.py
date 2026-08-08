@@ -1,4 +1,5 @@
-from rich.console import Console
+from rich.console import Console, Group
+from rich.text import Text
 
 from terminal_status_panel.config import Config
 from terminal_status_panel.model import (
@@ -7,11 +8,14 @@ from terminal_status_panel.model import (
     SwarmInfo,
     TraefikEntrypoint,
     TraefikInfo,
+    TraefikMiddleware,
     TraefikRouter,
     TraefikServiceRef,
 )
 from terminal_status_panel.render import icons
-from terminal_status_panel.render.traefik import traefik_section
+from terminal_status_panel.render.packing import PackedColumns
+from terminal_status_panel.render.panels import section
+from terminal_status_panel.render.traefik import _entrypoint_block, traefik_section
 
 
 def _render(info, swarm=None, width=120):
@@ -421,3 +425,218 @@ def test_a_middleware_reference_with_a_provider_suffix_still_resolves():
     out = _render(info, width=120)
     assert "no such middleware" not in out
     assert "stripprefix" in out
+
+
+def _ragged():
+    """One tall entrypoint and three short ones — the shape that wastes space.
+
+    The tall block is eleven lines (its head plus five routers of two lines
+    each), the short ones three. Filled row by row into two columns that is
+    eleven lines then three; packed by height it is eleven, because the tall
+    block sets the height on its own and the three short ones stack beside it.
+
+    The two tests below that check the arrangement render this at width 120,
+    not wider: these blocks are narrow enough (40-49 cells) that a wider
+    terminal fits all four side by side, which is the correct, optimal
+    layout too — but it does not exercise the two-column case the tests are
+    about. At 120 only two columns fit, which is what forces the three short
+    blocks to share one column instead of a row each.
+    """
+    routers = [
+        TraefikRouter(name=f"busy_{index}", entrypoints=["portal_admin"],
+                      rule=f"PathPrefix(`/busy/{index}`)", service=f"busy_{index}")
+        for index in range(5)
+    ]
+    routers += [
+        TraefikRouter(name=f"quiet_{name}", entrypoints=[name],
+                      rule="PathPrefix(`/`)", service=f"quiet_{name}")
+        for name in ("status_public", "status_internal", "eam_dev")
+    ]
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[
+            TraefikEntrypoint(name="portal_admin", address=":2020", port=2020),
+            TraefikEntrypoint(name="status_public", address=":2011", port=2011),
+            TraefikEntrypoint(name="status_internal", address=":2012", port=2012),
+            TraefikEntrypoint(name="eam_dev", address=":2021", port=2021),
+        ],
+        routers=routers,
+        services={router.service: TraefikServiceRef(name=router.service, port=8080)
+                  for router in routers},
+    )
+
+
+def test_a_short_entrypoint_beside_a_tall_one_wastes_no_rows():
+    out = _render(_ragged(), width=120)
+    body = [line for line in out.splitlines() if line.strip()]
+    # Eleven lines of columns plus the section's own rule. Row-major filling
+    # would add the three-line second row on top of that.
+    assert len(body) == 12
+
+
+def test_short_entrypoints_stack_rather_than_share_a_row():
+    out = _render(_ragged(), width=120)
+    heads = [
+        index
+        for index, line in enumerate(out.splitlines())
+        if "status_internal  :2012" in line or "eam_dev  :2021" in line
+    ]
+    assert len(heads) == 2
+    assert heads[0] != heads[1]
+
+
+def test_every_entrypoint_and_router_is_rendered_exactly_once():
+    out = _render(_ragged(), width=200)
+    for name in ("portal_admin", "status_public", "status_internal", "eam_dev"):
+        assert out.count(f"{name}  :") == 1
+    for index in range(5):
+        assert _branch_heads(out, f"busy_{index}") == 1
+
+
+def test_no_rendered_line_exceeds_the_console_width():
+    for width in (80, 120, 200):
+        out = _render(_ragged(), width=width)
+        assert max(Text(line).cell_len for line in out.splitlines()) <= width
+
+
+def test_an_entrypoint_that_has_routers_never_reads_as_having_none():
+    out = _render(_ragged(), width=200)
+    assert "no router" not in out
+
+
+def _internal(middlewares=None, mw_defs=None):
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=[TraefikEntrypoint(name="default", address=":8088", port=8088)],
+        routers=[TraefikRouter(name="ping-router", entrypoints=["default"],
+                               rule="Path(`/_traefik_ping_`)", service="ping@internal",
+                               middlewares=middlewares or [], source="file")],
+        services={"ping@internal": TraefikServiceRef(name="ping@internal",
+                                                     source="file")},
+        middlewares=mw_defs or {},
+    )
+
+
+def test_an_internal_target_folds_onto_the_router_line():
+    out = _render(_internal())
+    heads = [line for line in out.splitlines() if "ping-router" in line]
+    assert len(heads) == 1
+    assert "ping@internal" in heads[0]
+
+
+def test_the_folded_head_carries_only_its_own_branch_glyph():
+    """The fold strips the service line's own ``└─ `` prefix by string surgery
+    (``service.plain.strip().removeprefix("└─ ")``) so that gluing it onto the
+    router head does not leave a second, orphaned branch glyph behind. That
+    surgery is coupled to the exact text ``_service_state`` produces; this
+    guards it against silently breaking if that text ever changes shape.
+    """
+    out = _render(_internal())
+    head = next(line for line in out.splitlines() if "ping-router" in line)
+    assert head.count("└─") == 1
+
+
+def test_a_middleware_keeps_the_internal_target_on_its_own_line():
+    info = _internal(middlewares=["strip"],
+                     mw_defs={"strip": TraefikMiddleware(name="strip",
+                                                         kind="stripprefix")})
+    out = _render(info)
+    lines = out.splitlines()
+    head = next(line for line in lines if "ping-router" in line)
+    assert "ping@internal" not in head
+    assert any("ping@internal" in line and "ping-router" not in line for line in lines)
+
+
+def test_a_measured_service_keeps_its_own_line():
+    swarm = SwarmInfo(reachable=True, enabled=True, services=[
+        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
+                      tasks=[ServiceTask("srv-01", "running")]),
+    ])
+    out = _render(_wired(), swarm=swarm)
+    head = next(line for line in out.splitlines()
+                if "└─ kafbat-ui" in line and "→" not in line)
+    assert "kafbat-ui_kafbat-ui" not in head
+
+
+def _six_ping():
+    """Six entrypoints whose only router is the shared ping router.
+
+    The design's own reference shape: one ``TraefikRouter`` naming all six
+    entrypoints, pointing at ``ping@internal``, declared in the file
+    provider — the case the fold exists for.
+    """
+    names = ["dashboard", "ping", "default", "https", "portal_admin", "status_public"]
+    entrypoints = [
+        TraefikEntrypoint(name=name, address=f":{2000 + index}", port=2000 + index)
+        for index, name in enumerate(names)
+    ]
+    router = TraefikRouter(
+        name="ping-router", entrypoints=names, rule="Path(`/_traefik_ping_`)",
+        service="ping@internal", source="file",
+    )
+    return TraefikInfo(
+        reachable=True,
+        entrypoints=entrypoints,
+        routers=[router],
+        services={"ping@internal": TraefikServiceRef(name="ping@internal", source="file")},
+    )
+
+
+def test_folding_never_costs_the_six_ping_router_shape_a_column():
+    """Folded, each branch is 2 lines and 64 cells wide (head + folded router
+    line, e.g. ``dashboard  :2000`` / `` └─ ping-router  Path(...)  → ping@
+    internal``). Two folded columns need 64 + 4 + 64 = 132 cells, which does
+    not fit at width 120, so a packer that only ever sees the folded blocks
+    falls back to one column: 6 branches * 2 lines = 12 content lines, plus
+    the section's own rule and trailing blank = 14.
+
+    Unfolded, each branch grows to 3 lines (router line and service line
+    split again) but narrows to roughly 47 cells: two columns need
+    47 + 4 + 47 = 98, which fits comfortably at 120. Two columns of 3
+    branches * 3 lines = 9, plus the section's 2 chrome lines = 11 — shorter
+    than the folded fallback despite the extra line per branch. Packing both
+    candidates and drawing whichever is shorter must reach this 11, not the
+    14 a folded-only packer produces.
+    """
+    out = _render(_six_ping(), width=120)
+    lines = out.splitlines()
+    assert len(lines) == 11
+    # Never taller at 120 than at any wider width: widening a terminal must
+    # not cost lines.
+    for wider in (140, 160, 190, 200, 215):
+        wider_lines = _render(_six_ping(), width=wider).splitlines()
+        assert len(lines) >= len(wider_lines)
+    # And specifically no taller than a section built only from the unfolded
+    # blocks (no alternative, so PackedColumns has nothing to choose between)
+    # — the same chrome (rule and trailing blank) around the same six
+    # branches, forced always-unfolded.
+    info = _six_ping()
+    unfolded_blocks = [
+        _entrypoint_block(ep, info, None, fold=False) for ep in info.entrypoints
+    ]
+    unfolded_section = section("TRAEFIK WIRING", Group(PackedColumns(unfolded_blocks), Text("")))
+    unfolded_console = Console(width=120, force_terminal=False, color_system=None)
+    with unfolded_console.capture() as capture:
+        unfolded_console.print(unfolded_section)
+    unfolded_lines = capture.get().splitlines()
+    assert len(lines) <= len(unfolded_lines)
+
+
+def test_the_section_fills_most_of_a_wide_terminal():
+    """The whole point of the packing, measured rather than asserted.
+
+    ``Text(line).cell_len`` counts the trailing spaces Rich pads every cell
+    with to reach its column width, which measures "how close each line is to
+    the console width" — a metric a *worse*, more ragged layout can score
+    *higher* on, since a tall ragged block pads more blank rows out to the
+    full width. Rstripping first counts actual ink instead. Measured on this
+    shape at width 120: the pre-packing layout (16 lines, row-major
+    ``rich.Columns``) scores 0.47 on ink against 0.79 on padding: the padded
+    metric would have called the worse layout better. The packed-and-folded
+    layout (13 lines) scores 0.57. The bound sits between the two, well clear
+    of either, so it genuinely discriminates rather than merely rewarding
+    padding.
+    """
+    out = _render(_ragged(), width=120).splitlines()
+    ink = sum(Text(line.rstrip()).cell_len for line in out)
+    assert ink / (len(out) * 120) > 0.50
