@@ -1106,3 +1106,50 @@ def test_an_empty_snapshot_says_so_rather_than_showing_nothing():
     out = _render_status(processes=ProcessSnapshot())
     assert "TOP CPU" in out
     assert "not available" in out
+
+
+def test_the_memory_column_is_shown_in_bytes():
+    snapshot = ProcessSnapshot(
+        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0,
+                            memory_percent=0.0)],
+        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0,
+                                memory_bytes=2 * 1024**3)],
+        sampled=0.3)
+    out = _render_status(processes=snapshot)
+    assert "MEM" in out
+    assert "2.0 GB" in out
+
+
+def test_an_absent_memory_figure_shows_the_dash_not_n_a():
+    """`format_bytes(None)` returns "n/a"; the row already says absence with a
+    dash, and one row should not carry two vocabularies for it."""
+    snapshot = ProcessSnapshot(
+        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0,
+                            memory_percent=0.0)],
+        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=None,
+                                memory_bytes=None)],
+        sampled=0.3)
+    out = _render_status(processes=snapshot)
+    # The process row should use dashes for absent figures, not "n/a".
+    # Only check that the "app" row doesn't have "n/a".
+    app_line = next(
+        line for line in out.splitlines()
+        if "app" in line and "top" not in line.lower()
+    )
+    assert "n/a" not in app_line
+    assert "—" in out
+
+
+def test_the_column_labels_are_english_and_in_order():
+    """Split rather than searched: `%MEM` contains `MEM`, so `str.index` would
+    find the wrong one and the order would pass however it was arranged."""
+    snapshot = ProcessSnapshot(
+        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0,
+                            memory_percent=0.0)],
+        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0,
+                                memory_bytes=1024)],
+        sampled=0.3)
+    out = _render_status(processes=snapshot)
+    header = next(line for line in out.splitlines() if "%CPU" in line and "MEM" in line)
+    # Two lists sit side by side, so the header carries both sets of labels.
+    assert header.split()[:6] == ["%CPU", "%MEM", "MEM", "PID", "PROCESS", "SERVICE"]

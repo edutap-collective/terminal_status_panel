@@ -387,17 +387,21 @@ def _service_name(origin: str | None, origins: dict[str, str] | None) -> str:
 def _process_table(rows: list[ProcessInfo],
                    origins: dict[str, str] | None) -> Table:
     table = Table.grid(padding=(0, 2))
-    for justify in ("right", "right", "right", "left", "left"):
+    for justify in ("right", "right", "right", "right", "left", "left"):
         table.add_column(justify=justify)
     table.add_row(*[Text(head, style="bold cyan")
-                    for head in ("%CPU", "%MEM", "PID", "PROCESS", "SERVICE")])
+                    for head in ("%CPU", "%MEM", "MEM", "PID", "PROCESS", "SERVICE")])
     for row in rows:
         cpu = "—" if row.cpu_percent is None else f"{row.cpu_percent:.1f}"
         mem = "—" if row.memory_percent is None else f"{row.memory_percent:.1f}"
+        # Not `format_bytes(row.memory_bytes)`: that returns "n/a" for None,
+        # and this row already says absence with a dash. Two vocabularies for
+        # one meaning in one line is one too many.
+        size = "—" if row.memory_bytes is None else format_bytes(row.memory_bytes)
         service = _service_name(row.origin, origins)
         if len(service) > _SERVICE_WIDTH:
             service = service[: _SERVICE_WIDTH - 1] + "…"
-        table.add_row(Text(cpu), Text(mem), Text(str(row.pid)),
+        table.add_row(Text(cpu), Text(mem), Text(size), Text(str(row.pid)),
                       Text(row.name), Text(service, style="dim"))
     return table
 
