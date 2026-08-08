@@ -81,3 +81,34 @@ def test_a_negation_anywhere_in_the_rule_yields_nothing():
 def test_an_exclamation_mark_inside_a_path_is_not_a_negation():
     """The grammar is outside the backticks; the argument is not grammar."""
     assert path_from_rule("PathPrefix(`/a!b`)") == "/a!b"
+
+
+# -- A `PathRegexp`'s literal head is only a prefix when the router actually
+# -- serves that prefix: everything past it must be the end of the string or
+# -- a demonstrably optional continuation, never a tail that narrows the
+# -- match to a longer, different address.
+
+def test_a_regexp_whose_tail_narrows_to_a_longer_exact_path_yields_nothing():
+    """`/foo` is not a sub-case of `/foo.bar` -- it is a different address,
+    and the router matching `^/foo\\.bar$` does not serve `/foo`."""
+    assert path_from_rule(r"PathRegexp(`^/foo\.bar$`)") is None
+
+
+def test_a_regexp_whose_tail_restricts_to_an_extension_yields_nothing():
+    """The router serves only paths ending `.js`; `/static/` is not one of
+    them, only a directory a request there would never reach."""
+    assert path_from_rule(r"PathRegexp(`^/static/.*\.js$`)") is None
+
+
+def test_a_regexp_with_a_character_class_tail_yields_nothing():
+    assert path_from_rule("PathRegexp(`^/a/[0-9]+$`)") is None
+
+
+def test_a_regexp_with_an_optional_tail_still_yields_its_head():
+    """The tail matches nothing but more of the same path, so the head
+    really is what the router serves."""
+    assert path_from_rule("PathRegexp(`^/portal/app(?:/.*)?$`)") == "/portal/app"
+
+
+def test_a_bare_anchored_regexp_yields_its_exact_path():
+    assert path_from_rule("PathRegexp(`^/exact$`)") == "/exact"

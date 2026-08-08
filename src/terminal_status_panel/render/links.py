@@ -30,6 +30,24 @@ _ARGUMENT = re.compile(r"`[^`]*`")
 #: the guessing this module exists to avoid.
 _REGEX_META = frozenset("([.*+?{|\\$")
 
+#: Tails -- everything from the first metacharacter onward -- that leave the
+#: literal head in front of them a genuine prefix. `PathRegexp(`^/foo\.bar$`)`
+#: reads as the literal head `/foo` followed by the tail `\.bar$`: that tail is
+#: not here, because it narrows the match to a different, longer address, and
+#: `/foo` is not a sub-case of `/foo.bar` -- it is a different address the
+#: router does not serve. Only a tail that adds nothing but more of the same
+#: path -- the end of the string, or an optional `/...` continuation -- keeps
+#: the head a prefix. Each shape is listed both anchored (a trailing `$`, the
+#: common case) and unanchored, because the grammar does not require the
+#: anchor even though most rules carry one.
+_OPTIONAL_TAILS = frozenset({
+    "$",                      # nothing follows the head at all
+    "(?:/.*)?$", "(?:/.*)?",  # an optional, non-capturing `/...` continuation
+    "(/.*)?$", "(/.*)?",      # the same, capturing
+    "/?$", "/?",              # an optional trailing slash
+    ".*$", ".*",              # anything may follow -- still a prefix
+})
+
 
 def path_from_rule(rule: str | None) -> str | None:
     """The single path this rule matches, or ``None``.
@@ -58,7 +76,11 @@ def path_from_rule(rule: str | None) -> str | None:
     literal = value.removeprefix("^")
     for index, char in enumerate(literal):
         if char in _REGEX_META:
-            return literal[:index] or None
+            head = literal[:index]
+            tail = literal[index:]
+            if not head or tail not in _OPTIONAL_TAILS:
+                return None
+            return head
     return literal or None
 
 
