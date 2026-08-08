@@ -98,7 +98,10 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
     # sub-path is merely unknown, but wrong for one router among several on
     # it -- linking it to the root would claim it serves the root, and
     # nothing measured that.
-    url = router_link(base, router.rule)
+    rejected = bool(info.api_consulted and router.rejected)
+    # A router Traefik measurably rejected asserts the route does not exist;
+    # a link beside that claim would offer to take you there anyway.
+    url = None if rejected else router_link(base, router.rule)
     if url:
         # Applied to the name's span alone, and now rather than later: the rule
         # and the rejection notice are appended below, and a link laid over the
@@ -106,7 +109,7 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         head.stylize(f"link {url}", start, len(head.plain))
     if router.rule:
         head.append(f"        {router.rule}", style="dim")
-    if info.api_consulted and router.rejected:
+    if rejected:
         # Traefik was asked and said no: a measured failure, not a suspicion.
         # The accepted case stays silent — the tree already reads as
         # configured-and-accepted — and an unconsulted router (`rejected is

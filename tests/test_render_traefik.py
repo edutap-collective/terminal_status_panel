@@ -696,6 +696,20 @@ def test_without_a_configured_base_nothing_is_linked():
     assert _link_targets(_render_linked(_linked(), Config())) == []
 
 
+def test_a_router_traefik_rejected_carries_no_link():
+    """A router Traefik measurably rejected asserts the route does not exist;
+    a link beside that claim would offer to take you there anyway, even
+    though its rule would otherwise yield a perfectly good path."""
+    info = _linked()
+    info.api_consulted = True
+    info.routers[0].rejected = True  # account-spa, whose rule links cleanly
+    out = _render_linked(info, _cfg_with_links())
+    linked_spans = re.findall("\x1b]8;[^;]*;[^\x1b]+\x1b\\\\(.*?)\x1b]8;;", out)
+    assert not any("account-spa" in span for span in linked_spans)
+    # The entrypoint head is unaffected -- only this one router was rejected.
+    assert "https://login.example.de" in _link_targets(out)
+
+
 def test_a_router_whose_rule_has_no_single_path_is_not_linked():
     """Not "no target ends in /a or /b" -- that also passes if the router got
     linked to the bare base, which is `link_for(base, None)`'s answer for an
