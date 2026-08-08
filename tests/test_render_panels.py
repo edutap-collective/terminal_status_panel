@@ -1040,6 +1040,42 @@ def test_a_systemd_unit_needs_no_resolving():
     assert "glusterd.service" in out
 
 
+def test_a_service_name_wider_than_its_column_is_truncated():
+    """The design asked for this case explicitly and it was never pinned.
+
+    47 characters is arbitrary only in how far past ``_SERVICE_WIDTH`` (22) it
+    reaches -- the point is that the excess is cut with an ellipsis rather
+    than left to push the row out of alignment.
+    """
+    long_name = "a" * 39 + ".service"  # a plain systemd unit, 47 characters
+    snapshot = ProcessSnapshot(top_memory=[
+        ProcessInfo(pid=4242, name="hog", memory_percent=3.0, origin=long_name),
+    ])
+    out = _render_status(processes=snapshot)
+    assert long_name not in out
+    truncated = long_name[: panels._SERVICE_WIDTH - 1] + "…"
+    assert truncated in out
+    # The cut affects only the SERVICE cell -- PID and PROCESS on the same
+    # row are unaffected, so the row stays aligned rather than collapsing.
+    for line in out.splitlines():
+        if truncated in line:
+            assert "4242" in line and "hog" in line
+            break
+    else:
+        raise AssertionError("truncated service name not found on its own row")
+
+
+def test_a_service_name_exactly_at_the_column_width_is_not_truncated():
+    exact_name = "b" * 14 + ".service"  # precisely _SERVICE_WIDTH characters
+    assert len(exact_name) == panels._SERVICE_WIDTH
+    snapshot = ProcessSnapshot(top_memory=[
+        ProcessInfo(pid=99, name="proc", memory_percent=1.0, origin=exact_name),
+    ])
+    out = _render_status(processes=snapshot)
+    assert exact_name in out
+    assert "…" not in out
+
+
 def test_the_sampled_window_is_shown_in_the_heading():
     out = _render_status(processes=_snapshot())
     assert "TOP CPU (0.3s)" in out
