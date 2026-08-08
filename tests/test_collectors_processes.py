@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 
 import psutil
 
@@ -15,7 +16,8 @@ def _write_cgroup(tmp_path, pid: int, line: str) -> None:
 class _FakeProcess:
     """Stands in for `psutil.Process`, offering only the methods
     `collect_processes` actually calls -- priming (`cpu_percent`), and the
-    three per-row reads (`name`, `cpu_percent` again, `memory_percent`).
+    four per-row reads (`name`, `cpu_percent` again, `memory_percent`,
+    `memory_info`).
 
     `vanishes=True` makes `name()` raise, the way a process that exited
     between being listed and being inspected would: `process_iter` still knew
@@ -27,11 +29,13 @@ class _FakeProcess:
     """
 
     def __init__(self, pid: int, name: str, cpu_percent: float = 0.0,
-                 memory_percent: float = 0.0, vanishes: bool = False) -> None:
+                 memory_percent: float = 0.0, rss: int = 0,
+                 vanishes: bool = False) -> None:
         self.pid = pid
         self._name = name
         self._cpu_percent = cpu_percent
         self._memory_percent = memory_percent
+        self._rss = rss
         self._vanishes = vanishes
 
     def cpu_percent(self, interval: float | None = None) -> float:
@@ -44,6 +48,9 @@ class _FakeProcess:
 
     def memory_percent(self) -> float:
         return self._memory_percent
+
+    def memory_info(self):
+        return SimpleNamespace(rss=self._rss)
 
 
 def test_a_systemd_unit_is_reported_verbatim(tmp_path, monkeypatch):
@@ -115,7 +122,7 @@ def test_a_disabled_sample_reports_no_cpu_ranking_rather_than_zeros(tmp_path, mo
     assert snapshot.sampled == 0.0
     assert snapshot.top_memory == [
         ProcessInfo(pid=100, name="only-process", cpu_percent=None,
-                    memory_percent=3.0, origin=None),
+                    memory_percent=3.0, memory_bytes=0, origin=None),
     ]
 
 
@@ -186,3 +193,43 @@ def test_no_process_table_yields_none(monkeypatch):
 
     monkeypatch.setattr(processes.psutil, "process_iter", boom)
     assert processes.collect_processes(sample=0.05) is None
+
+
+def test_a_row_carries_the_resident_memory_in_bytes(monkeypatch, tmp_path):
+    """The absolute figure and the percentage are one quantity in two units.
+
+    psutil computes `memory_percent()` from `rss` by default, so reading the
+    same `rss` here means the two columns can never be seen to disagree.
+    """
+    monkeypatch.setattr(processes, "PROC", str(tmp_path))
+    monkeypatch.setattr(processes.psutil, "process_iter",
+                        lambda: [_FakeProcess(101, "app", memory_percent=7.0,
+                                              rss=2 * 1024**3)])
+    snapshot = processes.collect_processes(sample=0.0)
+    assert snapshot is not None
+    assert snapshot.top_memory[0].memory_bytes == 2 * 1024**3
+
+
+def test_a_process_that_raises_while_being_read_is_still_skipped_whole(monkeypatch,
+                                                                       tmp_path):
+    """One more attribute is now read inside that `try`, so the skip path is
+    worth re-checking: a row with a hole in it would be worse than no row."""
+    monkeypatch.setattr(processes, "PROC", str(tmp_path))
+    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
+        _FakeProcess(101, "app", memory_percent=1.0, rss=1024),
+        _FakeProcess(102, "gone", memory_percent=9.0, rss=4096, vanishes=True),
+    ])
+    snapshot = processes.collect_processes(sample=0.0)
+    assert snapshot is not None
+    assert [row.pid for row in snapshot.top_memory] == [101]
+
+
+def test_the_limit_is_honoured_above_the_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(processes, "PROC", str(tmp_path))
+    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
+        _FakeProcess(n, f"p{n}", memory_percent=float(n), rss=n * 1024)
+        for n in range(1, 12)
+    ])
+    snapshot = processes.collect_processes(sample=0.0, limit=8)
+    assert snapshot is not None
+    assert len(snapshot.top_memory) == 8

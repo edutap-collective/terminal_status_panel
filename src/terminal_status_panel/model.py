@@ -58,6 +58,10 @@ class ProcessInfo:
     name: str
     cpu_percent: float | None = None
     memory_percent: float | None = None
+    #: Resident set size in bytes. The figure ``memory_percent`` is computed
+    #: from -- psutil's ``memtype`` default is ``rss`` -- so the two are one
+    #: quantity in two units rather than two numbers that could disagree.
+    memory_bytes: int | None = None
     origin: str | None = None
 
 
