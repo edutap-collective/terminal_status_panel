@@ -32,6 +32,7 @@ from .collectors.system import collect_system
 from .collectors.traefik import collect_traefik, fetch_accepted, mark_rejected
 from .collectors.updates import collect_updates
 from .config import Config, load_config
+from .follow import run_follow
 from .model import PanelData, ProcessSnapshot
 from .render.layout import SECTIONS, build_layout
 
@@ -199,6 +200,10 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
     parser.add_argument("--sections", default=None,
                         help="comma-separated sections to render: "
                              "server,docker,health,traefik")
+    parser.add_argument("-f", "--follow", action="store_true",
+                        help="keep the panel on screen and refresh it")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="seconds between refreshes in --follow")
     return parser.parse_args(argv)
 
 
@@ -209,6 +214,9 @@ def main(argv: list[str] | None = None, sections: tuple[str, ...] = DEFAULT_SECT
         args = _parse_args(argv, prog)
         cfg = load_config(args.config)
         selected = _resolve_sections(args.sections, sections)
+        if args.follow:
+            return run_follow(cfg, selected, width=args.width,
+                              no_color=args.no_color, interval=args.interval)
         width = resolve_width(args.width, cfg)
         console = build_console(width, args.no_color)
         data = collect_all(cfg, selected)

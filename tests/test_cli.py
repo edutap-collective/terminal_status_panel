@@ -301,3 +301,25 @@ def test_an_unmeasurable_process_collection_still_yields_an_empty_snapshot(
 
     data = cli.collect_all(Config(), ("server",))
     assert data.processes == ProcessSnapshot()
+
+
+def test_the_follow_flags_are_accepted_by_every_command():
+    for prog in ("status-full", "status-server", "status-docker",
+                 "status-health", "status-traefik"):
+        args = cli._parse_args(["-f", "--interval", "7"], prog)
+        assert args.follow is True
+        assert args.interval == 7.0
+
+
+def test_follow_hands_off_to_the_loop(isolated_cli, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "run_follow",
+                        lambda cfg, sections, **kw: seen.update(kw) or 0)
+    assert cli.main(["--follow", "--interval", "9", "--no-color"]) == 0
+    assert seen["interval"] == 9.0
+
+
+def test_without_follow_nothing_loops(isolated_cli, monkeypatch):
+    monkeypatch.setattr(cli, "run_follow",
+                        lambda *a, **k: pytest.fail("must not be called"))
+    assert cli.main(["--no-color", "--width", "100"]) == 0

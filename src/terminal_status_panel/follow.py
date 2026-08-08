@@ -7,7 +7,11 @@ after a pass, and how much of the panel fits.
 
 from __future__ import annotations
 
+import sys
+import time
+
 from .config import Config
+from .render.layout import build_layout
 
 #: No panel has anything new to say more often than this, and the cheapest of
 #: them takes half a second to collect. An interval below it is raised rather
@@ -126,3 +130,51 @@ def status_line(hidden: int, interval: float, width: int,
 
     # Should not reach here (minimal fits), but fallback to hint.
     return stop_hint[:width]
+
+
+def run_follow(cfg: Config, sections: tuple[str, ...], *,
+               width: int | None, no_color: bool,
+               interval: float | None) -> int:
+    """Render the panel on the alternate screen until interrupted.
+
+    Always returns 0. A status panel must never fail a login shell, and follow
+    mode is the same program with a loop around it.
+    """
+    from . import cli  # module object, not its names -- see the note above
+
+    chosen = max(interval or default_interval(sections, cfg), MIN_INTERVAL)
+    console = cli.build_console(cli.resolve_width(width, cfg), no_color)
+
+    if not sys.stdout.isatty():
+        # A loop inside a pipe is a trap, and this panel's other job is to be
+        # generated into an MOTD. One frame, then out.
+        console.print(build_layout(cli.collect_all(cfg, sections), cfg, sections))
+        return 0
+
+    try:
+        with console.screen():
+            while True:
+                started = time.monotonic()
+                error: str | None = None
+                try:
+                    # Re-read the size every pass, so resizing the window
+                    # mid-run is picked up. resolve_width runs once otherwise.
+                    console.width = cli.resolve_width(width, cfg)
+                    data = cli.collect_all(cfg, sections)
+                    rendered = [
+                        "".join(segment.text for segment in line).rstrip()
+                        for line in console.render_lines(
+                            build_layout(data, cfg, sections), pad=False)
+                    ]
+                except Exception as exc:  # noqa: BLE001 - reported, not raised
+                    # A pass that fails is a fact to show, not a reason to
+                    # stop. The next one may well succeed.
+                    rendered = []
+                    error = f"{type(exc).__name__}: {exc}"
+                delay = next_delay(chosen, time.monotonic() - started)
+                kept, hidden = crop(rendered, console.size.height)
+                console.print("\n".join(
+                    kept + [status_line(hidden, delay, console.width, error)]))
+                time.sleep(delay)
+    except KeyboardInterrupt:
+        return 0
