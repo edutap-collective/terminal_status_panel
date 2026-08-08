@@ -1,6 +1,7 @@
+from rich.console import Console
 from rich.text import Text
 
-from terminal_status_panel.render.packing import pack_blocks
+from terminal_status_panel.render.packing import PackedColumns, pack_blocks
 
 
 def _block(height: int, width: int) -> list[Text]:
@@ -50,3 +51,41 @@ def test_no_block_is_dropped_or_duplicated():
     blocks = [_block(height, 10) for height in (3, 1, 7, 2, 5)]
     columns = pack_blocks(blocks, width=100)
     assert sorted(index for column in columns for index in column) == [0, 1, 2, 3, 4]
+
+
+def _render(renderable, width: int) -> list[str]:
+    console = Console(width=width, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(renderable)
+    return capture.get().splitlines()
+
+
+def test_the_console_width_decides_the_column_count_not_a_configured_one():
+    blocks = [[Text("x" * 30)] for _ in range(3)]
+    # 30 + 4 + 30 + 4 + 30 = 98 cells: three columns, so one rendered line.
+    assert len(_render(PackedColumns(blocks), width=110)) == 1
+
+
+def test_a_narrow_console_stacks_the_blocks():
+    blocks = [[Text("x" * 30)] for _ in range(3)]
+    # Two columns would need 64.
+    assert len(_render(PackedColumns(blocks), width=50)) == 3
+
+
+def test_no_rendered_line_exceeds_the_console_width():
+    blocks = [[Text("✅" * 20)] for _ in range(4)]
+    for width in (40, 60, 100, 200):
+        lines = _render(PackedColumns(blocks), width=width)
+        assert max(Text(line).cell_len for line in lines) <= width
+
+
+def test_a_column_stacks_its_blocks_without_a_gap_between_them():
+    blocks = [[Text("tall")] * 5, [Text("a")], [Text("b")], [Text("c")]]
+    lines = _render(PackedColumns(blocks), width=30)
+    # The three one-line blocks share a column and follow one another
+    # immediately; the layout is only as tall as the tallest block.
+    assert len(lines) == 5
+
+
+def test_no_blocks_render_to_nothing():
+    assert _render(PackedColumns([]), width=80) == []

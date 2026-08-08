@@ -12,8 +12,10 @@ height and width are known by looking rather than by a trial render.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
+from rich.console import Console, ConsoleOptions, Group, RenderResult
+from rich.table import Table
 from rich.text import Text
 
 
@@ -72,3 +74,39 @@ def pack_blocks(
         if used + gap * (len(columns) - 1) <= width:
             return columns
     return [list(range(len(blocks)))]
+
+
+class PackedColumns:
+    """The packed layout, as a renderable that measures at print time.
+
+    The width is taken from the console options rather than from ``Config``.
+    ``Config.width`` is the fallback for a session with no terminal attached;
+    when there is one, ``cli.resolve_width`` hands the real width to the
+    ``Console`` and never writes it back. Packing against the config would mean
+    packing against 80 columns on a 215-column terminal, which is the bug this
+    class exists to avoid.
+    """
+
+    def __init__(self, blocks: Iterable[Sequence[Text]], gap: int = 4) -> None:
+        self.blocks = list(blocks)
+        self.gap = gap
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        columns = pack_blocks(self.blocks, options.max_width, self.gap)
+        if not columns:
+            return
+        # collapse_padding and pad_edge match what rich.Columns sets, so the
+        # section keeps the left edge and the gutter it has today.
+        grid = Table.grid(padding=(0, self.gap), collapse_padding=True, pad_edge=False)
+        for _ in columns:
+            grid.add_column()
+        cells = []
+        for column in columns:
+            lines: list[Text] = []
+            for index in column:
+                lines.extend(self.blocks[index])
+            cells.append(Group(*lines))
+        grid.add_row(*cells)
+        yield grid
