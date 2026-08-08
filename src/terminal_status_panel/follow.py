@@ -183,9 +183,19 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
                     # stop. The next one may well succeed.
                     rendered = []
                     error = f"{type(exc).__name__}: {exc}"
-                delay = next_delay(chosen, time.monotonic() - started)
+                elapsed = time.monotonic() - started
+                delay = next_delay(chosen, elapsed)
+                # `delay` is only the *remaining* wait, not the cadence: on an
+                # ordinary pass elapsed + delay is `chosen` again, but once the
+                # floor in `next_delay` fires, delay equals elapsed and the two
+                # together are 2 * elapsed -- double `chosen`, not `chosen`
+                # itself. The status line must show that doubled number, since
+                # it is the cadence this loop is actually keeping; showing
+                # `delay` alone would report a value that is never the
+                # interval and drifts on every pass.
+                cadence = elapsed + delay
                 kept, hidden = crop(rendered, console.size.height)
-                lines = kept + [status_line(hidden, delay, console.width, error)]
+                lines = kept + [status_line(hidden, cadence, console.width, error)]
 
                 # `console.print` does not reposition the cursor between passes,
                 # so a frame shorter than the last leaves the previous one's tail

@@ -1,4 +1,5 @@
 import io
+import re
 
 import pytest
 from rich.console import Console
@@ -248,3 +249,68 @@ def test_each_pass_redraws_the_whole_screen(monkeypatch):
     # ran, so three in total -- a count stuck at one would mean later passes
     # scrolled underneath the first instead of overwriting it.
     assert buffer.getvalue().count("\x1b[H") == 3
+
+
+def _run_one_pass_and_capture(monkeypatch, *, interval: float,
+                              monotonic_calls: list[float]) -> tuple[str, float]:
+    """A single pass of `run_follow`, with a controlled elapsed time.
+
+    `started`/`elapsed` inside the loop both come from `time.monotonic`,
+    called exactly twice per pass with the stubbed collectors below doing
+    nothing measurable in between -- so handing it a fixed two-value sequence
+    is what lets a test dictate exactly how long a pass "took" without an
+    actual sleep. Returns the frame's plain text and the delay actually slept.
+    """
+    monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli, "collect_resources", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
+
+    calls = iter(monotonic_calls)
+    monkeypatch.setattr(follow.time, "monotonic", lambda: next(calls))
+
+    buffer = io.StringIO()
+    capturing = Console(file=buffer, force_terminal=True, width=100, height=24)
+    monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
+
+    stopper = _StopAfter(1)
+    monkeypatch.setattr(follow.time, "sleep", stopper)
+
+    follow.run_follow(Config(), ("server",), width=100, no_color=True,
+                      interval=interval)
+    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", buffer.getvalue())
+    return plain, stopper.delays[0]
+
+
+def test_an_ordinary_pass_reports_the_configured_interval(monkeypatch):
+    """Finding 1: the status line must show the cadence, `elapsed + delay` --
+    not `delay`, the remaining wait, which an earlier version of this loop
+    passed to it directly.
+
+    On an ordinary pass the two happen to share a value only sometimes: here
+    interval=20s and the pass takes 0.62s, so `delay` is 19.38s while the
+    cadence is the full 20s the flag actually asked for. Reporting `delay`
+    would have shown "every 19.38s" -- a number that changes on every single
+    pass depending on how long collection took, never the interval itself.
+    """
+    plain, delay = _run_one_pass_and_capture(
+        monkeypatch, interval=20.0, monotonic_calls=[0.0, 0.62])
+    assert "every 20s" in plain, plain
+    assert delay == pytest.approx(19.38)
+
+
+def test_a_pass_that_overruns_reports_the_doubled_cadence_not_the_delay(monkeypatch):
+    """The floor case -- the one case the floor exists for, and the one the
+    original bug got wrong by a factor of two.
+
+    An 8s pass against a 5s interval trips `next_delay`'s floor: the loop
+    waits another 8s rather than lapping itself, so the cadence it is
+    actually keeping is elapsed + delay = 16s. The bug reported `delay` alone
+    (8s, read as "the interval"), which was neither the 5s configured nor the
+    16s actually being kept.
+    """
+    plain, delay = _run_one_pass_and_capture(
+        monkeypatch, interval=5.0, monotonic_calls=[0.0, 8.0])
+    assert "every 16s" in plain, plain
+    assert "every 5s" not in plain
+    assert "every 8s" not in plain
+    assert delay == 8.0
