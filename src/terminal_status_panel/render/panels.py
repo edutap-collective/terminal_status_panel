@@ -25,6 +25,8 @@ from ..model import (
     ClusterService,
     HealthInfo,
     PeerReachability,
+    ProcessInfo,
+    ProcessSnapshot,
     ResourceUsage,
     ServiceStatus,
     SwarmInfo,
@@ -356,7 +358,125 @@ def _filesystem_body(res: ResourceUsage) -> RenderableType:
     return _FilesystemBody(res)
 
 
-def system_status(res: ResourceUsage | None, cfg: Config) -> Group:
+#: Truncate a service name that will not fit rather than wrapping it. A wrapped
+#: cell would break the column alignment the eye uses to scan the block, and a
+#: readable row count -- configurable, five by default -- is the whole point
+#: of this block.
+_SERVICE_WIDTH = 22
+
+
+def _service_name(origin: str | None, origins: dict[str, str] | None) -> str:
+    """What to print in the SERVICE column.
+
+    A systemd unit already names itself. A container names only its ID, and the
+    ID becomes a service name only if the Docker section was collected and
+    knows it. Where it does not -- `status-server` alone never opens the socket
+    -- the ID stands. Resolving it any further would mean naming a service on
+    the strength of nothing.
+    """
+    if not origin:
+        return ""
+    if not origin.startswith("container "):
+        return origin
+    short = origin.removeprefix("container ")
+    for container_id, service in (origins or {}).items():
+        if container_id.startswith(short):
+            return service
+    return short
+
+
+def _process_table(rows: list[ProcessInfo],
+                   origins: dict[str, str] | None) -> Table:
+    table = Table.grid(padding=(0, 2))
+    for justify in ("right", "right", "right", "right", "left", "left"):
+        table.add_column(justify=justify)
+    table.add_row(*[Text(head, style="bold cyan")
+                    for head in ("%CPU", "%MEM", "MEM", "PID", "PROCESS", "SERVICE")])
+    for row in rows:
+        cpu = "—" if row.cpu_percent is None else f"{row.cpu_percent:.1f}"
+        mem = "—" if row.memory_percent is None else f"{row.memory_percent:.1f}"
+        # Not `format_bytes(row.memory_bytes)`: that returns "n/a" for None,
+        # and this row already says absence with a dash. Two vocabularies for
+        # one meaning in one line is one too many.
+        size = "—" if row.memory_bytes is None else format_bytes(row.memory_bytes)
+        service = _service_name(row.origin, origins)
+        if len(service) > _SERVICE_WIDTH:
+            service = service[: _SERVICE_WIDTH - 1] + "…"
+        table.add_row(Text(cpu), Text(mem), Text(size), Text(str(row.pid)),
+                      Text(row.name), Text(service, style="dim"))
+    return table
+
+
+#: Gap between the TOP CPU and TOP RAM tables when they sit side by side.
+#: Used both to build the grid and to decide whether the pair fits -- the two
+#: must agree, or the decision and the render could disagree about what
+#: "fits" means. Matches the gap ``PackedColumns`` (``render/packing.py``)
+#: uses for the same reason.
+_PROCESS_TABLE_GAP = 4
+
+
+class _ProcessRow:
+    """TOP CPU / TOP RAM: side by side when both tables fit, stacked otherwise.
+
+    Needs the console to answer "does it fit", so this is a renderable rather
+    than a table builder -- the same shape ``PackedColumns`` uses for exactly
+    this reason: only the console's width answers that question, and only at
+    render time.
+
+    Below roughly 90 columns two six-column tables no longer fit side by
+    side. Hiding a column was rejected -- see the design doc's section 4 --
+    because it would shorten a number, which this panel never does:
+    ``_SERVICE_WIDTH`` truncates names for the opposite reason, a shortened
+    name still identifies its service, where a shortened number is simply
+    wrong. Stacking `TOP RAM` below `TOP CPU` instead costs height, not
+    digits, so every column keeps its full value at any width.
+    """
+
+    def __init__(self, snapshot: ProcessSnapshot,
+                origins: dict[str, str] | None) -> None:
+        self._snapshot = snapshot
+        self._origins = origins
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        snapshot, origins = self._snapshot, self._origins
+        if not snapshot.top_cpu and not snapshot.top_memory:
+            # Asked and came back empty-handed: no psutil, or no process table.
+            # Omitting the row silently would hide that it was tried at all.
+            yield Group(_subhead("TOP CPU"), Text("not available", style="dim"))
+            return
+        if snapshot.top_cpu:
+            left = Group(_subhead(f"TOP CPU ({snapshot.sampled:g}s)"),
+                        _process_table(snapshot.top_cpu, origins))
+        else:
+            # No window was sampled, so there is no ranking to show. Rows of
+            # 0.0 would read as a measurement rather than as its absence.
+            left = Group(_subhead("TOP CPU"),
+                        Text("CPU sampling is off", style="dim"))
+        right = Group(_subhead("TOP RAM"), _process_table(snapshot.top_memory, origins))
+
+        left_width = Measurement.get(console, options, left).maximum
+        right_width = Measurement.get(console, options, right).maximum
+        if left_width + right_width + _PROCESS_TABLE_GAP <= options.max_width:
+            grid = Table.grid(padding=(0, _PROCESS_TABLE_GAP),
+                             collapse_padding=True, pad_edge=False)
+            grid.add_column()
+            grid.add_column()
+            grid.add_row(left, right)
+            yield grid
+        else:
+            yield Group(left, Text(""), right)
+
+
+def _process_row(snapshot: ProcessSnapshot,
+                 origins: dict[str, str] | None) -> RenderableType:
+    return _ProcessRow(snapshot, origins)
+
+
+def system_status(res: ResourceUsage | None, cfg: Config,
+                  processes: ProcessSnapshot | None = None,
+                  origins: dict[str, str] | None = None) -> Group:
     if res is None:
         return section("SYSTEM STATUS", Text("not available", style="dim"))
     left = Group(_subhead("SYSTEM LOAD"), _load_body(res, cfg))
@@ -368,7 +488,13 @@ def system_status(res: ResourceUsage | None, cfg: Config) -> Group:
     grid.add_column(ratio=3)
     grid.add_column(ratio=4)
     grid.add_row(left, right)
-    return section("SYSTEM STATUS", grid)
+    if processes is None:
+        return section("SYSTEM STATUS", grid)
+    # A second row rather than a third column: SYSTEM LOAD and MEMORY & SWAP
+    # already fill the width, and squeezing six-column tables in beside them
+    # would truncate every service name.
+    return section("SYSTEM STATUS",
+                   Group(grid, Text(""), _process_row(processes, origins)))
 
 
 # Standalone wrappers (kept for direct use/tests).

@@ -44,6 +44,37 @@ class ResourceUsage:
 
 
 @dataclass
+class ProcessInfo:
+    """One process in the TOP CPU / TOP RAM lists.
+
+    ``cpu_percent`` is ``None`` rather than ``0.0`` when no sampling window was
+    used: a zero is a measurement, and nothing was measured. ``origin`` is the
+    systemd unit or the short container ID the process runs under, or ``None``
+    where neither could be read -- on Darwin and FreeBSD there is no cgroup to
+    read at all.
+    """
+
+    pid: int
+    name: str
+    cpu_percent: float | None = None
+    memory_percent: float | None = None
+    #: Resident set size in bytes. The figure ``memory_percent`` is computed
+    #: from -- psutil's ``memtype`` default is ``rss`` -- so the two are one
+    #: quantity in two units rather than two numbers that could disagree.
+    memory_bytes: int | None = None
+    origin: str | None = None
+
+
+@dataclass
+class ProcessSnapshot:
+    top_cpu: list[ProcessInfo] = field(default_factory=list)
+    top_memory: list[ProcessInfo] = field(default_factory=list)
+    #: The window the CPU figures were measured over, in seconds. A percentage
+    #: without its window is an unanswered question, so the renderer shows it.
+    sampled: float = 0.0
+
+
+@dataclass
 class UpdateInfo:
     supported: bool = False
     available: int | None = None
@@ -116,6 +147,10 @@ class SwarmInfo:
     # render/traefik.py matches router targets against both lists.
     containers: list[ServiceStatus] = field(default_factory=list)
     nodes: list[SwarmNode] = field(default_factory=list)
+    #: Container ID to the service name DOCKER INFOS shows for it. Collected
+    #: while the containers are being listed anyway; the process rows use it to
+    #: turn a cgroup's bare container ID into a name a reader recognises.
+    container_services: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -290,3 +325,4 @@ class PanelData:
     updates: UpdateInfo | None = None
     health: HealthInfo | None = None
     traefik: TraefikInfo | None = None
+    processes: ProcessSnapshot | None = None

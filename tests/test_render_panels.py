@@ -5,6 +5,8 @@ from terminal_status_panel.model import (
     ClusterService,
     FilesystemUsage,
     HealthInfo,
+    ProcessInfo,
+    ProcessSnapshot,
     ResourceUsage,
     ServiceStatus,
     ServiceTask,
@@ -14,6 +16,7 @@ from terminal_status_panel.model import (
     UpdateInfo,
 )
 from terminal_status_panel.render import icons, panels
+from terminal_status_panel.render.panels import system_status
 
 
 def _text(renderable, width=100) -> str:
@@ -977,3 +980,255 @@ def test_filesystem_usage_bar_is_capped_to_the_memory_bar_width():
     for line in bar_lines:
         bar_width = line.count("█") + line.count("░")
         assert bar_width == panels._MEMORY_BAR_WIDTH
+
+
+# --------------------------------------------------------------------------- #
+# TOP CPU / TOP RAM row
+# --------------------------------------------------------------------------- #
+
+def _render_status(**kwargs) -> str:
+    res = ResourceUsage(mem_total=8 * 1024**3, mem_used=1024**3, mem_percent=12.5,
+                        load_avg=(0.5, 0.4, 0.3), cpu_count=4, cpu_percent=10.0)
+    console = Console(width=200, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(system_status(res, Config(), **kwargs))
+    return capture.get()
+
+
+def _snapshot():
+    return ProcessSnapshot(
+        top_cpu=[
+            ProcessInfo(pid=7372, name="pg_autoctl", cpu_percent=22.3,
+                        memory_percent=0.0, origin="container e23ce43dcbe0"),
+            ProcessInfo(pid=1920, name="glusterfsd", cpu_percent=19.1,
+                        memory_percent=0.1, origin="glusterd.service"),
+        ],
+        top_memory=[
+            ProcessInfo(pid=1079456, name="java", cpu_percent=0.0,
+                        memory_percent=7.0, origin="container efc841ba0f44"),
+        ],
+        sampled=0.3,
+    )
+
+
+def test_the_column_labels_are_english():
+    out = _render_status(processes=_snapshot())
+    for label in ("TOP CPU", "TOP RAM", "%CPU", "%MEM", "PID", "PROCESS", "SERVICE"):
+        assert label in out
+
+
+def test_a_known_container_shows_its_service_name():
+    out = _render_status(processes=_snapshot(),
+                         origins={"e23ce43dcbe0feef12bc0199df6bf45d": "pg_pg-monitor"})
+    assert "pg_pg-monitor" in out
+
+
+def test_an_unknown_container_keeps_its_id():
+    """The case that must not invent a name."""
+    out = _render_status(processes=_snapshot(), origins={"something-else": "other"})
+    assert "e23ce43dcbe0" in out
+    assert "pg_pg-monitor" not in out
+
+
+def test_without_docker_data_the_id_stands():
+    out = _render_status(processes=_snapshot(), origins=None)
+    assert "e23ce43dcbe0" in out
+
+
+def test_a_systemd_unit_needs_no_resolving():
+    out = _render_status(processes=_snapshot(), origins={})
+    assert "glusterd.service" in out
+
+
+def test_a_service_name_wider_than_its_column_is_truncated():
+    """The design asked for this case explicitly and it was never pinned.
+
+    47 characters is arbitrary only in how far past ``_SERVICE_WIDTH`` (22) it
+    reaches -- the point is that the excess is cut with an ellipsis rather
+    than left to push the row out of alignment.
+    """
+    long_name = "a" * 39 + ".service"  # a plain systemd unit, 47 characters
+    snapshot = ProcessSnapshot(top_memory=[
+        ProcessInfo(pid=4242, name="hog", memory_percent=3.0, origin=long_name),
+    ])
+    out = _render_status(processes=snapshot)
+    assert long_name not in out
+    truncated = long_name[: panels._SERVICE_WIDTH - 1] + "…"
+    assert truncated in out
+    # The cut affects only the SERVICE cell -- PID and PROCESS on the same
+    # row are unaffected, so the row stays aligned rather than collapsing.
+    for line in out.splitlines():
+        if truncated in line:
+            assert "4242" in line and "hog" in line
+            break
+    else:
+        raise AssertionError("truncated service name not found on its own row")
+
+
+def test_a_service_name_exactly_at_the_column_width_is_not_truncated():
+    exact_name = "b" * 14 + ".service"  # precisely _SERVICE_WIDTH characters
+    assert len(exact_name) == panels._SERVICE_WIDTH
+    snapshot = ProcessSnapshot(top_memory=[
+        ProcessInfo(pid=99, name="proc", memory_percent=1.0, origin=exact_name),
+    ])
+    out = _render_status(processes=snapshot)
+    assert exact_name in out
+    assert "…" not in out
+
+
+def test_the_sampled_window_is_shown_in_the_heading():
+    out = _render_status(processes=_snapshot())
+    assert "TOP CPU (0.3s)" in out
+
+
+def test_a_disabled_cpu_sample_shows_only_the_memory_list():
+    snapshot = ProcessSnapshot(top_cpu=[], top_memory=_snapshot().top_memory,
+                               sampled=0.0)
+    out = _render_status(processes=snapshot)
+    assert "TOP RAM" in out
+    assert "CPU sampling is off" in out
+
+
+def test_no_process_data_leaves_the_section_as_it_was():
+    """`None` means the row was never asked for -- every existing caller.
+
+    The section then renders exactly as it did before this feature existed.
+    """
+    out = _render_status(processes=None)
+    assert "TOP CPU" not in out
+    assert "SYSTEM LOAD" in out
+
+
+def test_an_empty_snapshot_says_so_rather_than_showing_nothing():
+    """An empty snapshot means the collector was asked and came back
+    empty-handed -- no psutil, no process table. That is a finding, and
+    silently omitting the row would hide it."""
+    out = _render_status(processes=ProcessSnapshot())
+    assert "TOP CPU" in out
+    assert "not available" in out
+
+
+def test_the_memory_column_is_shown_in_bytes():
+    snapshot = ProcessSnapshot(
+        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0,
+                            memory_percent=0.0)],
+        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0,
+                                memory_bytes=2 * 1024**3)],
+        sampled=0.3)
+    out = _render_status(processes=snapshot)
+    # Not `"MEM" in out`: `%MEM` already contains the substring "MEM", so that
+    # assertion passes even without the new column. The header word list is
+    # what actually distinguishes the two.
+    header = next(line for line in out.splitlines() if "%CPU" in line and "PID" in line)
+    assert "MEM" in header.split()
+    assert "2.0 GB" in out
+
+
+def test_an_absent_memory_figure_shows_the_dash_not_n_a():
+    """`format_bytes(None)` returns "n/a"; the row already says absence with a
+    dash, and one row should not carry two vocabularies for it.
+
+    Rendered through `_process_table` directly rather than through
+    `system_status`: side by side, the row this test cares about shares its
+    physical output line with a row from the other table, and splitting that
+    combined line would pick up the wrong table's cells.
+    """
+    table = panels._process_table(
+        [ProcessInfo(pid=1, name="app", memory_percent=None, memory_bytes=None)], None,
+    )
+    out = _text(table, width=100)
+    line = next(line for line in out.splitlines() if "app" in line)
+    assert "n/a" not in line
+    # Not `"—" in out`: the %CPU cell is also `None` and already prints a
+    # dash, so that assertion would pass even if the MEM column alone fell
+    # back to `format_bytes`'s "n/a". Pin the MEM cell itself -- the third
+    # column, after %CPU and %MEM -- to a dash instead.
+    cells = line.split()
+    assert cells[:3] == ["—", "—", "—"]
+
+
+def test_the_column_labels_are_english_and_in_order():
+    """Split rather than searched: `%MEM` contains `MEM`, so `str.index` would
+    find the wrong one and the order would pass however it was arranged."""
+    snapshot = ProcessSnapshot(
+        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0,
+                            memory_percent=0.0)],
+        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0,
+                                memory_bytes=1024)],
+        sampled=0.3)
+    out = _render_status(processes=snapshot)
+    header = next(line for line in out.splitlines() if "%CPU" in line and "MEM" in line)
+    # Two lists sit side by side, so the header carries both sets of labels.
+    assert header.split()[:6] == ["%CPU", "%MEM", "MEM", "PID", "PROCESS", "SERVICE"]
+
+
+# --------------------------------------------------------------------------- #
+# TOP CPU / TOP RAM: side by side while both fit, stacked otherwise
+# --------------------------------------------------------------------------- #
+#
+# `_render_status` above pins width=200, which is why the suite could not see
+# this: at 80 -- `Config.width`'s default, and what `resolve_width` falls back
+# to whenever stdout is not a TTY, the MOTD-generation path the README names --
+# two six-column tables do not fit side by side, and letting Rich shrink them
+# breaks the numeric columns instead of the columns this panel means to give
+# way (`SERVICE`, `PROCESS`). These tests render at their own explicit widths.
+
+def _render_status_at(width: int, **kwargs) -> str:
+    res = ResourceUsage(mem_total=8 * 1024**3, mem_used=1024**3, mem_percent=12.5,
+                        load_avg=(0.5, 0.4, 0.3), cpu_count=4, cpu_percent=10.0)
+    console = Console(width=width, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(system_status(res, Config(), **kwargs))
+    return capture.get()
+
+
+def _wide_snapshot() -> ProcessSnapshot:
+    """A realistic snapshot with figures wide enough to break at width 80: a
+    four-digit and a seven-digit PID, and a `MEM` value in the hundreds of
+    MB -- the exact numbers the review measured breaking (a size wrapping
+    across two lines, a PID truncated to `1079…`)."""
+    return ProcessSnapshot(
+        top_cpu=[
+            ProcessInfo(pid=3708, name="dockerd", cpu_percent=0.5, memory_percent=1.0,
+                        memory_bytes=int(128.5 * 1024**2), origin="containerd.service"),
+            ProcessInfo(pid=1920, name="glusterfsd", cpu_percent=19.1, memory_percent=0.1,
+                        memory_bytes=45 * 1024**2, origin="glusterd.service"),
+        ],
+        top_memory=[
+            ProcessInfo(pid=1079456, name="java", cpu_percent=0.0, memory_percent=7.0,
+                        memory_bytes=2 * 1024**3, origin="container efc841ba0f44"),
+        ],
+        sampled=0.3,
+    )
+
+
+def test_process_lists_sit_side_by_side_when_they_fit():
+    """At width 120 both tables fit at their natural width -- the behaviour
+    unchanged from before this fix."""
+    out = _render_status_at(120, processes=_wide_snapshot())
+    header = next(line for line in out.splitlines() if "TOP CPU" in line)
+    assert "TOP RAM" in header
+
+
+def test_process_lists_stack_when_they_do_not_fit():
+    """At width 80 the pair no longer fits side by side, so TOP RAM moves
+    below TOP CPU instead of Rich shrinking the numeric columns.
+
+    Before this fix, width 80 rendered ``128…`` with ``MB`` wrapped onto a
+    second line, and the seven-digit PID `1079456` truncated -- a shortened
+    number, which this panel must never produce. Every numeric cell here must
+    stay whole and on one line.
+    """
+    out = _render_status_at(80, processes=_wide_snapshot())
+
+    header = next(line for line in out.splitlines() if "TOP CPU" in line)
+    assert "TOP RAM" not in header  # stacked, not side by side -- own heading
+
+    assert "128.5 MB" in out  # not "128…" with "MB" wrapped onto its own line
+    assert "1079456" in out   # not "1079…" or "456…"
+    assert "456…" not in out
+    assert not any(line.strip() == "MB" for line in out.splitlines())
+
+    # Both headings still present, each introducing its own table.
+    assert "TOP CPU" in out
+    assert "TOP RAM" in out

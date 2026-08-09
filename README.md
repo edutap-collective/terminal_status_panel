@@ -6,8 +6,11 @@ best run from a `profile.d` snippet so it uses the full terminal width (see
 out in five tiers:
 
 - **SYSTEM OVERVIEW** (with a real, pre-rendered OS logo) beside **UPDATES**.
-- **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, and a filesystem
-  usage table.
+- **SYSTEM STATUS** — load & per-core CPU usage, memory/swap, a filesystem
+  usage table, and a **TOP CPU** / **TOP RAM** row: the processes ranked by
+  each, five by default and configurable via `[resources] top_processes` or
+  `--processes`. See [Top processes](#top-processes) below for what that
+  ranking measures, what it costs, and how to size or turn off the block.
 - **DOCKER INFOS** — Swarm key facts (summary + node health) above the node
   matrices: an *Infrastructure* and a *Service* table per origin — under
   **SWARM STACKS** and **COMPOSE PROJECTS**, each block omitted entirely when
@@ -107,14 +110,17 @@ out in five tiers:
   cannot see.
 - **TRAEFIK WIRING** — Traefik's wiring **as configured**: one branch per
   entrypoint, each with its routers, their middlewares, and the service they
-  point at. The branches flow into as many columns as the terminal allows, in
-  the order the Traefik service's own arguments declare them — the four every
-  cluster has (`dashboard`, `ping`, `default`, `https`) before this cluster's
-  per-vhost ones. Routers whose entrypoint does not exist get their own block
-  below, at full width, since a tree keyed by entrypoint would otherwise drop
-  them silently. See [Traefik wiring](#traefik-wiring) below for what "as
-  configured" means and for the optional (currently dormant) live cross-check
-  against Traefik itself.
+  point at. The branches are packed into as many height-balanced columns as
+  the terminal allows, in the order the Traefik service's own arguments
+  declare them — the four every cluster has (`dashboard`, `ping`, `default`,
+  `https`) before this cluster's per-vhost ones. Routers whose entrypoint
+  does not exist get their own block below, at full width, since a tree
+  keyed by entrypoint would otherwise drop them silently. An entrypoint head
+  and a router name become clickable when `[traefik.links]` configures where
+  that entrypoint is actually reached. See
+  [Traefik wiring](#traefik-wiring) below for what "as
+  configured" means, for the clickable links, and for the optional (currently
+  dormant) live cross-check against Traefik itself.
 
 The panel itself opens no database or broker connection and holds no
 credentials. Its only privilege is the Docker socket: the Docker section
@@ -168,8 +174,9 @@ but runs no `exec` and reaches no network beyond Docker unless the optional
 accepts `--sections` with any comma-separated subset to pick explicitly, e.g.
 `--sections docker,traefik` for the two Docker-facing blocks alone.
 
-The wiring block is the same either way — one rendering, flowed into columns
-— so nothing is visible in `status-traefik` that a login does not also show.
+The wiring block is the same either way — one rendering, packed into
+height-balanced columns — so nothing is visible in `status-traefik` that a
+login does not also show.
 
 Any of the five works in the profile.d snippet (see *Running it at login*) —
 e.g. call `status-docker` or `status-health` on Docker Swarm nodes,
@@ -179,11 +186,11 @@ check what Traefik is actually wired to serve.
 ## Usage
 
 ```bash
-status-full    [--sections server,docker,health,traefik] [--width N] [--no-color] [--config PATH]
-status-server  [--width N] [--no-color] [--config PATH]
-status-docker  [--width N] [--no-color] [--config PATH]
-status-health  [--width N] [--no-color] [--config PATH]
-status-traefik [--width N] [--no-color] [--config PATH]
+status-full    [--sections server,docker,health,traefik] [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-server  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-docker  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-health  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-traefik [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
 ```
 
 The command **always exits 0** so it can never break a login shell. If a
@@ -196,8 +203,11 @@ a placeholder instead of erroring.
 |---------------|---------|-------------|
 | `--sections`  | *(per command)* | Comma-separated sections to render: `server`, `docker`, `health`, `traefik`. On `status-full` the default is all four; the dedicated commands fix their own section. The wiring block renders identically however it is selected. |
 | `--width N`   | *(auto)* | Force the render width to `N` columns. Overrides both auto-detection and the config `width`. |
-| `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). |
+| `--no-color`  | off     | Disable ANSI colours (plain text — useful for piping/debugging). Also suppresses the entrypoint/router hyperlinks in TRAEFIK WIRING (see [Traefik wiring](#traefik-wiring)), for a terminal that renders OSC-8 badly. |
 | `--config PATH` | *(see below)* | Load configuration from `PATH` instead of the default location. A missing file is not an error (defaults are used). |
+| `-f`, `--follow` | off | Keep the panel on screen and refresh it, on all five commands. See [Follow mode](#follow-mode) below. |
+| `--interval N` | *(see below)* | Seconds between refreshes under `--follow`. Overrides both the config and the built-in default; values below 1 second are raised to 1 second. Ignored without `--follow`. |
+| `--processes N` | *(see below)* | Rows per process list in the TOP CPU / TOP RAM row. Overrides `[resources] top_processes` (default `5`). `0` turns the whole row off — see [Top processes](#top-processes) below. A negative value counts as `0`. |
 
 Colours are always **forced on** (unless `--no-color`), because at MOTD
 generation time there is no TTY to auto-detect a colour terminal.
@@ -215,6 +225,39 @@ The width is resolved in this order (first match wins):
 
 > The panel is designed for wide terminals. Narrow widths still render but wrap.
 
+### Follow mode
+
+`-f` / `--follow` keeps the panel on screen and redraws it on an interval,
+on all five commands, in place of a single one-shot render.
+
+**The default interval depends on which sections are collected, not on which
+command you ran.** If `health` is among the requested sections, the default
+is 20 s (config key `[follow] health_interval`); otherwise it is 5 s (`[follow]
+interval`). That is a rule about sections rather than a per-command table, so
+it is also correct for a combination like `--sections docker,health` on
+`status-full`. `--interval N` on the command line overrides both.
+
+The health section earns the longer default: it runs `docker exec` probes
+inside the cluster's containers, and the Kafka probe alone carries roughly
+2.6 s of JVM startup (see [Cluster health checks](#cluster-health-checks)).
+Measured on a five-node reference cluster at width 200, median of three runs:
+`status-health` takes 3.43 s per pass against `status-server`'s 0.49 s — a
+5 s cadence would start a new JVM on the cluster every five seconds, forever.
+
+**Ctrl-C stops it.** There is no `q` key or other in-panel control; reading a
+single keypress would need raw mode, and Ctrl-C already does the job.
+
+**The panel is cropped to the screen**, with a status line at the bottom
+naming what does not fit — `↓ 82 more lines · every 20s · Ctrl-C to stop` —
+and the `↓` clause absent once everything fits. On the same reference
+cluster, `status-full` renders 131 lines at width 200, taller than a normal
+terminal, so it will be cropped there; each of the four section commands
+(22 to 51 lines) fits on an ordinary screen.
+
+**Without a TTY, `--follow` renders one frame and returns**, the same as a
+plain run — piping the output to a file or generating a cached MOTD still
+works, rather than looping forever inside a pipe.
+
 ## Configuration
 
 Zero configuration is required. Settings are read from
@@ -229,6 +272,8 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
 | `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `resources.ignore_mountpoints` | platform-dependent | Mountpoint prefixes hidden from the filesystem table. Defaults to `["/System/Volumes/", "/Library/Developer/CoreSimulator/"]` on macOS and to `[]` elsewhere. An explicitly empty list hides nothing rather than falling back to the default. |
+| `resources.process_sample` | `0.3` | Seconds to sample process CPU usage over for the TOP CPU row (see [Top processes](#top-processes)). `0` or less disables the CPU ranking; TOP RAM is unaffected. |
+| `resources.top_processes` | `5` | Rows per process table in the TOP CPU / TOP RAM row (see [Top processes](#top-processes)). `--processes N` on the command line wins over this. A value that cannot be read as a whole number falls back to `5`; a negative value means `0`. `0` removes the whole row, and with it the `process_sample` sampling wait — a different switch from `process_sample`, which only removes the CPU ranking and leaves TOP RAM in place. |
 | `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A **stack** (or Compose project) whose name matches goes into that origin's **Infrastructure** table; every other stack goes into **Service**. An entry with no stack at all is never classified this way — it has no project to be filed under, so `docker run -d redis` lands in **Standalone containers** like any other stackless entry, however infrastructural its name. |
 | `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastructure** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
@@ -240,9 +285,12 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
 | `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
+| `follow.interval` | `5.0` | Refresh interval in seconds for `--follow` when the `health` section is **not** among those requested (see [Follow mode](#follow-mode)). |
+| `follow.health_interval` | `20.0` | Refresh interval in seconds for `--follow` when the `health` section **is** among those requested. |
 | `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see [Traefik wiring](#traefik-wiring) for why it cannot work on today's app servers. |
 | `traefik.cert` / `traefik.key` | *(unset)* | Client certificate/key for that endpoint (mTLS). Both `url` and `cert` must be set for the cross-check to run at all. |
 | `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate. Unset, httpx falls back to **certifi's** bundle, *not* the system trust store — a corporate CA installed in `/etc/ssl/certs` is not picked up (only `SSL_CERT_FILE`/`SSL_CERT_DIR` in the environment override it). Set this explicitly for a privately signed endpoint. |
+| `traefik.links` | `{}` | Table mapping an entrypoint **name** to the `http://` or `https://` base URL it is actually reached at, e.g. `login_example_de = "https://login.example.de"`. Independent of `traefik.url`/`cert`/`key`/`ca` above — it needs no connection to Traefik at all. See [Traefik wiring](#traefik-wiring) for why this has to be configured rather than derived. A value that is not a string, or does not start with `http://`/`https://`, is dropped; that entrypoint then simply has no links, the same as leaving it out. |
 
 ### Full example
 
@@ -291,7 +339,99 @@ dns = 2.5
 [[health.dns.expect]]
 name = "login.example.net"
 addresses = ["10.9.9.9"]
+
+[traefik.links]
+login_example_de = "https://login.example.de"
+portal_dept_uni_example_de = "https://portal.dept.uni-example.de"
+
+[resources]
+process_sample = 0.3
+top_processes = 5
+
+[follow]
+interval = 5.0          # sections without health
+health_interval = 20.0  # sections including health
 ```
+
+## Top processes
+
+The SYSTEM STATUS block ends with two tables side by side, **TOP CPU** and
+**TOP RAM**, each with `%CPU`, `%MEM`, `MEM`, `PID`, `PROCESS` and `SERVICE`
+columns — five rows per table by default.
+
+**`MEM` is the resident set size, the same figure `%MEM` is a percentage
+of.** psutil's `memory_percent()` is computed from `rss`, and `MEM` shows
+that same `rss` value, formatted with the helper the MEMORY & SWAP block
+above uses (`format_bytes`), so a size reads the same everywhere in the
+panel — `2.0 GB` here is the same `2.0 GB` it would be up there. A process
+the collector could not read carries a dash, `—`, in both columns rather
+than mixing that with `format_bytes`'s own `n/a` for one row.
+
+**Row count: `[resources] top_processes`, or `--processes N` on the command
+line.** The default is `5`; the flag wins whenever both are given. A config
+value that cannot be read as a whole number falls back to `5`, the same as
+an unset one; a negative value — from either source — means `0`, not the
+default.
+
+**`0` turns the block off, and with it the CPU-sampling wait.** With
+`--processes 0` (or `top_processes = 0`), the TOP CPU / TOP RAM row does not
+render at all, and the collector skips the sampling window described below
+entirely rather than measuring it and discarding the result — that window is
+real cost on a login path, and removing it is the reason this knob exists.
+Measured on a development machine, `--processes 3` took about 0.69 s wall
+clock; `--processes 0` took about 0.29 s.
+
+**`top_processes` and `process_sample` are different switches, and they do
+different things at zero.** A row count of `0` removes the whole block,
+sampling wait included. A sample of `0` (or less) leaves the block in place
+and turns off only the CPU ranking: **TOP CPU** then reads
+`CPU sampling is off` and **TOP RAM** renders alone. Setting the wrong one
+either keeps paying the sampling cost while meaning to stop it, or drops
+**TOP RAM** along with **TOP CPU** while meaning to keep it.
+
+**`%CPU` is sampled over a window, not the lifetime average `ps` reports.**
+`ps -eo %cpu` divides total CPU time by elapsed time since the process
+started, so a container that has been running for weeks barely moves
+whatever it is doing right now. This panel primes every process, waits, and
+reads instead, so the figure is the share of CPU actually used during that
+window — and the `TOP CPU` heading names the window it used, e.g.
+`TOP CPU (0.3s)`.
+
+That window is the `[resources] process_sample` config key, `0.3` seconds by
+default, and it is real cost on a login path: sampling roughly 400 processes
+measured at 0.32 s wall clock on a five-node reference cluster. Set it to `0`
+or less and the CPU ranking turns off entirely — the row then reads
+`CPU sampling is off` in place of a table, rather than rows of `0.0` that
+would read as a measurement rather than its absence — and **TOP RAM** alone
+remains.
+
+**`SERVICE` is read from `/proc/<pid>/cgroup`.** A process running under a
+systemd unit shows that unit's name verbatim. A process running inside a
+container shows the container's short ID, and that ID resolves to a service
+name only when the Docker section was also collected and can map it — which
+is why `status-server` on its own shows IDs rather than names: it never
+opens the Docker socket, deliberately, so it has nothing to resolve the ID
+against.
+
+**On a narrow terminal, the two tables stack instead of squeezing.** The
+panel measures each table's natural width and lays `TOP CPU` beside
+`TOP RAM`, with a gap between them, only when both fit the terminal as they
+are — verified at width 200 and at 120, where both render in full side by
+side, with only `SERVICE`'s own 22-character cap ever cutting a long unit or
+service name (`containerd-shim`, unremarkable on a Docker host, reads in
+full at either width). Once the pair no longer fits — verified at width 80,
+which is `Config.width`'s default and what `resolve_width` falls back to
+whenever stdout is not a TTY, the MOTD-generation path this README already
+names — `TOP RAM` moves below `TOP CPU` instead of beside it, each keeping
+the full terminal width and its own heading. Rich is never asked to shrink a
+pair that does not fit; a pair that does not fit is stacked instead. That is
+why the numeric columns — `%CPU`, `%MEM`, `MEM`, `PID` — keep their values
+undamaged at every width, which is the guarantee worth making: a shortened
+name is still shorter, but a shortened number would simply be wrong.
+
+The panel excludes its own process from both rankings — the same reason
+`ps` habitually ranks itself first: it is the one process guaranteed to be
+running while the measurement happens.
 
 ## Platform behaviour
 
@@ -669,13 +809,19 @@ absence.
 
 ### Layout and order
 
-The entrypoint branches flow into as many columns as the terminal allows —
-the same `Columns` arrangement CLUSTER HEALTH uses, three at 190 columns, one
-at 60. Stacked vertically they run to some seventy lines on a mid-sized
-cluster while two
-thirds of the width stays empty. The orphaned-router block stays full width
-below them: its lines are the longest in the section, and it is what you read
-first. Each entrypoint's head line carries the worst verdict among its
+The entrypoint branches are packed into as many columns as the terminal
+allows, balanced by height rather than filled row by row: `rich.Columns`,
+which CLUSTER HEALTH still uses, fills a grid row by row, so a row is as tall
+as its tallest cell and a three-line branch beside a twenty-line one leaves
+seventeen blank lines behind it. The packer used here fills column by column
+instead, putting the tallest branches each in a column of their own and
+stacking the short ones together, so the whole layout is only as tall as its
+fullest column. There is no fixed "three columns at 190, one at 60" to name,
+because the column count now falls out of which branches land in which
+column on the actual terminal width, not out of a uniform column width the
+way `Columns` computed it. The orphaned-router block stays full width below
+the columns: its lines are the longest in the section, and it is what you
+read first. Each entrypoint's head line carries the worst verdict among its
 routers, so a wall of branches still says at a glance which one to open.
 
 Entrypoints appear **in the order the Traefik service's arguments declare
@@ -683,6 +829,30 @@ them**, not by port. The Ansible role lists the four every cluster has —
 `dashboard`, `ping`, `default`, `https` — before appending this cluster's
 per-vhost ones, and that grouping is more useful than the numeric order, which
 would put `https` (443) first and `dashboard` (8082) last and scatter the four.
+
+### Folding endpoints that claim nothing
+
+A router pointing at one of Traefik's own `@internal` endpoints — the `ping`
+router that answers `/ping` is the everyday example — has nothing to report
+on its service line: nothing about `@internal` was ever measured, so there is
+no verdict to show, only the target's name. Rather than spend a whole row on
+that name, it is folded onto the router's own line instead:
+
+```
+  └─ ping-router        Path(`/_traefik_ping_`)  → ping@internal
+```
+
+Nothing is hidden and no verdict is dropped, because there was no verdict to
+drop in the first place; a router carrying a middleware, or pointing at a
+real service, keeps its service line on its own row exactly as before. The
+fold does cost the branch some width, though, and a wider branch can push a
+column over the terminal's width and cost the whole section a column back —
+paying several lines on screen to save one. So the panel builds both the
+folded and the unfolded form of every branch, packs each independently, and
+draws whichever one actually packs to fewer lines. On a shape of six
+entrypoints that share nothing but one `ping` router, folding unconditionally
+would cost a column at a terminal width of 120 (14 lines instead of 11);
+packing both and choosing avoids that.
 
 ### Entrypoints that are supposed to look empty
 
@@ -702,6 +872,50 @@ along with the routers, and the upstream URL is shown in place of a Docker
 verdict, with a `·`: nothing about that target was measured. Matching them
 against Swarm service names instead reported `✗ no such service` for something
 that was never supposed to be a Swarm service.
+
+### Clickable entrypoints and routers
+
+When `[traefik.links]` names a base URL for an entrypoint, that entrypoint's
+head becomes a clickable link, and so does the name of every router on it
+whose rule names exactly one path. Nothing else in the block is ever
+clickable — the service line names a container and a port inside the
+cluster, an address no browser reaches, linked or not.
+
+```toml
+[traefik.links]
+login_example_de = "https://login.example.de"
+portal_dept_uni_example_de = "https://portal.dept.uni-example.de"
+```
+
+One entry per **entrypoint name**, not per router: every router hanging off
+an entrypoint shares that entrypoint's base, only the path differs. The key
+is the entrypoint's own name, exactly as Traefik reports it; the value must
+start with `http://` or `https://` — anything else (a bare hostname, a
+non-string, a typo'd scheme) is silently dropped, and that entrypoint is
+left with no links at all rather than a broken one.
+
+**The base cannot be derived — it has to be configured.** Traefik's routers
+match on path alone: the reference cluster has no `Host()` rule at all, so
+no hostname appears anywhere in the routing configuration this panel reads.
+And the entrypoint's own name is not a hostname with underscores standing in
+for dots, even though it can look like one: in a name such as
+`portal_dept_uni_example_de`, one underscore is a dot and the next is a
+hyphen, and nothing in the name itself says which is which —
+`portal.dept.uni-example.de` is only recoverable by checking DNS, not by
+substitution. A link that goes somewhere plausible but wrong is worse than
+no link, because the reader cannot tell which until they click it. That is
+why an entrypoint absent from `[traefik.links]` gets no links, rather than a
+guessed one.
+
+A router whose rule names more than one path — an alternation such as
+``PathPrefix(`/a`) || PathPrefix(`/b`)`` — or negates a path —
+``!Path(`/health`)``, which names the one path the router does *not* serve —
+keeps no link of its own; there is no single sub-path left to join onto the
+base. Its entrypoint's head stays clickable regardless: the host is known
+even where the sub-path is not.
+
+`--no-color` suppresses these hyperlinks along with every other colour, the
+escape hatch for a terminal that renders OSC-8 hyperlinks badly.
 
 ### What "as configured" means, and its limit
 

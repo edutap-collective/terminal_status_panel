@@ -8,7 +8,6 @@ it silently — and the cluster has one today.
 
 from __future__ import annotations
 
-from rich.columns import Columns
 from rich.console import Group, RenderableType
 from rich.text import Text
 
@@ -16,6 +15,8 @@ from ..collectors.traefik import unknown_entrypoints
 from ..config import Config
 from ..model import SwarmInfo, TraefikInfo, TraefikRouter
 from . import icons
+from .links import link_for, router_link
+from .packing import PackedColumns
 from .panels import section
 from .verdict import service_verdict, severity, verdict_icon
 
@@ -86,18 +87,37 @@ def _service_line(router: TraefikRouter, info: TraefikInfo,
 
 
 def _router_lines(router: TraefikRouter, info: TraefikInfo,
-                  swarm: SwarmInfo | None) -> Group:
+                  swarm: SwarmInfo | None, *, fold: bool = True,
+                  base: str | None = None) -> list[Text]:
     style = "dim" if router.source == "file" else ""
-    head = Text(f"  └─ {router.name}", style=style)
+    head = Text("  └─ ", style=style)
+    start = len(head.plain)
+    head.append(router.name)
+    # Unlike the entrypoint head below, a router with no derivable path, or
+    # one whose Host() names a different host than *base*, gets no link at
+    # all rather than one to the bare base: `link_for(base, None)` returns
+    # the base by design, which is exactly right for a whole entrypoint whose
+    # sub-path is merely unknown, but wrong for one router among several on
+    # it -- linking it to the root would claim it serves the root, and
+    # nothing measured that.
+    rejected = bool(info.api_consulted and router.rejected)
+    # A router Traefik measurably rejected asserts the route does not exist;
+    # a link beside that claim would offer to take you there anyway.
+    url = None if rejected else router_link(base, router.rule)
+    if url:
+        # Applied to the name's span alone, and now rather than later: the rule
+        # and the rejection notice are appended below, and a link laid over the
+        # whole line would swallow both.
+        head.stylize(f"link {url}", start, len(head.plain))
     if router.rule:
         head.append(f"        {router.rule}", style="dim")
-    if info.api_consulted and router.rejected:
+    if rejected:
         # Traefik was asked and said no: a measured failure, not a suspicion.
         # The accepted case stays silent — the tree already reads as
         # configured-and-accepted — and an unconsulted router (`rejected is
         # None`, or `api_consulted` False) implies nothing either way.
         head.append(f"  {icons.DEAD} rejected by Traefik", style="red")
-    parts: list[RenderableType] = [head]
+    lines: list[Text] = [head]
     for name in router.middlewares:
         # Traefik appends `@provider` when a router references a middleware
         # from another provider; we parsed the bare name.
@@ -106,13 +126,34 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         if mw is None:
             # A reference to something that was never declared. Rendering it
             # like a resolved one makes a typo read as working wiring.
-            parts.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware",
+            lines.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware",
                               style="red"))
             continue
         kind = f" ({mw.kind})" if mw.kind else ""
-        parts.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
-    parts.append(_service_line(router, info, swarm))
-    return Group(*parts)
+        lines.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
+    glyph, service = _service_state(router, info, swarm)
+    if fold and not glyph and not router.middlewares:
+        # An empty glyph means the line makes no claim at all — Traefik's own
+        # `@internal` endpoints, which nobody measured. A whole line for a name
+        # and nothing else, repeated on every entrypoint the ping router hangs
+        # on. It fits on the end of the line above.
+        #
+        # Only without middlewares: with one between the head and the service,
+        # moving the target up would put the flow out of order. And only for
+        # the empty glyph — a file-provider service returns UNKNOWN and carries
+        # its configured upstreams, which is real content and stays put.
+        #
+        # Folding it in is not always the shorter path to the screen, though:
+        # it widens the block by the width of the target name, and a wider
+        # block can push a column over the terminal width and cost the section
+        # a whole column back. `traefik_section` therefore builds this branch
+        # both ways — folded and not — and hands both to `PackedColumns`,
+        # which measures and draws whichever one is actually shorter once
+        # packed. `fold=False` is what produces the unfolded alternative.
+        head.append("  " + service.plain.strip().removeprefix("└─ "))
+        return lines
+    lines.append(service)
+    return lines
 
 
 def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
@@ -130,8 +171,24 @@ def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
     return attached
 
 
-def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) -> Group:
-    head = Text(f"{entrypoint.name}  {entrypoint.address}", style="bold cyan")
+def _entrypoint_block(entrypoint, info: TraefikInfo,
+                      swarm: SwarmInfo | None, *, fold: bool = True,
+                      links: dict[str, str] | None = None) -> list[Text]:
+    """This entrypoint's branch, as the flat list of lines it occupies.
+
+    Lines rather than a ``Group`` because the packer has to know how tall and
+    how wide this branch is before anything is drawn, and a ``Group`` only
+    answers that by being rendered.
+    """
+    head = Text(entrypoint.name, style="bold cyan")
+    base = (links or {}).get(entrypoint.name)
+    root = link_for(base, None)
+    if root:
+        # Scoped to the name alone, as with the router heads below: the
+        # address is a cluster-internal port, and a link swallowing it would
+        # put that port inside a link meant for a public URL.
+        head.stylize(f"link {root}", 0, len(head.plain))
+    head.append(f"  {entrypoint.address}", style="bold cyan")
     attached = _attached(entrypoint, info)
     if not attached:
         if entrypoint.name == info.ping_entrypoint:
@@ -141,7 +198,7 @@ def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) ->
         else:
             # A published port nothing serves is a finding, not an absence.
             head.append("   — no router", style="dim")
-        return Group(head)
+        return [head]
     worst = max(
         (_service_state(r, info, swarm)[0] for r in attached), key=severity, default=""
     )
@@ -149,7 +206,10 @@ def _entrypoint_block(entrypoint, info: TraefikInfo, swarm: SwarmInfo | None) ->
         # The column head carries the worst verdict below it, so a wall of
         # branches still says at a glance which one to read first.
         head.append(f"   {worst}")
-    return Group(head, *[_router_lines(r, info, swarm) for r in attached])
+    lines = [head]
+    for router in attached:
+        lines.extend(_router_lines(router, info, swarm, fold=fold, base=base))
+    return lines
 
 
 def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
@@ -205,10 +265,11 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
                     swarm: SwarmInfo | None = None) -> RenderableType:
     """The TRAEFIK WIRING block.
 
-    The entrypoint branches flow into as many columns as the width allows, the
-    same arrangement CLUSTER HEALTH uses: stacked vertically they run to some
-    seventy lines while two thirds of the terminal stay empty. The orphan block
-    stays full width below them — its lines are the longest in the section, and
+    The entrypoint branches are packed into height-balanced columns: stacked
+    vertically they run to some seventy lines while two thirds of the terminal
+    stay empty, and filled row by row — what ``rich.Columns`` does — a short
+    branch beside a tall one leaves the difference blank. The orphan block
+    stays full width below them: its lines are the longest in the section, and
     it holds the findings.
     """
     data = info or TraefikInfo()
@@ -270,9 +331,21 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         parts.append(Text(""))
     if data.entrypoints:
         # Declaration order, which the collector preserves: the four
-        # entrypoints every cluster has come before this cluster's own.
-        blocks = [_entrypoint_block(ep, data, swarm) for ep in data.entrypoints]
-        parts.append(Columns(blocks, padding=(0, 4), expand=False))
+        # entrypoints every cluster has come before this cluster's own. The
+        # packer may put them in any column, but never out of order within one.
+        #
+        # Two candidate renderings, folded and not: folding a router's
+        # `@internal` target onto its own line saves a row per branch but
+        # widens the block, and a wider block can force the packer to a
+        # column fewer — paying several lines to save one. `PackedColumns`
+        # packs both at print time and draws whichever is actually shorter.
+        folded = [_entrypoint_block(ep, data, swarm, links=cfg.traefik.links)
+                  for ep in data.entrypoints]
+        unfolded = [
+            _entrypoint_block(ep, data, swarm, fold=False, links=cfg.traefik.links)
+            for ep in data.entrypoints
+        ]
+        parts.append(PackedColumns(folded, alternative=unfolded))
         parts.append(Text(""))
     orphans = _orphan_block(data, swarm)
     if orphans is not None:

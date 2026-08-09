@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tomllib
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from . import platform_defaults
 
@@ -95,16 +96,21 @@ DEFAULT_HEALTH_TIMEOUTS = {
 
 @dataclass
 class TraefikApiConfig:
-    """The optional runtime cross-check. Off unless a URL and cert are given.
+    """Everything under ``[traefik]``.
 
-    Dormant today: the dashboard router requires a client certificate signed by
-    the webfe CA, and the Ansible role issues only app-server TinyCA ones.
+    The API cross-check is dormant today: the dashboard router requires a
+    client certificate signed by the web frontend's CA, and the Ansible role
+    issues only app-server ones. ``links`` is independent of it.
     """
 
     url: str | None = None
     cert: str | None = None
     key: str | None = None
     ca: str | None = None
+    #: Entrypoint name to the base URL its services are reached at. The panel
+    #: cannot derive this: Traefik's routers match on path alone, so no
+    #: hostname appears in the routing configuration at all.
+    links: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -125,6 +131,20 @@ class Config:
     thresholds: Thresholds = field(default_factory=Thresholds)
     health: HealthConfig = field(default_factory=HealthConfig)
     traefik: TraefikApiConfig = field(default_factory=TraefikApiConfig)
+    #: Seconds to sample process CPU over. Cost on a login path, hence a dial:
+    #: 0.3 s over roughly 400 processes measures at about 0.32 s wall clock.
+    #: Zero or less disables the CPU ranking entirely.
+    process_sample: float = 0.3
+    #: Rows per list in the process block. Zero turns the block off, and with
+    #: it the sampling window -- the cost this switch exists to remove.
+    top_processes: int = 5
+    #: Refresh interval for --follow when the health section is not among the
+    #: requested ones.
+    follow_interval: float = 5.0
+    #: Refresh interval for --follow when it is. The health checks run docker
+    #: exec probes -- the Kafka one alone carries roughly 2.6 s of JVM startup
+    #: -- so a five-second cadence would keep a JVM starting forever.
+    follow_health_interval: float = 20.0
 
 
 def _section(data: dict, *keys: str) -> dict:
@@ -228,13 +248,53 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     # Presence, not truthiness: an explicit [] means "hide nothing" and must not
     # be replaced by the platform defaults it was written to override.
     ignore = resources.get("ignore_mountpoints", None)
+    try:
+        process_sample = float(resources.get("process_sample", 0.3))
+    except (TypeError, ValueError):
+        process_sample = 0.3
+    try:
+        top_processes = max(0, int(resources.get("top_processes", 5)))
+    except (TypeError, ValueError):
+        top_processes = 5
     traefik_section = _section(data, "traefik")
+    links: dict[str, str] = {}
+    for name, value in _section(data, "traefik", "links").items():
+        # Dropped rather than rejected, like every other malformed value here:
+        # this file must never fail a login. An entrypoint whose base is
+        # unusable gets no links, which is the same state as not configuring
+        # it -- and better than a link nobody can trust.
+        if not isinstance(value, str):
+            continue
+        url = value.strip().rstrip("/")
+        if not url.startswith(("http://", "https://")):
+            continue
+        parsed = urlsplit(url)
+        if not parsed.hostname:
+            # A scheme with nothing to reach -- `http://`, `http://:8080` --
+            # is not a base anything can be joined onto.
+            continue
+        if parsed.query or parsed.fragment:
+            # `link_for` only ever appends a path, so a query or fragment on
+            # the base would land inside the joined URL instead of where it
+            # was written: `https://x.de?q=1` + `/a` -> `https://x.de?q=1/a`.
+            continue
+        links[str(name)] = url
     traefik = TraefikApiConfig(
         url=traefik_section.get("url") or None,
         cert=traefik_section.get("cert") or None,
         key=traefik_section.get("key") or None,
         ca=traefik_section.get("ca") or None,
+        links=links,
     )
+    follow_section = _section(data, "follow")
+    try:
+        follow_interval = float(follow_section.get("interval", 5.0))
+    except (TypeError, ValueError):
+        follow_interval = 5.0
+    try:
+        follow_health_interval = float(follow_section.get("health_interval", 20.0))
+    except (TypeError, ValueError):
+        follow_health_interval = 20.0
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
@@ -247,4 +307,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         thresholds=thresholds,
         health=_health_config(data),
         traefik=traefik,
+        process_sample=process_sample,
+        top_processes=top_processes,
+        follow_interval=follow_interval,
+        follow_health_interval=follow_health_interval,
     )

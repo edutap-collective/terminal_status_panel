@@ -159,6 +159,7 @@ def test_swarm_inactive_falls_back_to_containers(monkeypatch):
     class _C:
         def __init__(self, name):
             self.name = name
+            self.id = f"id-{name}"
             self.status = "running"
             self.attrs = {"State": {"Status": "running", "ExitCode": 0},
                           "Config": {"Labels": {}}}
@@ -248,8 +249,10 @@ def test_an_empty_configured_label_is_still_the_answer(monkeypatch):
 class _FakeContainer:
     """*state* is the raw Docker status; *health* the healthcheck verdict."""
 
-    def __init__(self, name, labels=None, state="running", exit_code=0, health=None):
+    def __init__(self, name, labels=None, state="running", exit_code=0,
+                 health=None, container_id=None):
         self.name = name
+        self.id = container_id or f"id-{name}"
         self.status = state
         container_state = {"Status": state, "ExitCode": exit_code}
         if health is not None:
@@ -305,6 +308,7 @@ class _SparseFakeContainer:
 
     def __init__(self, name, labels=None, state="running", exit_code=0):
         self.name = name
+        self.id = f"id-{name}"
         self.status = state
         self.attrs = {
             "State": {"Status": state, "ExitCode": exit_code},
@@ -567,3 +571,49 @@ def test_a_service_label_without_a_project_label_names_the_container_the_same_wa
 
     assert docker_name == "legacy-box"
     assert target == docker_name
+
+
+# --- container id to service name map -----------------------------------------
+
+def test_a_swarm_container_maps_its_id_to_its_service(monkeypatch):
+    """The process rows need this map, and Docker already hands us the data.
+
+    A Swarm container is skipped for the DOCKER INFOS listing -- it is already
+    reported through services.list() -- but its id still has to resolve, or a
+    process row can only ever show a bare hex string.
+    """
+    client = _FakeClient("active", containers=[
+        _FakeContainer("app.1.xyz", container_id="aaaa111122223333",
+                       labels={docker_collector.SWARM_SERVICE_LABEL: "stack_app_backend"}),
+    ])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert result.container_services["aaaa111122223333"] == "stack_app_backend"
+
+
+def test_a_compose_container_maps_to_project_and_service(monkeypatch):
+    client = _FakeClient("inactive", containers=[_compose("portal", "web")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert result.container_services["id-portal-web-1"] == "portal_web"
+
+
+def test_a_standalone_container_maps_to_its_own_name(monkeypatch):
+    client = _FakeClient("inactive", containers=[_FakeContainer("lone-otel")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    result = docker_collector.collect_docker()
+
+    assert result.container_services["id-lone-otel"] == "lone-otel"
+
+
+def test_an_unreachable_daemon_maps_nothing(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("no daemon")
+
+    monkeypatch.setattr(docker_collector.docker, "from_env", boom)
+    assert docker_collector.collect_docker().container_services == {}

@@ -14,15 +14,20 @@ def isolated_cli(monkeypatch):
     and resolver happen to exist on the machine — invisible on a developer's
     macOS box, up to a full health budget per test on a Debian CI runner.
 
-    ``collect_updates`` shells out to apt-check for the same reason. The purely
-    local collectors (system, resources) are left alone: they read /proc and
-    psutil, so they are fast and cannot reach off the machine.
+    ``collect_updates`` shells out to apt-check for the same reason.
+    ``collect_processes`` reaches nothing off the machine either, but it is
+    stubbed too: it sleeps for ``cfg.process_sample`` — 0.3 s by default — to
+    sample CPU, and walks the whole process table on every call, so leaving it
+    real would tax every server-section test with that sleep and scan. The
+    purely local collectors that read state instantly (system, resources) are
+    left alone.
 
     A test that wants a specific ``collect_health`` simply overrides it again.
     """
     monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
     monkeypatch.setattr(cli, "collect_health", lambda *a, **k: None)
     monkeypatch.setattr(cli, "collect_updates", lambda timeout=None: None)
+    monkeypatch.setattr(cli, "collect_processes", lambda sample, **kw: None)
     return monkeypatch
 
 
@@ -273,3 +278,122 @@ def test_collect_all_skips_traefik_when_not_selected(isolated_cli):
     isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append(True))
     cli.collect_all(Config(), sections=("server",))
     assert called == []
+
+
+def test_processes_are_collected_only_for_the_server_section(isolated_cli, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda sample, **kw: calls.append(sample) or None)
+    cli.collect_all(Config(), ("docker",))
+    assert calls == []
+    cli.collect_all(Config(), ("server",))
+    assert calls == [Config().process_sample]
+
+
+def test_an_unmeasurable_process_collection_still_yields_an_empty_snapshot(
+    isolated_cli,
+):
+    """``collect_processes`` returning ``None`` -- nothing at all could be
+    read -- must not leak through as ``None`` on ``PanelData.processes``: that
+    would read as "never asked" to the renderer, when the row was in fact
+    asked for and came back empty-handed."""
+    from terminal_status_panel.model import ProcessSnapshot
+
+    data = cli.collect_all(Config(), ("server",))
+    assert data.processes == ProcessSnapshot()
+
+
+def test_the_follow_flags_are_accepted_by_every_command():
+    for prog in ("status-full", "status-server", "status-docker",
+                 "status-health", "status-traefik"):
+        args = cli._parse_args(["-f", "--interval", "7"], prog)
+        assert args.follow is True
+        assert args.interval == 7.0
+
+
+def test_follow_hands_off_to_the_loop(isolated_cli, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "run_follow",
+                        lambda cfg, sections, **kw: seen.update(kw) or 0)
+    assert cli.main(["--follow", "--interval", "9", "--no-color"]) == 0
+    assert seen["interval"] == 9.0
+
+
+def test_without_follow_nothing_loops(isolated_cli, monkeypatch):
+    monkeypatch.setattr(cli, "run_follow",
+                        lambda *a, **k: pytest.fail("must not be called"))
+    assert cli.main(["--no-color", "--width", "100"]) == 0
+
+
+def test_the_processes_flag_overrides_the_configured_count():
+    cfg = Config(top_processes=5)
+    assert cli.resolve_top_processes(12, cfg) == 12
+    assert cli.resolve_top_processes(None, cfg) == 5
+
+
+def test_a_negative_flag_is_zero():
+    assert cli.resolve_top_processes(-2, Config(top_processes=5)) == 0
+
+
+def test_an_explicit_zero_flag_silences_the_block_for_one_run():
+    """Guards the falsy-zero trap: the guard must be `is not None`, not
+    truthiness.
+
+    A user with `top_processes = 12` configured, typing `--processes 0` to
+    silence the block for a single run, must get `0` back -- not `12`. The
+    obvious "simplification" `if arg_processes:` would treat `0` the same as
+    "not given" and silently fall back to the configured value, exactly the
+    trap `follow.py` documents for `--interval 0` (see the comment on
+    `run_follow`'s `requested = ...` line).
+    """
+    assert cli.resolve_top_processes(0, Config(top_processes=12)) == 0
+
+
+def test_the_processes_flag_is_accepted_by_every_command():
+    for prog in ("status-full", "status-server", "status-docker",
+                 "status-health", "status-traefik"):
+        assert cli._parse_args(["--processes", "9"], prog).processes == 9
+
+
+def test_zero_rows_skips_the_collection_entirely(isolated_cli, monkeypatch):
+    """The switch is worth having because it removes the 0.3 s sampling window
+    from the login path, not merely because it hides a table."""
+    calls = []
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda *a, **k: calls.append(a) or None)
+    data = cli.collect_all(Config(top_processes=0), ("server",))
+    assert calls == []
+    assert data.processes is None
+
+
+def test_zero_rows_is_not_reported_as_a_failed_collection(isolated_cli, monkeypatch):
+    """`None` means never asked; an empty snapshot means asked and got nothing,
+    which the section reports as `not available`. A setting is not a failure."""
+    monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
+    assert cli.collect_all(Config(top_processes=0), ("server",)).processes is None
+
+
+def test_the_resolved_count_reaches_the_collector(isolated_cli, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda sample, limit=5: seen.update(limit=limit) or None)
+    cli.collect_all(Config(top_processes=9), ("server",))
+    assert seen["limit"] == 9
+
+
+def test_the_flag_survives_into_follow_mode(isolated_cli, monkeypatch):
+    """Follow mode collects once per pass and never sees argv.
+
+    The resolved count is written onto the config for exactly this reason: a
+    flag that held for the first frame and silently reverted on the second
+    would be worse than no flag, because nothing would say it had.
+    """
+    limits = []
+    monkeypatch.setattr(cli, "collect_processes",
+                        lambda sample, limit=5: limits.append(limit) or None)
+    monkeypatch.setattr(cli, "run_follow",
+                        lambda cfg, sections, **kw: [cli.collect_all(cfg, sections),
+                                                     cli.collect_all(cfg, sections)]
+                        and 0)
+    cli.main(["--sections", "server", "--processes", "7", "--follow", "--no-color"])
+    assert limits == [7, 7]

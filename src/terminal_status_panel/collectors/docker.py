@@ -159,18 +159,28 @@ def _is_completed_job(container) -> bool:
     return state.get("Status") == "exited" and state.get("ExitCode") == 0
 
 
-def _container_groups(client) -> dict[tuple[str | None, str], list]:
-    """Group live containers by (compose project, service name).
+def _container_groups(client) -> tuple[dict[tuple[str | None, str], list],
+                                       dict[str, str]]:
+    """Groups of non-Swarm containers, and every container's id → service name.
 
-    Compose labels rather than name parsing: the container is called
-    ``portal-web-1`` and only the labels say reliably which part is the project
-    and which the service.
+    The map is built here rather than in a pass of its own because
+    ``containers.list(all=True)`` costs a full inspect per container; walking
+    the same list twice would double that for a dict of strings.
+
+    The names it yields are the ones DOCKER INFOS shows, so a process row and a
+    service row refer to the same thing by the same name.
     """
     groups: dict[tuple[str | None, str], list] = {}
+    origins: dict[str, str] = {}
     for container in client.containers.list(all=True):
         labels = container_labels(container)
-        if SWARM_SERVICE_LABEL in labels:
-            continue  # already reported through services.list()
+        swarm_service = labels.get(SWARM_SERVICE_LABEL)
+        if swarm_service:
+            # Recorded before the `continue`: this container is reported
+            # through services.list() and so is skipped for grouping, but the
+            # process rows still need to resolve its id.
+            origins[container.id] = swarm_service
+            continue
         if _is_completed_job(container):
             continue
         project = labels.get(COMPOSE_PROJECT_LABEL)
@@ -188,15 +198,18 @@ def _container_groups(client) -> dict[tuple[str | None, str], list]:
         # of that rule, free to drift from the one the Traefik collector
         # matches its router targets against.
         key = (project, compose_identity(labels, container.name))
+        origins[container.id] = f"{key[0]}_{key[1]}" if key[0] else key[1]
         groups.setdefault(key, []).append((container, labels))
-    return groups
+    return groups, origins
 
 
 def _container_services(client, critical: set[str], description_label: str,
-                        node_name: str | None) -> list[ServiceStatus]:
-    """Plain and Compose containers as ServiceStatus entries."""
+                        node_name: str | None) -> tuple[list[ServiceStatus],
+                                                        dict[str, str]]:
+    """Plain and Compose containers as ServiceStatus entries, and the id map."""
+    groups, origins = _container_groups(client)
     services: list[ServiceStatus] = []
-    for (stack, name), members in _container_groups(client).items():
+    for (stack, name), members in groups.items():
         states = [_reported_state(container) for container, _ in members]
         labels = members[0][1]
         services.append(
@@ -222,7 +235,7 @@ def _container_services(client, critical: set[str], description_label: str,
             )
         )
     services.sort(key=lambda svc: (svc.stack or "", svc.name))
-    return services
+    return services, origins
 
 
 def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
@@ -239,6 +252,8 @@ def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
             role = "manager" if swarm.get("ControlAvailable") else "worker"
             nodes, id_to_name = _node_map(client)
             local_node = id_to_name.get(swarm.get("NodeID") or "")
+            containers, origins = _container_services(client, critical_set,
+                                                      description_label, local_node)
             return SwarmInfo(
                 reachable=True,
                 enabled=True,
@@ -246,15 +261,17 @@ def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
                 node_count=swarm.get("Nodes") or (len(nodes) or None),
                 services=_swarm_services(client, critical_set, description_label,
                                          id_to_name),
-                containers=_container_services(client, critical_set,
-                                               description_label, local_node),
+                containers=containers,
                 nodes=nodes,
+                container_services=origins,
             )
+        containers, origins = _container_services(client, critical_set,
+                                                  description_label, None)
         return SwarmInfo(
             reachable=True,
             enabled=False,
-            containers=_container_services(client, critical_set,
-                                           description_label, None),
+            containers=containers,
+            container_services=origins,
         )
     except Exception:
         return SwarmInfo(reachable=False)

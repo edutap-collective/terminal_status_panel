@@ -26,12 +26,14 @@ from rich.console import Console
 
 from .collectors.docker import collect_docker
 from .collectors.health import collect_health
+from .collectors.processes import collect_processes
 from .collectors.resources import collect_resources
 from .collectors.system import collect_system
 from .collectors.traefik import collect_traefik, fetch_accepted, mark_rejected
 from .collectors.updates import collect_updates
 from .config import Config, load_config
-from .model import PanelData
+from .follow import run_follow
+from .model import PanelData, ProcessSnapshot
 from .render.layout import SECTIONS, build_layout
 
 # The sections a bare `status-full` renders — every section the layout knows
@@ -153,6 +155,27 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
         swarm=swarm,
         health=health_info,
         traefik=traefik_info,
+        # `None` when the count is zero: nothing was asked, and the renderer
+        # already reads `None` as "this row was not requested". An empty
+        # snapshot would mean asked-and-got-nothing, which the section reports
+        # as a failure -- and a setting is not a failure.
+        processes=_collect_process_rows(cfg) if server else None,
+    )
+
+
+def _collect_process_rows(cfg: Config) -> ProcessSnapshot | None:
+    """The process rows, or ``None`` when none were asked for.
+
+    ``None`` and an empty snapshot are different answers. ``None`` means the
+    rows were never requested -- the renderer omits the block. An empty
+    snapshot means the collector ran and found nothing, which the section
+    reports as ``not available``. A count of zero is a setting, not a failure,
+    so it must produce the first and never the second.
+    """
+    if not cfg.top_processes:
+        return None
+    return (
+        collect_processes(cfg.process_sample, limit=cfg.top_processes) or ProcessSnapshot()
     )
 
 
@@ -167,6 +190,17 @@ def resolve_width(arg_width: int | None, cfg: Config) -> int:
         if columns > 0:
             return columns
     return cfg.width
+
+
+def resolve_top_processes(arg_processes: int | None, cfg: Config) -> int:
+    """Rows per process list: the flag wins, else the configured value.
+
+    Negative is none. Below none is none, and falling back to the default
+    would turn a clumsy way of saying "off" into its opposite.
+    """
+    if arg_processes is not None:
+        return max(0, arg_processes)
+    return cfg.top_processes
 
 
 def build_console(width: int, no_color: bool) -> Console:
@@ -192,6 +226,12 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
     parser.add_argument("--sections", default=None,
                         help="comma-separated sections to render: "
                              "server,docker,health,traefik")
+    parser.add_argument("-f", "--follow", action="store_true",
+                        help="keep the panel on screen and refresh it")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="seconds between refreshes in --follow")
+    parser.add_argument("--processes", type=int, default=None,
+                        help="rows per process list; 0 turns the block off")
     return parser.parse_args(argv)
 
 
@@ -201,7 +241,14 @@ def main(argv: list[str] | None = None, sections: tuple[str, ...] = DEFAULT_SECT
     try:
         args = _parse_args(argv, prog)
         cfg = load_config(args.config)
+        # Written onto the config rather than passed along: `collect_all` is
+        # also called once per pass by follow mode, which never sees argv, and
+        # a flag that survived only the first pass would be worse than none.
+        cfg.top_processes = resolve_top_processes(args.processes, cfg)
         selected = _resolve_sections(args.sections, sections)
+        if args.follow:
+            return run_follow(cfg, selected, width=args.width,
+                              no_color=args.no_color, interval=args.interval)
         width = resolve_width(args.width, cfg)
         console = build_console(width, args.no_color)
         data = collect_all(cfg, selected)

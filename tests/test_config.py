@@ -209,3 +209,136 @@ def test_critical_services_scalar_string_becomes_a_one_element_list(tmp_path):
     path.write_text('[services]\ncritical = "postgres"\n', encoding="utf-8")
     cfg = load_config(path)
     assert cfg.critical_services == ["postgres"]
+
+
+def test_the_process_sample_window_defaults_to_three_tenths(tmp_path):
+    assert load_config(tmp_path / "missing.toml").process_sample == 0.3
+
+
+def test_the_process_sample_window_is_configurable(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text("[resources]\nprocess_sample = 1.0\n")
+    assert load_config(path).process_sample == 1.0
+
+
+def test_a_malformed_process_sample_falls_back(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[resources]\nprocess_sample = "soon"\n')
+    assert load_config(path).process_sample == 0.3
+
+
+def test_the_row_count_defaults_to_five(tmp_path):
+    assert load_config(tmp_path / "missing.toml").top_processes == 5
+
+
+def test_the_row_count_is_configurable(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text("[resources]\ntop_processes = 12\n")
+    assert load_config(path).top_processes == 12
+
+
+def test_a_malformed_row_count_falls_back(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[resources]\ntop_processes = "lots"\n')
+    assert load_config(path).top_processes == 5
+
+
+def test_a_negative_row_count_is_zero(tmp_path):
+    """Below none is none. Treating it as a fallback to five would turn a
+    clumsy way of saying "off" into the opposite."""
+    path = tmp_path / "c.toml"
+    path.write_text("[resources]\ntop_processes = -3\n")
+    assert load_config(path).top_processes == 0
+
+
+def test_the_follow_intervals_have_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.toml")
+    assert cfg.follow_interval == 5.0
+    assert cfg.follow_health_interval == 20.0
+
+
+def test_the_follow_intervals_are_configurable(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text("[follow]\ninterval = 2.5\nhealth_interval = 45\n")
+    cfg = load_config(path)
+    assert cfg.follow_interval == 2.5
+    assert cfg.follow_health_interval == 45.0
+
+
+def test_malformed_follow_intervals_fall_back(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[follow]\ninterval = "soon"\nhealth_interval = []\n')
+    cfg = load_config(path)
+    assert cfg.follow_interval == 5.0
+    assert cfg.follow_health_interval == 20.0
+
+
+def test_no_link_table_yields_no_links(tmp_path):
+    assert load_config(tmp_path / "missing.toml").traefik.links == {}
+
+
+def test_the_link_table_is_read(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'login_example_de = "https://login.example.de"\n'
+        'portal_dept_uni_example_de = "https://portal.dept.uni-example.de"\n'
+    )
+    links = load_config(path).traefik.links
+    assert links["login_example_de"] == "https://login.example.de"
+    assert links["portal_dept_uni_example_de"] == "https://portal.dept.uni-example.de"
+
+
+def test_a_trailing_slash_is_removed_from_a_base(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[traefik.links]\nlogin_example_de = "https://login.example.de/"\n')
+    assert load_config(path).traefik.links["login_example_de"] == "https://login.example.de"
+
+
+def test_a_value_that_is_not_an_http_url_is_dropped(tmp_path):
+    """Dropped rather than rejected: this file must never fail a login, and an
+    entrypoint with no usable base simply gets no links."""
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'a = "login.example.de"\n'
+        'b = "ftp://login.example.de"\n'
+        "c = 42\n"
+        'd = "https://ok.example.de"\n'
+    )
+    assert load_config(path).traefik.links == {"d": "https://ok.example.de"}
+
+
+def test_a_malformed_link_table_leaves_the_rest_of_the_config_intact(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text('[traefik]\nlinks = "not a table"\nurl = "https://api.example.de"\n')
+    cfg = load_config(path)
+    assert cfg.traefik.links == {}
+    assert cfg.traefik.url == "https://api.example.de"
+
+
+def test_a_base_with_no_host_is_dropped(tmp_path):
+    """A scheme with nothing to reach is not a base anything can be joined
+    onto -- rendering it would produce a bare `http://something` fragment,
+    not a URL."""
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'bare_scheme = "http://:8080"\n'
+        'ok = "https://login.example.de"\n'
+    )
+    assert load_config(path).traefik.links == {"ok": "https://login.example.de"}
+
+
+def test_a_base_carrying_a_query_or_fragment_is_dropped(tmp_path):
+    """`link_for` only ever appends a path, so a query or fragment on the base
+    would land inside the joined URL instead of where it was written:
+    `https://x.de?q=1` + `/a` -> `https://x.de?q=1/a`."""
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[traefik.links]\n"
+        'query = "https://x.example.de?q=1"\n'
+        'fragment = "https://x.example.de#top"\n'
+        'ok = "https://login.example.de"\n'
+    )
+    assert load_config(path).traefik.links == {"ok": "https://login.example.de"}
