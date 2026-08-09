@@ -240,12 +240,95 @@ def test_an_unreachable_swarm_shows_unknown_not_a_missing_service():
     assert icons.FAILED not in out
 
 
-def test_a_swarm_that_is_not_enabled_shows_unknown_not_a_missing_service():
-    """Off a Swarm, `services` holds container names, so no Swarm service name
-    can ever match — every router would read "no such service"."""
+def test_a_swarm_that_is_not_enabled_but_holds_no_matching_container_is_reported_missing():
+    """`enabled=False` no longer means nothing can match: containers live in
+    their own field now, searched alongside services. With neither holding the
+    target, a reachable daemon really did not find it, and saying so is
+    correct rather than premature."""
     out = _render(_wired(), swarm=SwarmInfo(reachable=True, enabled=False))
-    assert icons.UNKNOWN in out
+    assert icons.FAILED in out
+    assert "no such service" in out
+
+
+def test_a_router_pointing_at_a_compose_container_is_confirmed():
+    """A Compose host has no Swarm services; its targets live in `containers`."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="web", service="web", entrypoints=["https"])],
+        services={"web": TraefikServiceRef(name="web", docker_service="web")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=False,
+        containers=[ServiceStatus(name="web", running_replicas=1, desired_replicas=1)],
+    )
+    assert "no such service" not in _render(info, swarm)
+
+
+def test_a_router_declared_by_a_compose_container_is_confirmed():
+    """The regression this task was written to catch.
+
+    `origin` and `docker_service` are what the Traefik collector's container
+    pass actually produces for a container named `course-statistics-db` that
+    carries `com.docker.compose.service=db`: the container's own name for
+    `origin`, the Compose service name for `docker_service`. Matching only
+    `origin` (as an earlier version of the container pass did) makes this
+    router read as `no such service`, even though the container it names is
+    running — and `ServiceStatus` is built exactly the way
+    `collectors/docker.py`'s `_container_services` would build it, stack and
+    all, so nothing here is more forgiving than the real collector."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="db", service="db", entrypoints=["https"],
+                               origin="course-statistics-db")],
+        services={"db": TraefikServiceRef(name="db", docker_service="db")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=False,
+        containers=[ServiceStatus(name="db", stack="course-statistics",
+                                  running_replicas=1, desired_replicas=1)],
+    )
+    out = _render(info, swarm)
+    assert "no such service" not in out
     assert icons.FAILED not in out
+
+
+def test_a_router_pointing_nowhere_is_still_reported_missing():
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="web", service="web", entrypoints=["https"])],
+        services={"web": TraefikServiceRef(name="web", docker_service="web")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=False,
+        containers=[ServiceStatus(name="something-else", running_replicas=1,
+                                  desired_replicas=1)],
+    )
+    assert "no such service" in _render(info, swarm)
+
+
+def test_nothing_is_claimed_when_docker_was_not_reached():
+    """Unmeasured is not the same as missing."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="web", service="web", entrypoints=["https"])],
+        services={"web": TraefikServiceRef(name="web", docker_service="web")},
+    )
+    assert "no such service" not in _render(info, SwarmInfo(reachable=False))
+    assert "no such service" not in _render(info, None)
+
+
+def test_a_swarm_service_target_still_matches():
+    """The pre-existing path must not regress."""
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="api", service="api", entrypoints=["https"])],
+        services={"api": TraefikServiceRef(name="api", docker_service="api")},
+    )
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, node_count=1,
+        services=[ServiceStatus(name="api", running_replicas=1, desired_replicas=1)],
+    )
+    assert "no such service" not in _render(info, swarm)
 
 
 def test_a_global_service_uses_the_reported_node_count_like_docker_infos():
@@ -316,6 +399,86 @@ def test_file_provider_error_is_shown_as_a_warning_above_the_tree():
     # The tree still renders beneath the warning.
     tree_idx = next(i for i, ln in enumerate(lines) if "kafbat-ui" in ln)
     assert tree_idx > warning_idx
+
+
+def test_container_error_is_shown_as_a_warning_above_the_tree():
+    """A container listing that failed drops every router declared by a plain
+    or Compose container. Without this line the section reads as though the
+    wiring were complete."""
+    info = _wired()
+    info.container_error = "ReadTimeout: containers.list() timed out"
+    out = _render(info)
+    lines = out.splitlines()
+    warning_idx = next(i for i, ln in enumerate(lines) if "container labels unreadable" in ln)
+    assert "ReadTimeout: containers.list() timed out" in lines[warning_idx]
+    # The tree still renders beneath the warning.
+    tree_idx = next(i for i, ln in enumerate(lines) if "kafbat-ui" in ln)
+    assert tree_idx > warning_idx
+
+
+def test_no_container_warning_when_the_containers_were_read():
+    """The line is a notice about a failed read, so it must be absent on the
+    normal path -- where `container_error` is None."""
+    assert _wired().container_error is None
+    assert "container labels unreadable" not in _render(_wired())
+
+
+def test_the_container_error_changes_no_verdict():
+    """Verdicts come from `swarm`, not from this field: the notice is a notice.
+    Everything below it renders exactly as it does without the failure."""
+    without = _render(_wired(), width=200).splitlines()
+    info = _wired()
+    info.container_error = "ReadTimeout"
+    with_error = _render(info, width=200).splitlines()
+    notice = next(i for i, ln in enumerate(with_error) if "container labels unreadable" in ln)
+    # The notice and the blank line under it are the only additions: every
+    # other line, verdicts included, is the one rendered without the failure.
+    assert with_error[:notice] + with_error[notice + 2:] == without
+
+
+def test_service_error_is_hidden_on_a_compose_only_host():
+    """A Swarm services listing failing is the expected, permanent outcome on
+    a Compose-only host -- `swarm.enabled` is False there, since the local
+    node is not part of a swarm at all. Showing this warning on every render
+    would be noise the reader learns to skip past."""
+    info = _wired()
+    info.service_error = "RuntimeError: This node is not a swarm manager"
+    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=False))
+    assert "service labels unreadable" not in out
+
+
+def test_service_error_is_hidden_when_swarm_state_is_unmeasured():
+    """No `swarm` at all, or one whose own collection failed, means Swarm's
+    activity could not be established either way -- silence here matches the
+    rest of the section's rule against accusing what was never measured."""
+    info = _wired()
+    info.service_error = "RuntimeError: boom"
+    assert "service labels unreadable" not in _render(info, swarm=None)
+    assert "service labels unreadable" not in _render(
+        info, swarm=SwarmInfo(reachable=False, enabled=False))
+
+
+def test_service_error_is_shown_when_swarm_is_active_but_unreadable():
+    """Swarm believes itself active (`enabled=True`) yet this collector could
+    not list its services -- a surprising failure worth a line, unlike the
+    Compose-only case above where the same failure is expected every time."""
+    info = _wired()
+    info.service_error = "PermissionError: access denied"
+    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=True))
+    lines = out.splitlines()
+    warning_idx = next(i for i, ln in enumerate(lines) if "service labels unreadable" in ln)
+    assert "PermissionError: access denied" in lines[warning_idx]
+    # The tree still renders beneath the warning.
+    tree_idx = next(i for i, ln in enumerate(lines) if "kafbat-ui" in ln)
+    assert tree_idx > warning_idx
+
+
+def test_no_service_warning_when_the_services_were_read():
+    """The line is a notice about a failed read, so it must be absent on the
+    normal path -- where `service_error` is None -- even with Swarm active."""
+    assert _wired().service_error is None
+    out = _render(_wired(), swarm=SwarmInfo(reachable=True, enabled=True))
+    assert "service labels unreadable" not in out
 
 
 def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():

@@ -95,9 +95,22 @@ def _csv(value: str) -> list[str]:
 
 
 def parse_labels(
-    labels: dict[str, str], origin: str
+    labels: dict[str, str], origin: str, docker_name: str | None = None
 ) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware], dict[str, TraefikServiceRef]]:
-    """Routers, middlewares and services from one Docker service's labels."""
+    """Routers, middlewares and services from one Docker service's labels.
+
+    *origin* and *docker_name* answer two different questions and, for a
+    Swarm service, happen to share one answer — which is why callers were
+    able to pass a single string for both until now. *origin* is "who
+    declared this router", shown as-is for a human to read. *docker_name* is
+    "what does `ServiceStatus.name` call this", which the renderer matches
+    against Docker's own service/container list — for a Swarm service that
+    is the service's own name, the same as *origin*, but for a Compose
+    container it is the `com.docker.compose.service` label, not the
+    container's own name. Left at its default, *docker_name* falls back to
+    *origin*, which keeps every existing caller correct unchanged.
+    """
+    docker_name = origin if docker_name is None else docker_name
     routers: dict[str, TraefikRouter] = {}
     middlewares: dict[str, TraefikMiddleware] = {}
     services: dict[str, TraefikServiceRef] = {}
@@ -141,7 +154,7 @@ def parse_labels(
         if match:
             name = match.group("name")
             service = services.setdefault(
-                name, TraefikServiceRef(name=name, docker_service=origin)
+                name, TraefikServiceRef(name=name, docker_service=docker_name)
             )
             field = match.group("key").lower()
             if field.endswith("server.port"):
