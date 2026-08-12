@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nothing here is locked: uv.lock is git-ignored and every requirement is a
+  # lower bound. A suite that passed last week can fail today with nothing
+  # changed here, and a weekly run is what surfaces that.
+  schedule:
+    - cron: "17 5 * * 1"
+  # Callable, so the release workflow runs *these* checks rather than its own
+  # copy. A release gate that restates the checks drifts from them, and it
+  # drifts silently -- nobody reads two files side by side.
+  workflow_call:
 
 jobs:
   test:
@@ -23,17 +32,24 @@ jobs:
             python-version: "3.14"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[test]' ruff
-      - name: Lint
-        run: ruff check src tests
-      - name: Test
-        run: python -m pytest
+      # --no-default-groups: without it uv adds `dev` on top, so every matrix
+      # entry would also install ruff, ty and the logo tooling it never runs.
+      - run: uv sync --no-default-groups --group test
+      - run: uv run --no-sync python -m pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --group dev
+      - run: uv run --no-sync python -m ruff check src tests tools
+      - run: uv run --no-sync python -m ruff format --check src tests tools
 
   freebsd:
     runs-on: ubuntu-latest
@@ -59,7 +75,12 @@ jobs:
             PYVER=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')
             echo "FreeBSD default Python flavour: py${PYVER}"
             pkg install -y "py${PYVER}-pip" "py${PYVER}-psutil" "py${PYVER}-sqlite3"
+          # The test requirements are named here rather than installed as a
+          # dependency group: `pip install --group` needs pip 25.1, and this job
+          # deliberately takes whatever pip the FreeBSD release ships. Keep in
+          # step with the `test` group in pyproject.toml -- it is two entries.
           run: |
             set -e
-            python3 -m pip install --break-system-packages -e '.[test]'
+            python3 -m pip install --break-system-packages -e .
+            python3 -m pip install --break-system-packages pytest pytest-cov
             python3 -m pytest
