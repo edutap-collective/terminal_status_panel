@@ -28,13 +28,18 @@ jobs:
   # A tag must name the version the package actually declares. Without this a
   # mistyped tag, or a forgotten version bump, is only discovered on PyPI --
   # where the wrong number cannot be taken back.
+  # The job itself always runs; only its one step is conditional. A *skipped*
+  # job propagates through `needs` -- transitively, past any intermediate job
+  # that rescued itself with always() -- and would take both publish jobs with
+  # it. That is exactly what happened on the first real run: build-package
+  # succeeded and both publish jobs were skipped anyway.
   check-version:
     name: Tag matches project version
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Compare tag against pyproject.toml
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           TAG="${GITHUB_REF_NAME#v}"
@@ -49,13 +54,6 @@ jobs:
     needs:
       - tests
       - check-version
-    # check-version only runs for tags, and a skipped job would otherwise skip
-    # everything downstream. So: build whenever the tests passed and the version
-    # check did not *fail* -- success or skipped both qualify.
-    if: |
-      always()
-      && needs.tests.result == 'success'
-      && needs.check-version.result != 'failure'
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -73,7 +71,7 @@ jobs:
   # continuously rather than for the first time on release day.
   release-test-pypi:
     name: Publish in-dev package to test.pypi.org
-    environment: test-pypi
+    environment: release-test-pypi
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs:
