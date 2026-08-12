@@ -6,10 +6,10 @@ a check that failed says a great deal. ``·`` is reserved for what was not
 observable at all.
 """
 
-OK = "✅"        # measured healthy
-WARN = "⚠️"      # degraded, but serving
-DEAD = "💀"      # measured broken
-UNKNOWN = "·"    # not observable
-JOB = "⏰"       # a scheduled job, resting between runs — measured healthy
+OK = "✅"  # measured healthy
+WARN = "⚠️"  # degraded, but serving
+DEAD = "💀"  # measured broken
+UNKNOWN = "·"  # not observable
+JOB = "⏰"  # a scheduled job, resting between runs — measured healthy
 TRUNCATED = "…"  # ran out of budget
-FAILED = "✗"     # the check itself failed
+FAILED = "✗"  # the check itself failed

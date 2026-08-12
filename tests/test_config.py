@@ -68,13 +68,16 @@ def test_health_defaults_without_a_config_file():
 
 
 def test_health_budget_and_timeouts_are_overridable(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 [health]
 budget = 8.5
 
 [health.timeout]
 kafka = 6.0
-""")
+""",
+    )
     health = load_config(path).health
     assert health.budget == 8.5
     assert health.timeouts["kafka"] == 6.0
@@ -83,22 +86,28 @@ kafka = 6.0
 
 
 def test_enabled_kinds_can_be_narrowed(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 [health]
 enabled = ["postgres", "glusterfs"]
-""")
+""",
+    )
     assert load_config(path).health.enabled == ["postgres", "glusterfs"]
 
 
 def test_dns_expectations_are_parsed(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 [[health.dns.expect]]
 name = "login.example.net"
 addresses = ["10.9.9.9"]
 
 [[health.dns.expect]]
 name = "www.example.net"
-""")
+""",
+    )
     expectations = load_config(path).health.dns_expect
     assert [e.name for e in expectations] == ["login.example.net", "www.example.net"]
     assert expectations[0].addresses == ["10.9.9.9"]
@@ -106,10 +115,13 @@ name = "www.example.net"
 
 
 def test_a_broken_health_block_falls_back_to_defaults_instead_of_raising(tmp_path):
-    path = _write(tmp_path, """
+    path = _write(
+        tmp_path,
+        """
 [health]
 budget = "not a number"
-""")
+""",
+    )
     assert load_config(path).health.budget == 5.0
 
 
@@ -168,6 +180,7 @@ def test_an_explicitly_empty_ignore_list_hides_nothing(monkeypatch, tmp_path):
 
 # --- a bare scalar in a list-shaped key must not be split into characters ---
 
+
 def test_ignore_mountpoints_scalar_string_becomes_a_one_element_list(tmp_path):
     """A bare string is valid TOML for this key and a plausible authoring
     mistake. Splitting it with list("/System/Volumes/") used to yield
@@ -184,9 +197,7 @@ def test_ignore_mountpoints_scalar_string_becomes_a_one_element_list(tmp_path):
     assert "/" not in cfg.ignore_mountpoints
 
 
-def test_ignore_mountpoints_wrong_type_falls_back_to_the_platform_default(
-    monkeypatch, tmp_path
-):
+def test_ignore_mountpoints_wrong_type_falls_back_to_the_platform_default(monkeypatch, tmp_path):
     """Neither a list nor a string -- e.g. a stray number -- is not the typo
     this helper forgives; it falls back to the default instead of raising."""
     from terminal_status_panel import platform_defaults
@@ -323,9 +334,7 @@ def test_a_base_with_no_host_is_dropped(tmp_path):
     not a URL."""
     path = tmp_path / "c.toml"
     path.write_text(
-        "[traefik.links]\n"
-        'bare_scheme = "http://:8080"\n'
-        'ok = "https://login.example.de"\n'
+        '[traefik.links]\nbare_scheme = "http://:8080"\nok = "https://login.example.de"\n'
     )
     assert load_config(path).traefik.links == {"ok": "https://login.example.de"}
 

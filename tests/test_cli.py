@@ -225,8 +225,9 @@ def test_the_traefik_section_collects_the_swarm_data_too(isolated_cli):
     be dead in that path."""
     from terminal_status_panel.model import ServiceStatus, SwarmInfo, TraefikInfo
 
-    swarm = SwarmInfo(reachable=True, enabled=True,
-                      services=[ServiceStatus("kafbat-ui_kafbat-ui", 1, 1)])
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, services=[ServiceStatus("kafbat-ui_kafbat-ui", 1, 1)]
+    )
     isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: swarm)
     isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: TraefikInfo())
     data = cli.collect_all(Config(), sections=("traefik",))
@@ -238,8 +239,9 @@ def test_the_traefik_section_does_not_render_docker_infos(isolated_cli, capsys):
     traefik-only panel."""
     from terminal_status_panel.model import SwarmInfo, TraefikInfo
 
-    isolated_cli.setattr(cli, "collect_docker",
-                         lambda *a, **k: SwarmInfo(reachable=True, enabled=True))
+    isolated_cli.setattr(
+        cli, "collect_docker", lambda *a, **k: SwarmInfo(reachable=True, enabled=True)
+    )
     isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: TraefikInfo())
     assert cli.traefik_main(["--width", "100"]) == 0
     out = capsys.readouterr().out
@@ -257,15 +259,16 @@ def test_a_traefik_only_panel_shows_a_real_verdict_not_a_dot(isolated_cli, capsy
         TraefikServiceRef,
     )
 
-    swarm = SwarmInfo(reachable=True, enabled=True,
-                      services=[ServiceStatus("kafbat-ui_kafbat-ui", 1, 1)])
+    swarm = SwarmInfo(
+        reachable=True, enabled=True, services=[ServiceStatus("kafbat-ui_kafbat-ui", 1, 1)]
+    )
     info = TraefikInfo(
         reachable=True,
         entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
-        routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"],
-                               service="kafbat-ui")],
-        services={"kafbat-ui": TraefikServiceRef(
-            name="kafbat-ui", docker_service="kafbat-ui_kafbat-ui")},
+        routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"], service="kafbat-ui")],
+        services={
+            "kafbat-ui": TraefikServiceRef(name="kafbat-ui", docker_service="kafbat-ui_kafbat-ui")
+        },
     )
     isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: swarm)
     isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: info)
@@ -282,8 +285,7 @@ def test_collect_all_skips_traefik_when_not_selected(isolated_cli):
 
 def test_processes_are_collected_only_for_the_server_section(isolated_cli, monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "collect_processes",
-                        lambda sample, **kw: calls.append(sample) or None)
+    monkeypatch.setattr(cli, "collect_processes", lambda sample, **kw: calls.append(sample) or None)
     cli.collect_all(Config(), ("docker",))
     assert calls == []
     cli.collect_all(Config(), ("server",))
@@ -304,8 +306,13 @@ def test_an_unmeasurable_process_collection_still_yields_an_empty_snapshot(
 
 
 def test_the_follow_flags_are_accepted_by_every_command():
-    for prog in ("status-full", "status-server", "status-docker",
-                 "status-health", "status-traefik"):
+    for prog in (
+        "status-full",
+        "status-server",
+        "status-docker",
+        "status-health",
+        "status-traefik",
+    ):
         args = cli._parse_args(["-f", "--interval", "7"], prog)
         assert args.follow is True
         assert args.interval == 7.0
@@ -313,15 +320,13 @@ def test_the_follow_flags_are_accepted_by_every_command():
 
 def test_follow_hands_off_to_the_loop(isolated_cli, monkeypatch):
     seen = {}
-    monkeypatch.setattr(cli, "run_follow",
-                        lambda cfg, sections, **kw: seen.update(kw) or 0)
+    monkeypatch.setattr(cli, "run_follow", lambda cfg, sections, **kw: seen.update(kw) or 0)
     assert cli.main(["--follow", "--interval", "9", "--no-color"]) == 0
     assert seen["interval"] == 9.0
 
 
 def test_without_follow_nothing_loops(isolated_cli, monkeypatch):
-    monkeypatch.setattr(cli, "run_follow",
-                        lambda *a, **k: pytest.fail("must not be called"))
+    monkeypatch.setattr(cli, "run_follow", lambda *a, **k: pytest.fail("must not be called"))
     assert cli.main(["--no-color", "--width", "100"]) == 0
 
 
@@ -350,8 +355,13 @@ def test_an_explicit_zero_flag_silences_the_block_for_one_run():
 
 
 def test_the_processes_flag_is_accepted_by_every_command():
-    for prog in ("status-full", "status-server", "status-docker",
-                 "status-health", "status-traefik"):
+    for prog in (
+        "status-full",
+        "status-server",
+        "status-docker",
+        "status-health",
+        "status-traefik",
+    ):
         assert cli._parse_args(["--processes", "9"], prog).processes == 9
 
 
@@ -359,8 +369,7 @@ def test_zero_rows_skips_the_collection_entirely(isolated_cli, monkeypatch):
     """The switch is worth having because it removes the 0.3 s sampling window
     from the login path, not merely because it hides a table."""
     calls = []
-    monkeypatch.setattr(cli, "collect_processes",
-                        lambda *a, **k: calls.append(a) or None)
+    monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: calls.append(a) or None)
     data = cli.collect_all(Config(top_processes=0), ("server",))
     assert calls == []
     assert data.processes is None
@@ -375,8 +384,9 @@ def test_zero_rows_is_not_reported_as_a_failed_collection(isolated_cli, monkeypa
 
 def test_the_resolved_count_reaches_the_collector(isolated_cli, monkeypatch):
     seen = {}
-    monkeypatch.setattr(cli, "collect_processes",
-                        lambda sample, limit=5: seen.update(limit=limit) or None)
+    monkeypatch.setattr(
+        cli, "collect_processes", lambda sample, limit=5: seen.update(limit=limit) or None
+    )
     cli.collect_all(Config(top_processes=9), ("server",))
     assert seen["limit"] == 9
 
@@ -389,11 +399,15 @@ def test_the_flag_survives_into_follow_mode(isolated_cli, monkeypatch):
     would be worse than no flag, because nothing would say it had.
     """
     limits = []
-    monkeypatch.setattr(cli, "collect_processes",
-                        lambda sample, limit=5: limits.append(limit) or None)
-    monkeypatch.setattr(cli, "run_follow",
-                        lambda cfg, sections, **kw: [cli.collect_all(cfg, sections),
-                                                     cli.collect_all(cfg, sections)]
-                        and 0)
+    monkeypatch.setattr(
+        cli, "collect_processes", lambda sample, limit=5: limits.append(limit) or None
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_follow",
+        lambda cfg, sections, **kw: (
+            [cli.collect_all(cfg, sections), cli.collect_all(cfg, sections)] and 0
+        ),
+    )
     cli.main(["--sections", "server", "--processes", "7", "--follow", "--no-color"])
     assert limits == [7, 7]

@@ -99,8 +99,9 @@ def test_a_router_defaults_to_unconsulted_rather_than_accepted():
 
 
 def test_a_middleware_keeps_its_kind_and_detail():
-    mw = TraefikMiddleware(name="image_api_stripprefix", kind="stripprefix",
-                           detail="prefixes=/wallet/image-api")
+    mw = TraefikMiddleware(
+        name="image_api_stripprefix", kind="stripprefix", detail="prefixes=/wallet/image-api"
+    )
     assert mw.kind == "stripprefix"
 
 
@@ -126,8 +127,16 @@ def test_the_states_docker_passes_through_before_running_are_starting():
     """Not running yet is not the same as measured broken."""
     from terminal_status_panel.model import ServiceTask
 
-    for state in ("new", "allocated", "pending", "assigned", "accepted",
-                  "preparing", "ready", "starting"):
+    for state in (
+        "new",
+        "allocated",
+        "pending",
+        "assigned",
+        "accepted",
+        "preparing",
+        "ready",
+        "starting",
+    ):
         task = ServiceTask(node="srv-01", state=state)
         assert task.starting is True, state
         assert task.running is False, state
@@ -142,6 +151,7 @@ def test_running_and_failed_are_not_starting():
 
 
 # --- one_way must not fire on missing data ----------------------------------
+
 
 def test_one_way_needs_both_counters():
     """A parse failure leaves a counter at None. Reporting "one-way" from that

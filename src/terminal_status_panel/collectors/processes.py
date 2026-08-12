@@ -97,14 +97,16 @@ def collect_processes(sample: float, limit: int = 5) -> ProcessSnapshot | None:
     rows: list[ProcessInfo] = []
     for proc in procs:
         try:
-            rows.append(ProcessInfo(
-                pid=proc.pid,
-                name=proc.name(),
-                cpu_percent=proc.cpu_percent(None) if sampling else None,
-                memory_percent=proc.memory_percent(),
-                memory_bytes=proc.memory_info().rss,
-                origin=cgroup_origin(proc.pid),
-            ))
+            rows.append(
+                ProcessInfo(
+                    pid=proc.pid,
+                    name=proc.name(),
+                    cpu_percent=proc.cpu_percent(None) if sampling else None,
+                    memory_percent=proc.memory_percent(),
+                    memory_bytes=proc.memory_info().rss,
+                    origin=cgroup_origin(proc.pid),
+                )
+            )
         except (psutil.Error, OSError):
             continue
 
@@ -113,9 +115,7 @@ def collect_processes(sample: float, limit: int = 5) -> ProcessSnapshot | None:
         if sampling
         else []
     )
-    top_memory = sorted(
-        rows, key=lambda row: row.memory_percent or 0.0, reverse=True
-    )[:limit]
+    top_memory = sorted(rows, key=lambda row: row.memory_percent or 0.0, reverse=True)[:limit]
     return ProcessSnapshot(
         top_cpu=top_cpu,
         top_memory=top_memory,

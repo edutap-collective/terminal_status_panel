@@ -17,19 +17,24 @@ def _config(**kwargs):
 
 def test_collect_health_gathers_all_three_groups(monkeypatch):
     monkeypatch.setattr(
-        health_collector, "probe_cluster",
+        health_collector,
+        "probe_cluster",
         lambda index, kind, timeout: ClusterService(kind=kind, reachable=True),
     )
     monkeypatch.setattr(
-        health_collector, "collect_peers",
+        health_collector,
+        "collect_peers",
         lambda names, timeout: [PeerReachability(name="ccn-01", method="wireguard", ok=True)],
     )
     monkeypatch.setattr(
-        health_collector, "collect_dns",
+        health_collector,
+        "collect_dns",
         lambda **kwargs: [DnsCheck(label="Resolver", ok=True, detail="3 ms")],
     )
     health = health_collector.collect_health(
-        _config(enabled=["postgres"]), peer_names=["ccn-01"], client=object(),
+        _config(enabled=["postgres"]),
+        peer_names=["ccn-01"],
+        client=object(),
         resolve_fqdn=_fqdn,
     )
     assert [service.kind for service in health.clusters] == ["postgres"]
@@ -50,7 +55,9 @@ def test_a_check_that_exceeds_the_budget_is_truncated_not_failed(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(budget=0.3, enabled=["postgres"]), peer_names=[], client=object(),
+        _config(budget=0.3, enabled=["postgres"]),
+        peer_names=[],
+        client=object(),
         resolve_fqdn=_fqdn,
     )
     assert "postgres" in health.truncated
@@ -68,7 +75,9 @@ def test_a_raising_check_becomes_an_error_entry_not_a_truncation(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(enabled=["postgres"]), peer_names=[], client=object(),
+        _config(enabled=["postgres"]),
+        peer_names=[],
+        client=object(),
         resolve_fqdn=_fqdn,
     )
     assert health.truncated == []
@@ -115,8 +124,10 @@ def test_clusters_probed_and_empty_is_distinct_from_never_probed(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(budget=0.3, enabled=["postgres", "kafka"]), peer_names=[],
-        client=object(), resolve_fqdn=_fqdn,
+        _config(budget=0.3, enabled=["postgres", "kafka"]),
+        peer_names=[],
+        client=object(),
+        resolve_fqdn=_fqdn,
     )
     assert health.clusters == []
     assert health.clusters_probed is True
@@ -137,8 +148,10 @@ def test_a_hung_kind_loses_only_its_own_result(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(budget=0.5, enabled=["postgres", "rustfs"]), peer_names=[],
-        client=object(), resolve_fqdn=_fqdn,
+        _config(budget=0.5, enabled=["postgres", "rustfs"]),
+        peer_names=[],
+        client=object(),
+        resolve_fqdn=_fqdn,
     )
     assert [service.kind for service in health.clusters] == ["postgres"]
     assert health.truncated == ["rustfs"]
@@ -161,7 +174,9 @@ def test_each_kind_is_probed_with_its_own_configured_timeout(monkeypatch):
             enabled=["postgres", "kafka"],
             timeouts={"postgres": 0.9, "kafka": 4.0, "dns": 2.5, "wireguard": 1.0},
         ),
-        peer_names=[], client=object(), resolve_fqdn=_fqdn,
+        peer_names=[],
+        client=object(),
+        resolve_fqdn=_fqdn,
     )
     assert seen == {"postgres": 0.9, "kafka": 4.0}
 
@@ -178,8 +193,10 @@ def test_all_kinds_share_one_container_index(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health_collector.collect_health(
-        _config(enabled=["postgres", "kafka", "rustfs"]), peer_names=[],
-        client=object(), resolve_fqdn=_fqdn,
+        _config(enabled=["postgres", "kafka", "rustfs"]),
+        peer_names=[],
+        client=object(),
+        resolve_fqdn=_fqdn,
     )
     assert len(seen) == 3
     assert all(index is seen[0] for index in seen)
@@ -204,7 +221,9 @@ def test_the_container_index_is_built_inside_the_budget(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health_collector.collect_health(
-        _config(enabled=["postgres"]), peer_names=[], client=_Client(),
+        _config(enabled=["postgres"]),
+        peer_names=[],
+        client=_Client(),
         resolve_fqdn=_fqdn,
     )
     assert seen and all(thread is not main_thread for thread in seen)
@@ -224,15 +243,20 @@ def test_the_peer_list_is_fetched_once_and_inside_the_budget(monkeypatch):
 
     seen = {}
     monkeypatch.setattr(
-        health_collector, "collect_peers",
+        health_collector,
+        "collect_peers",
         lambda names, timeout: seen.setdefault("peers", names) and [],
     )
     monkeypatch.setattr(
-        health_collector, "collect_dns",
+        health_collector,
+        "collect_dns",
         lambda **kwargs: seen.setdefault("dns", kwargs["peer_names"]) and [],
     )
     health = health_collector.collect_health(
-        _config(enabled=[]), peer_names=[], client=None, resolve_fqdn=_fqdn,
+        _config(enabled=[]),
+        peer_names=[],
+        client=None,
+        resolve_fqdn=_fqdn,
         resolve_peer_names=resolve,
     )
     assert len(callers) == 1
@@ -254,7 +278,10 @@ def test_a_known_peer_list_is_not_fetched_again(monkeypatch):
         raise AssertionError("must not be called when the names are known")
 
     health_collector.collect_health(
-        _config(enabled=[]), peer_names=["ccn-01"], client=None, resolve_fqdn=_fqdn,
+        _config(enabled=[]),
+        peer_names=["ccn-01"],
+        client=None,
+        resolve_fqdn=_fqdn,
         resolve_peer_names=resolve,
     )
 
@@ -265,7 +292,8 @@ def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
     captured = {}
 
     monkeypatch.setattr(
-        health_collector, "probe_cluster",
+        health_collector,
+        "probe_cluster",
         lambda index, kind, timeout: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
@@ -277,7 +305,9 @@ def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_dns", capture)
     health_collector.collect_health(
         _config(dns_expect=[DnsExpectation(name="login.example.net", addresses=["10.9.9.9"])]),
-        peer_names=["ccn-01"], client=object(), resolve_fqdn=_fqdn,
+        peer_names=["ccn-01"],
+        client=object(),
+        resolve_fqdn=_fqdn,
     )
     assert captured["expectations"] == [("login.example.net", ["10.9.9.9"])]
     assert captured["peer_names"] == ["ccn-01"]
@@ -285,7 +315,8 @@ def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
 
 def test_peers_probed_is_false_without_names_or_answers(monkeypatch):
     monkeypatch.setattr(
-        health_collector, "probe_cluster",
+        health_collector,
+        "probe_cluster",
         lambda index, kind, timeout: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
@@ -303,7 +334,8 @@ def test_a_slow_fqdn_lookup_is_truncated_rather_than_delaying_the_login(monkeypa
     import time
 
     monkeypatch.setattr(
-        health_collector, "probe_cluster",
+        health_collector,
+        "probe_cluster",
         lambda index, kind, timeout: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
@@ -323,7 +355,8 @@ def test_a_slow_fqdn_lookup_is_truncated_rather_than_delaying_the_login(monkeypa
 
 def test_peers_probed_is_true_when_names_were_available(monkeypatch):
     monkeypatch.setattr(
-        health_collector, "probe_cluster",
+        health_collector,
+        "probe_cluster",
         lambda index, kind, timeout: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])

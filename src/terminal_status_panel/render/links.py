@@ -55,13 +55,19 @@ _REGEX_META = frozenset("([.*+?{|\\$")
 #: the head a prefix. Each shape is listed both anchored (a trailing `$`, the
 #: common case) and unanchored, because the grammar does not require the
 #: anchor even though most rules carry one.
-_OPTIONAL_TAILS = frozenset({
-    "$",                      # nothing follows the head at all
-    "(?:/.*)?$", "(?:/.*)?",  # an optional, non-capturing `/...` continuation
-    "(/.*)?$", "(/.*)?",      # the same, capturing
-    "/?$", "/?",              # an optional trailing slash
-    ".*$", ".*",              # anything may follow -- still a prefix
-})
+_OPTIONAL_TAILS = frozenset(
+    {
+        "$",  # nothing follows the head at all
+        "(?:/.*)?$",
+        "(?:/.*)?",  # an optional, non-capturing `/...` continuation
+        "(/.*)?$",
+        "(/.*)?",  # the same, capturing
+        "/?$",
+        "/?",  # an optional trailing slash
+        ".*$",
+        ".*",  # anything may follow -- still a prefix
+    }
+)
 
 
 def path_from_rule(rule: str | None) -> str | None:

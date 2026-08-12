@@ -22,9 +22,9 @@ def _cell(services, kind=None, cluster=None, node_count=5):
 @pytest.mark.parametrize(
     "running,desired,expected",
     [
-        (3, 3, f"{icons.OK} 3/3"),      # fully staffed
-        (2, 5, f"{icons.WARN} 2/5"),    # serving, degraded
-        (0, 3, f"{icons.DEAD} 0/3"),    # wants replicas, has none
+        (3, 3, f"{icons.OK} 3/3"),  # fully staffed
+        (2, 5, f"{icons.WARN} 2/5"),  # serving, degraded
+        (0, 3, f"{icons.DEAD} 0/3"),  # wants replicas, has none
         (0, 0, f"{icons.UNKNOWN} 0/0"),  # scaled to zero on purpose
     ],
 )
@@ -57,18 +57,12 @@ def test_global_mode_counts_the_tasks_swarm_scheduled():
 
 
 def test_a_global_service_missing_a_task_still_warns():
-    assert (
-        _cell([_global(3, ["running"] * 3 + ["failed"])], node_count=5)
-        == f"{icons.WARN} 3/4"
-    )
+    assert _cell([_global(3, ["running"] * 3 + ["failed"])], node_count=5) == f"{icons.WARN} 3/4"
 
 
 def test_a_global_task_pinned_to_a_dead_node_still_counts_as_wanted():
     """An unassigned task is one Swarm wants to place and cannot."""
-    assert (
-        _cell([_global(3, ["running"] * 3, unassigned=1)], node_count=5)
-        == f"{icons.WARN} 3/4"
-    )
+    assert _cell([_global(3, ["running"] * 3, unassigned=1)], node_count=5) == f"{icons.WARN} 3/4"
 
 
 def test_global_mode_falls_back_to_the_node_count_without_task_data():
@@ -159,7 +153,8 @@ def test_a_degraded_row_does_not_soften_a_lost_quorum():
 
 def test_a_dead_row_beats_a_warning_cluster():
     degraded = ClusterService(
-        kind="rustfs", quorum_ok=True,
+        kind="rustfs",
+        quorum_ok=True,
         members=[ClusterMember(name="node1", healthy=False)],
     )
     assert _cell([_svc(0, 5)], kind="rustfs", cluster=degraded) == f"{icons.DEAD} 0/5"
@@ -186,10 +181,7 @@ def test_a_minority_of_dead_members_warns_even_though_quorum_holds():
             ClusterMember(name="node5", healthy=False),
         ],
     )
-    assert (
-        _cell([_svc(5, 5)], kind="rustfs", cluster=degraded_majority)
-        == f"{icons.WARN} 5/5"
-    )
+    assert _cell([_svc(5, 5)], kind="rustfs", cluster=degraded_majority) == f"{icons.WARN} 5/5"
 
 
 def test_unobserved_members_do_not_warn():
@@ -248,8 +240,12 @@ def test_a_service_whose_tasks_failed_is_still_dead():
 
 def _job(running=0, desired=1, last_run=None, schedule="0 5 * * *"):
     return ServiceStatus(
-        name="nightly", running_replicas=running, desired_replicas=desired,
-        job=True, schedule=schedule, last_run=last_run,
+        name="nightly",
+        running_replicas=running,
+        desired_replicas=desired,
+        job=True,
+        schedule=schedule,
+        last_run=last_run,
     )
 
 

@@ -92,35 +92,47 @@ def test_a_router_with_no_entrypoints_is_not_an_orphan():
 
 
 def test_collect_reads_entrypoints_from_the_traefik_service():
-    client = _FakeClient(services=[
-        _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
-    ])
+    client = _FakeClient(
+        services=[
+            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+        ]
+    )
     info = collector.collect_traefik(client)
     assert info.reachable is True
     assert [ep.name for ep in info.entrypoints] == ["portalmgmt"]
 
 
 def test_collect_joins_labels_from_every_service():
-    client = _FakeClient(services=[
-        _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
-        _FakeService("kafbat-ui_kafbat-ui", labels={
-            "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
-            "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
-            "traefik.http.services.kafbat-ui.loadbalancer.server.port": "8080",
-        }),
-    ])
+    client = _FakeClient(
+        services=[
+            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService(
+                "kafbat-ui_kafbat-ui",
+                labels={
+                    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
+                    "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
+                    "traefik.http.services.kafbat-ui.loadbalancer.server.port": "8080",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["kafbat-ui"]
     assert info.services["kafbat-ui"].port == 8080
 
 
 def test_router_labels_are_read_from_containers():
-    client = _FakeClient(containers=[
-        _FakeContainer("portal-web-1", {
-            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
-            "traefik.http.routers.web.entrypoints": "https",
-        }),
-    ])
+    client = _FakeClient(
+        containers=[
+            _FakeContainer(
+                "portal-web-1",
+                {
+                    "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+                    "traefik.http.routers.web.entrypoints": "https",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     by_name = {r.name: r for r in info.routers}
     assert "web" in by_name
@@ -133,17 +145,22 @@ def test_a_compose_container_s_router_matches_the_compose_service_name():
     service name (`docker_service`, matched against ServiceStatus.name by the
     renderer) are two different strings -- collectors/docker.py names this
     container's ServiceStatus "db", not "course-statistics-db"."""
-    client = _FakeClient(containers=[
-        _FakeContainer("course-statistics-db", {
-            "traefik.http.routers.db.rule": "Host(`stats.example.net`)",
-            "traefik.http.routers.db.entrypoints": "https",
-            "traefik.http.services.db.loadbalancer.server.port": "5432",
-            # Both labels, which is the only shape Compose produces: the
-            # service name identifies this container within its project.
-            COMPOSE_PROJECT_LABEL: "course-statistics",
-            COMPOSE_SERVICE_LABEL: "db",
-        }),
-    ])
+    client = _FakeClient(
+        containers=[
+            _FakeContainer(
+                "course-statistics-db",
+                {
+                    "traefik.http.routers.db.rule": "Host(`stats.example.net`)",
+                    "traefik.http.routers.db.entrypoints": "https",
+                    "traefik.http.services.db.loadbalancer.server.port": "5432",
+                    # Both labels, which is the only shape Compose produces: the
+                    # service name identifies this container within its project.
+                    COMPOSE_PROJECT_LABEL: "course-statistics",
+                    COMPOSE_SERVICE_LABEL: "db",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     router = next(r for r in info.routers if r.name == "db")
     assert router.origin == "course-statistics-db"
@@ -153,13 +170,18 @@ def test_a_compose_container_s_router_matches_the_compose_service_name():
 def test_a_container_without_compose_labels_yields_the_same_name_twice():
     """No Compose service label to prefer, so the container's own name is the
     only identity there is -- for both `origin` and `docker_service`."""
-    client = _FakeClient(containers=[
-        _FakeContainer("standalone-proxy", {
-            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
-            "traefik.http.routers.web.entrypoints": "https",
-            "traefik.http.services.web.loadbalancer.server.port": "80",
-        }),
-    ])
+    client = _FakeClient(
+        containers=[
+            _FakeContainer(
+                "standalone-proxy",
+                {
+                    "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+                    "traefik.http.routers.web.entrypoints": "https",
+                    "traefik.http.services.web.loadbalancer.server.port": "80",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     router = next(r for r in info.routers if r.name == "web")
     assert router.origin == "standalone-proxy"
@@ -167,11 +189,16 @@ def test_a_container_without_compose_labels_yields_the_same_name_twice():
 
 
 def test_container_labels_are_read_in_the_sparse_shape_too():
-    client = _FakeClient(containers=[
-        _SparseFakeContainer("portal-web-1", {
-            "traefik.http.routers.web.entrypoints": "https",
-        }),
-    ])
+    client = _FakeClient(
+        containers=[
+            _SparseFakeContainer(
+                "portal-web-1",
+                {
+                    "traefik.http.routers.web.entrypoints": "https",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["web"]
 
@@ -181,8 +208,9 @@ def test_a_swarm_task_container_is_not_read_twice():
     labels = {"traefik.http.routers.api.entrypoints": "https"}
     client = _FakeClient(
         services=[_FakeService("api", labels=labels)],
-        containers=[_FakeContainer("api.1.abcdef",
-                                   {**labels, "com.docker.swarm.service.name": "api"})],
+        containers=[
+            _FakeContainer("api.1.abcdef", {**labels, "com.docker.swarm.service.name": "api"})
+        ],
     )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["api"]
@@ -196,14 +224,17 @@ def test_a_failing_container_listing_keeps_the_service_results():
     A subclass, not a monkeypatch of `_FakeClient.containers` itself: see
     `test_a_failing_swarm_listing_still_returns_container_routers` for why
     overwriting the shared class's property outlives this one test."""
+
     class _NoContainers(_FakeClient):
         @property
         def containers(self):
             raise RuntimeError("no containers for you")
 
-    client = _NoContainers(services=[
-        _FakeService("api", labels={"traefik.http.routers.api.entrypoints": "https"}),
-    ])
+    client = _NoContainers(
+        services=[
+            _FakeService("api", labels={"traefik.http.routers.api.entrypoints": "https"}),
+        ]
+    )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["api"]
     assert info.reachable is True
@@ -221,17 +252,23 @@ def test_a_failing_swarm_listing_still_returns_container_routers():
     class object (even with a `finally: del`) would drop the original
     definition for every test that runs afterward in this process, not just
     this one."""
+
     class _NoSwarmManager(_FakeClient):
         @property
         def services(self):
             raise RuntimeError("This node is not a swarm manager")
 
-    client = _NoSwarmManager(containers=[
-        _FakeContainer("portal-web-1", {
-            "traefik.http.routers.web.rule": "Host(`www.example.net`)",
-            "traefik.http.routers.web.entrypoints": "https",
-        }),
-    ])
+    client = _NoSwarmManager(
+        containers=[
+            _FakeContainer(
+                "portal-web-1",
+                {
+                    "traefik.http.routers.web.rule": "Host(`www.example.net`)",
+                    "traefik.http.routers.web.entrypoints": "https",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["web"]
     assert info.reachable is True
@@ -242,6 +279,7 @@ def test_a_failing_swarm_listing_still_returns_container_routers():
 def test_both_listings_failing_yields_an_error_naming_both():
     """Only when neither listing can be read is there genuinely nothing to
     show -- the one case that still aborts like the old code always did."""
+
     class _BrokenClient(_FakeClient):
         @property
         def services(self):
@@ -259,12 +297,16 @@ def test_both_listings_failing_yields_an_error_naming_both():
 
 def test_collect_reads_the_file_provider_configs():
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[],
-                               configs=["traefik_dynamic_yml_v2"])],
-        configs=[_FakeConfig("traefik_dynamic_yml_v2", (
-            "http:\n  routers:\n    api:\n      entrypoints: dashboard\n"
-            "      rule: PathPrefix(`/traefik`)\n      service: api@internal\n"
-        ))],
+        services=[_FakeService("traefik_traefik", args=[], configs=["traefik_dynamic_yml_v2"])],
+        configs=[
+            _FakeConfig(
+                "traefik_dynamic_yml_v2",
+                (
+                    "http:\n  routers:\n    api:\n      entrypoints: dashboard\n"
+                    "      rule: PathPrefix(`/traefik`)\n      service: api@internal\n"
+                ),
+            )
+        ],
     )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["api"]
@@ -303,13 +345,18 @@ def test_a_broken_file_provider_is_reported_but_labels_still_stand():
         def configs(self):
             raise RuntimeError("config read failed")
 
-    client = _ConfigsBreak(services=[
-        _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
-        _FakeService("kafbat-ui_kafbat-ui", labels={
-            "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
-            "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
-        }),
-    ])
+    client = _ConfigsBreak(
+        services=[
+            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService(
+                "kafbat-ui_kafbat-ui",
+                labels={
+                    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
+                    "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     assert info.reachable is True
     assert info.error is None
@@ -328,13 +375,18 @@ def test_a_mis_cased_entrypoints_label_still_reaches_the_orphan_block():
     entrypoint `websecure`, which does not exist. Parsed case-sensitively the
     label vanishes, the empty list reads as "attached to all entrypoints", and
     the finding turns into "wired to all nine ports"."""
-    client = _FakeClient(services=[
-        _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
-        _FakeService("mystack_image_api", labels={
-            "traefik.http.routers.image_api.entryPoints": "websecure",
-            "traefik.http.routers.image_api.rule": "Host(`www.example.net`)",
-        }),
-    ])
+    client = _FakeClient(
+        services=[
+            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService(
+                "mystack_image_api",
+                labels={
+                    "traefik.http.routers.image_api.entryPoints": "websecure",
+                    "traefik.http.routers.image_api.rule": "Host(`www.example.net`)",
+                },
+            ),
+        ]
+    )
     info = collector.collect_traefik(client)
     router = next(r for r in info.routers if r.name == "image_api")
     assert router.entrypoints == ["websecure"]
@@ -345,6 +397,7 @@ def test_a_service_whose_attrs_are_not_a_mapping_does_not_raise():
     """`collect_traefik` is specified never to raise, and `main` swallows what
     it does raise — so an odd shape here prints a blank panel, not a
     traceback."""
+
     class _Odd:
         name = "weird"
         attrs = ["not", "a", "mapping"]
@@ -369,13 +422,13 @@ def test_an_undecodable_config_is_reported_as_a_file_provider_error():
     """A config that cannot be decoded yields no routers — indistinguishable
     from "no dynamic config exists" unless it is reported, and the dashboard
     entrypoint would read `— no router` instead of showing the gap."""
+
     class _Undecodable:
         name = "traefik_dynamic_yml_v2"
         attrs = {"Spec": {"Data": "not base64 %%%"}}
 
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[],
-                               configs=["traefik_dynamic_yml_v2"])],
+        services=[_FakeService("traefik_traefik", args=[], configs=["traefik_dynamic_yml_v2"])],
         configs=[_Undecodable()],
     )
     info = collector.collect_traefik(client)
@@ -386,8 +439,7 @@ def test_an_undecodable_config_is_reported_as_a_file_provider_error():
 
 def test_a_config_with_broken_yaml_is_reported_as_a_file_provider_error():
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[],
-                               configs=["traefik_dynamic_yml_v2"])],
+        services=[_FakeService("traefik_traefik", args=[], configs=["traefik_dynamic_yml_v2"])],
         configs=[_FakeConfig("traefik_dynamic_yml_v2", "http:\n  routers: [unclosed\n")],
     )
     info = collector.collect_traefik(client)
@@ -401,8 +453,7 @@ def test_an_empty_config_body_is_reported_as_a_file_provider_error():
     the decode guard and the YAML guard — the last silent way for the file
     provider to contribute no routers."""
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[],
-                               configs=["traefik_dynamic_yml_v2"])],
+        services=[_FakeService("traefik_traefik", args=[], configs=["traefik_dynamic_yml_v2"])],
         configs=[_FakeConfig("traefik_dynamic_yml_v2", "")],
     )
     info = collector.collect_traefik(client)
@@ -414,8 +465,7 @@ def test_an_empty_config_body_is_reported_as_a_file_provider_error():
 def test_a_config_that_parses_to_nothing_is_not_an_error():
     """Valid YAML without an http section is a real, empty answer."""
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik", args=[],
-                               configs=["traefik_dynamic_yml_v2"])],
+        services=[_FakeService("traefik_traefik", args=[], configs=["traefik_dynamic_yml_v2"])],
         configs=[_FakeConfig("traefik_dynamic_yml_v2", "tls:\n  options: {}\n")],
     )
     assert collector.collect_traefik(client).file_provider_error is None
@@ -491,9 +541,12 @@ def test_rejected_stays_none_when_the_api_was_not_consulted():
 def test_mark_rejected_flags_routers_traefik_never_accepted():
     from terminal_status_panel.model import TraefikInfo
 
-    info = TraefikInfo(routers=[
-        TraefikRouter(name="kept"), TraefikRouter(name="dropped"),
-    ])
+    info = TraefikInfo(
+        routers=[
+            TraefikRouter(name="kept"),
+            TraefikRouter(name="dropped"),
+        ]
+    )
     collector.mark_rejected(info, {"kept"})
     by_name = {r.name: r for r in info.routers}
     assert by_name["kept"].rejected is False
@@ -560,6 +613,7 @@ def test_fetch_accepted_returns_none_when_the_payload_cannot_be_read():
         None,
     ]
     for payload in shapes:
+
         def handler(request, payload=payload):
             return httpx.Response(200, json=payload)
 
@@ -623,9 +677,13 @@ def test_only_the_config_generations_the_service_mounts_are_read():
         "      rule: Path(`/_traefik_ping_`)\n      service: ping@internal\n"
     )
     client = _FakeClient(
-        services=[_FakeService("traefik_traefik",
-                               args=["--entryPoints.portalmgmt.address=:2020"],
-                               configs=["traefik_dynamic_yml_v4"])],
+        services=[
+            _FakeService(
+                "traefik_traefik",
+                args=["--entryPoints.portalmgmt.address=:2020"],
+                configs=["traefik_dynamic_yml_v4"],
+            )
+        ],
         configs=[
             _FakeConfig("traefik_dynamic_yml_v1", body.format(eps="db-ui, kafbat")),
             _FakeConfig("traefik_dynamic_yml_v4", body.format(eps="portalmgmt")),
@@ -643,9 +701,12 @@ def test_without_the_traefik_service_no_config_generation_is_guessed():
     visibly missing instead, with the reason named."""
     client = _FakeClient(
         services=[_FakeService("some_other_stack")],
-        configs=[_FakeConfig("traefik_dynamic_yml_v1", (
-            "http:\n  routers:\n    api:\n      rule: PathPrefix(`/traefik`)\n"
-        ))],
+        configs=[
+            _FakeConfig(
+                "traefik_dynamic_yml_v1",
+                ("http:\n  routers:\n    api:\n      rule: PathPrefix(`/traefik`)\n"),
+            )
+        ],
     )
     info = collector.collect_traefik(client)
     assert info.routers == []

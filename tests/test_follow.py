@@ -51,8 +51,7 @@ def test_any_selection_containing_health_refreshes_every_twenty():
     --sections docker,health -- which is why this is a rule and not a table.
     """
     assert follow.default_interval(("health",), Config()) == 20.0
-    assert follow.default_interval(("server", "docker", "health", "traefik"),
-                                   Config()) == 20.0
+    assert follow.default_interval(("server", "docker", "health", "traefik"), Config()) == 20.0
     assert follow.default_interval(("docker", "health"), Config()) == 20.0
 
 
@@ -81,7 +80,7 @@ def test_instant_work_waits_the_whole_interval():
 def test_content_taller_than_the_screen_is_cropped_and_counted():
     lines = [_line(f"line {i}") for i in range(20)]
     kept, hidden = follow.crop(lines, height=10)
-    assert kept == lines[:9]      # one row belongs to the status line
+    assert kept == lines[:9]  # one row belongs to the status line
     assert hidden == 11
 
 
@@ -119,8 +118,9 @@ def test_the_status_line_carries_an_error():
 
 def test_the_status_line_never_exceeds_the_width():
     """A status row that wraps pushes the panel's first line off the screen."""
-    line = follow.status_line(hidden=999, interval=5.0, width=20,
-                              error="a very long failure message indeed")
+    line = follow.status_line(
+        hidden=999, interval=5.0, width=20, error="a very long failure message indeed"
+    )
     assert len(line) <= 20
 
 
@@ -130,8 +130,9 @@ def test_the_stop_hint_survives_a_long_error_in_a_narrow_row():
     The error is the one unbounded part, so it is what gives way -- not the
     hint a reader needs precisely when something has gone wrong.
     """
-    line = follow.status_line(hidden=999, interval=5.0, width=40,
-                              error="a very long failure message indeed")
+    line = follow.status_line(
+        hidden=999, interval=5.0, width=40, error="a very long failure message indeed"
+    )
     assert "Ctrl-C" in line
     assert len(line) <= 40
 
@@ -175,8 +176,7 @@ def test_without_a_terminal_it_renders_once_and_returns(monkeypatch, capsys):
     monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
     slept = []
     monkeypatch.setattr(follow.time, "sleep", slept.append)
-    assert follow.run_follow(Config(), ("server",), width=100,
-                             no_color=True, interval=None) == 0
+    assert follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=None) == 0
     assert slept == []
     assert "SYSTEM" in capsys.readouterr().out
 
@@ -184,8 +184,7 @@ def test_without_a_terminal_it_renders_once_and_returns(monkeypatch, capsys):
 def test_an_interrupt_ends_the_loop_cleanly(monkeypatch):
     monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(follow.time, "sleep", _StopAfter(1))
-    assert follow.run_follow(Config(), ("server",), width=100,
-                             no_color=True, interval=5.0) == 0
+    assert follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=5.0) == 0
 
 
 def test_a_failing_pass_does_not_end_the_loop(monkeypatch):
@@ -199,8 +198,7 @@ def test_a_failing_pass_does_not_end_the_loop(monkeypatch):
     # Patched on `cli`, not on `follow`: run_follow reaches the collectors
     # through the `cli` module object, which is what breaks the import cycle.
     monkeypatch.setattr(cli, "collect_all", boom)
-    assert follow.run_follow(Config(), ("server",), width=100,
-                             no_color=True, interval=5.0) == 0
+    assert follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=5.0) == 0
     assert len(stopper.delays) == 3, "the loop kept going after the failure"
 
 
@@ -214,8 +212,7 @@ def test_an_interval_below_the_floor_is_raised(monkeypatch):
     monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
     stopper = _StopAfter(1)
     monkeypatch.setattr(follow.time, "sleep", stopper)
-    follow.run_follow(Config(), ("server",), width=100, no_color=True,
-                      interval=0.1)
+    follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=0.1)
     # Not `>= MIN_INTERVAL`: `next_delay` subtracts the pass's real elapsed
     # time from the chosen interval, so the delay is always a little under
     # MIN_INTERVAL for any pass that takes measurable time -- which any real
@@ -246,8 +243,7 @@ def test_an_explicit_zero_interval_is_floored_not_ignored(monkeypatch):
     monkeypatch.setattr(cli, "collect_all", boom)
     stopper = _StopAfter(1)
     monkeypatch.setattr(follow.time, "sleep", stopper)
-    follow.run_follow(Config(), ("health",), width=100, no_color=True,
-                      interval=0.0)
+    follow.run_follow(Config(), ("health",), width=100, no_color=True, interval=0.0)
     # An ignored zero would fall back to the 20s health default; a floored
     # zero lands near MIN_INTERVAL instead, the same shape the floor test
     # above checks for.
@@ -283,8 +279,7 @@ def test_each_pass_redraws_the_whole_screen(monkeypatch):
     assert buffer.getvalue().count("\x1b[H") == 3
 
 
-def _run_one_pass_and_capture(monkeypatch, *, interval: float,
-                              monotonic_calls: list[float]) -> str:
+def _run_one_pass_and_capture(monkeypatch, *, interval: float, monotonic_calls: list[float]) -> str:
     """A single pass of `run_follow`, with a controlled elapsed time.
 
     `started`/`elapsed` inside the loop both come from `time.monotonic`,
@@ -307,8 +302,7 @@ def _run_one_pass_and_capture(monkeypatch, *, interval: float,
     stopper = _StopAfter(1)
     monkeypatch.setattr(follow.time, "sleep", stopper)
 
-    follow.run_follow(Config(), ("server",), width=100, no_color=True,
-                      interval=interval)
+    follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=interval)
     return _strip_ansi(buffer.getvalue()), stopper.delays[0]
 
 
@@ -324,7 +318,8 @@ def test_an_ordinary_pass_reports_the_configured_interval(monkeypatch):
     pass depending on how long collection took, never the interval itself.
     """
     plain, delay = _run_one_pass_and_capture(
-        monkeypatch, interval=20.0, monotonic_calls=[0.0, 0.62])
+        monkeypatch, interval=20.0, monotonic_calls=[0.0, 0.62]
+    )
     assert "every 20s" in plain, plain
     assert delay == pytest.approx(19.38)
 
@@ -339,8 +334,7 @@ def test_a_pass_that_overruns_reports_the_doubled_cadence_not_the_delay(monkeypa
     (8s, read as "the interval"), which was neither the 5s configured nor the
     16s actually being kept.
     """
-    plain, delay = _run_one_pass_and_capture(
-        monkeypatch, interval=5.0, monotonic_calls=[0.0, 8.0])
+    plain, delay = _run_one_pass_and_capture(monkeypatch, interval=5.0, monotonic_calls=[0.0, 8.0])
     assert "every 16s" in plain, plain
     assert "every 5s" not in plain
     assert "every 8s" not in plain
@@ -361,8 +355,9 @@ def test_follow_mode_keeps_the_panels_colour(monkeypatch):
     monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
 
     buffer = io.StringIO()
-    capturing = Console(file=buffer, force_terminal=True, width=100, height=30,
-                        color_system="standard")
+    capturing = Console(
+        file=buffer, force_terminal=True, width=100, height=30, color_system="standard"
+    )
     monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
 
     stopper = _StopAfter(1)
@@ -374,8 +369,8 @@ def test_follow_mode_keeps_the_panels_colour(monkeypatch):
     one_shot = Console(width=100, force_terminal=True, color_system="standard")
     with one_shot.capture() as capture:
         from terminal_status_panel.render.layout import build_layout
-        one_shot.print(build_layout(cli.collect_all(Config(), ("server",)),
-                                    Config(), ("server",)))
+
+        one_shot.print(build_layout(cli.collect_all(Config(), ("server",)), Config(), ("server",)))
     one_shot_sgr = _count_sgr(capture.get())
 
     assert follow_sgr > 0, "follow mode's frame carries no colour at all"
@@ -403,10 +398,15 @@ def test_follow_mode_keeps_the_panels_hyperlinks(monkeypatch):
 
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
-                                       port=2009)],
-        routers=[TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
-                               rule="PathPrefix(`/account`)", service="account-spa")],
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009", port=2009)],
+        routers=[
+            TraefikRouter(
+                name="account-spa",
+                entrypoints=["login_example_de"],
+                rule="PathPrefix(`/account`)",
+                service="account-spa",
+            )
+        ],
         services={"account-spa": TraefikServiceRef(name="account-spa", port=8080)},
     )
     cfg = Config()
@@ -416,8 +416,9 @@ def test_follow_mode_keeps_the_panels_hyperlinks(monkeypatch):
     monkeypatch.setattr(cli, "collect_all", lambda *a, **k: PanelData(traefik=info))
 
     buffer = io.StringIO()
-    capturing = Console(file=buffer, force_terminal=True, width=100, height=30,
-                        color_system="standard")
+    capturing = Console(
+        file=buffer, force_terminal=True, width=100, height=30, color_system="standard"
+    )
     monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
     monkeypatch.setattr(follow.time, "sleep", _StopAfter(1))
 

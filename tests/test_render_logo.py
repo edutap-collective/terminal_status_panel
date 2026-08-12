@@ -50,7 +50,7 @@ def test_linux_distributions_resolve_by_name(monkeypatch):
 
 
 def test_opensuse_is_matched_before_the_generic_suse_key(monkeypatch):
-    """"opensuse" contains "suse"; order decides, so pin it."""
+    """ "opensuse" contains "suse"; order decides, so pin it."""
     _on(monkeypatch, "Linux")
     assert logo_module._logo_name("openSUSE Leap 15.6") == "opensuse"
 
@@ -104,11 +104,13 @@ def test_a_distribution_without_bundled_artwork_falls_back_to_tux(monkeypatch):
     """RHEL's mark is not redistributable; RHEL is still Linux."""
     _on(monkeypatch, "Linux")
     tux = logo_module.os_logo_by_key("linux").plain
-    for name in ("Red Hat Enterprise Linux 9.4 (Plow)",
-                 "Fedora Linux 40 (Workstation Edition)",
-                 "AlmaLinux 9.4 (Seafoam Ocelot)",
-                 "openSUSE Tumbleweed",
-                 "SUSE Linux Enterprise Server 15 SP6"):
+    for name in (
+        "Red Hat Enterprise Linux 9.4 (Plow)",
+        "Fedora Linux 40 (Workstation Edition)",
+        "AlmaLinux 9.4 (Seafoam Ocelot)",
+        "openSUSE Tumbleweed",
+        "SUSE Linux Enterprise Server 15 SP6",
+    ):
         assert logo_module.os_logo(name).plain == tux, name
 
 

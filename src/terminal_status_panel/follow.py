@@ -64,8 +64,7 @@ def crop(lines: list[list[Segment]], height: int) -> tuple[list[list[Segment]], 
     return list(lines[:room]), len(lines) - room
 
 
-def status_line(hidden: int, interval: float, width: int,
-                error: str | None = None) -> str:
+def status_line(hidden: int, interval: float, width: int, error: str | None = None) -> str:
     """The bottom row: what is out of sight, the cadence, and how to stop.
 
     Preserves the stop hint even when space is tight. The error message is
@@ -115,8 +114,7 @@ def status_line(hidden: int, interval: float, width: int,
             available = width - required - 3  # -3 for the " · " separator.
             if available > 0:
                 truncated = error[:available]
-                return " · ".join([hidden_str, interval_str, truncated,
-                                   stop_hint])[:width]
+                return " · ".join([hidden_str, interval_str, truncated, stop_hint])[:width]
 
         # Try truncated error without hidden.
         required = len(" · ".join([interval_str, stop_hint]))
@@ -139,9 +137,14 @@ def status_line(hidden: int, interval: float, width: int,
     return stop_hint[:width]
 
 
-def run_follow(cfg: Config, sections: tuple[str, ...], *,
-               width: int | None, no_color: bool,
-               interval: float | None) -> int:
+def run_follow(
+    cfg: Config,
+    sections: tuple[str, ...],
+    *,
+    width: int | None,
+    no_color: bool,
+    interval: float | None,
+) -> int:
     """Render the panel on the alternate screen until interrupted.
 
     Always returns 0. A status panel must never fail a login shell, and follow
@@ -182,8 +185,7 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
                     # `pad=False` means no line carries trailing blank
                     # segments, so the `.rstrip()` an earlier version needed
                     # on the joined string has nothing left to do here.
-                    rendered = console.render_lines(
-                        build_layout(data, cfg, sections), pad=False)
+                    rendered = console.render_lines(build_layout(data, cfg, sections), pad=False)
                 except Exception as exc:  # reported in the status line, not raised
                     # A pass that fails is a fact to show, not a reason to
                     # stop. The next one may well succeed.
@@ -214,8 +216,9 @@ def run_follow(cfg: Config, sections: tuple[str, ...], *,
                 # drops the newline itself, so each line's segments need one
                 # put back before they are flattened into a single sequence.
                 console.control(Control.home())
-                screen.update(Segments(
-                    chain.from_iterable((*line, Segment.line()) for line in lines)))
+                screen.update(
+                    Segments(chain.from_iterable((*line, Segment.line()) for line in lines))
+                )
                 time.sleep(delay)
     except KeyboardInterrupt:
         return 0

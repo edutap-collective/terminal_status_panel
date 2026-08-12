@@ -27,8 +27,9 @@ def _subhead(title: str) -> Text:
     return Text(title, style="bold cyan")
 
 
-def _service_state(router: TraefikRouter, info: TraefikInfo,
-                   swarm: SwarmInfo | None) -> tuple[str, Text]:
+def _service_state(
+    router: TraefikRouter, info: TraefikInfo, swarm: SwarmInfo | None
+) -> tuple[str, Text]:
     """This router's service, as a verdict glyph and as a rendered line.
 
     The glyph is empty when the line makes no claim at all — Traefik's own
@@ -81,14 +82,18 @@ def _service_state(router: TraefikRouter, info: TraefikInfo,
     return verdict_icon(matching, node_count=node_count), line
 
 
-def _service_line(router: TraefikRouter, info: TraefikInfo,
-                  swarm: SwarmInfo | None) -> Text:
+def _service_line(router: TraefikRouter, info: TraefikInfo, swarm: SwarmInfo | None) -> Text:
     return _service_state(router, info, swarm)[1]
 
 
-def _router_lines(router: TraefikRouter, info: TraefikInfo,
-                  swarm: SwarmInfo | None, *, fold: bool = True,
-                  base: str | None = None) -> list[Text]:
+def _router_lines(
+    router: TraefikRouter,
+    info: TraefikInfo,
+    swarm: SwarmInfo | None,
+    *,
+    fold: bool = True,
+    base: str | None = None,
+) -> list[Text]:
     style = "dim" if router.source == "file" else ""
     head = Text("  └─ ", style=style)
     start = len(head.plain)
@@ -126,8 +131,7 @@ def _router_lines(router: TraefikRouter, info: TraefikInfo,
         if mw is None:
             # A reference to something that was never declared. Rendering it
             # like a resolved one makes a typo read as working wiring.
-            lines.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware",
-                              style="red"))
+            lines.append(Text(f"     ├─ ⇢ {name}  {icons.FAILED} no such middleware", style="red"))
             continue
         kind = f" ({mw.kind})" if mw.kind else ""
         lines.append(Text(f"     ├─ ⇢ {name}{kind}", style="dim"))
@@ -164,16 +168,19 @@ def _attached(entrypoint, info: TraefikInfo) -> list[TraefikRouter]:
     The sort keeps ``ping-router``, which hangs on six of nine entrypoints,
     from leading every branch.
     """
-    attached = [
-        r for r in info.routers if not r.entrypoints or entrypoint.name in r.entrypoints
-    ]
+    attached = [r for r in info.routers if not r.entrypoints or entrypoint.name in r.entrypoints]
     attached.sort(key=lambda r: (r.source != "swarm", r.name))
     return attached
 
 
-def _entrypoint_block(entrypoint, info: TraefikInfo,
-                      swarm: SwarmInfo | None, *, fold: bool = True,
-                      links: dict[str, str] | None = None) -> list[Text]:
+def _entrypoint_block(
+    entrypoint,
+    info: TraefikInfo,
+    swarm: SwarmInfo | None,
+    *,
+    fold: bool = True,
+    links: dict[str, str] | None = None,
+) -> list[Text]:
     """This entrypoint's branch, as the flat list of lines it occupies.
 
     Lines rather than a ``Group`` because the packer has to know how tall and
@@ -199,9 +206,7 @@ def _entrypoint_block(entrypoint, info: TraefikInfo,
             # A published port nothing serves is a finding, not an absence.
             head.append("   — no router", style="dim")
         return [head]
-    worst = max(
-        (_service_state(r, info, swarm)[0] for r in attached), key=severity, default=""
-    )
+    worst = max((_service_state(r, info, swarm)[0] for r in attached), key=severity, default="")
     if worst:
         # The column head carries the worst verdict below it, so a wall of
         # branches still says at a glance which one to read first.
@@ -261,8 +266,9 @@ def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
     return Group(*parts)
 
 
-def traefik_section(info: TraefikInfo | None, cfg: Config,
-                    swarm: SwarmInfo | None = None) -> RenderableType:
+def traefik_section(
+    info: TraefikInfo | None, cfg: Config, swarm: SwarmInfo | None = None
+) -> RenderableType:
     """The TRAEFIK WIRING block.
 
     The entrypoint branches are packed into height-balanced columns: stacked
@@ -274,8 +280,7 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
     """
     data = info or TraefikInfo()
     if data.error:
-        return section("TRAEFIK WIRING",
-                       Text(f"{icons.FAILED} {data.error}", style="red"))
+        return section("TRAEFIK WIRING", Text(f"{icons.FAILED} {data.error}", style="red"))
     if not data.reachable:
         return section("TRAEFIK WIRING", Text("not checked", style="dim"))
 
@@ -286,21 +291,25 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         # declare its entrypoints in static YAML rather than in Args. The tree
         # below cannot be drawn, but the routers are still known — they follow
         # in the orphan block, which in this state holds every one of them.
-        parts.append(Text(
-            f"{icons.WARN} no entrypoints found — the tree cannot be drawn,"
-            " the routers below could not be placed",
-            style="yellow",
-        ))
+        parts.append(
+            Text(
+                f"{icons.WARN} no entrypoints found — the tree cannot be drawn,"
+                " the routers below could not be placed",
+                style="yellow",
+            )
+        )
         parts.append(Text(""))
     if data.file_provider_error:
         # api@internal and ping-router live only in the file provider. Without
         # this line their absence from the tree below reads as a finding
         # ("— no router") instead of the gap it actually is.
-        parts.append(Text(
-            f"{icons.WARN} file provider unreadable: {data.file_provider_error}"
-            " — routers defined there are missing",
-            style="dim",
-        ))
+        parts.append(
+            Text(
+                f"{icons.WARN} file provider unreadable: {data.file_provider_error}"
+                " — routers defined there are missing",
+                style="dim",
+            )
+        )
         parts.append(Text(""))
     if data.container_error:
         # Same shape as the file-provider line above, one label source over:
@@ -308,11 +317,13 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         # plain or Compose container, and the section would otherwise render
         # as though the wiring were complete. A notice only — the verdicts
         # below come from `swarm`, which this failure did not touch.
-        parts.append(Text(
-            f"{icons.WARN} container labels unreadable: {data.container_error}"
-            " — routers declared by plain or Compose containers are missing",
-            style="dim",
-        ))
+        parts.append(
+            Text(
+                f"{icons.WARN} container labels unreadable: {data.container_error}"
+                " — routers declared by plain or Compose containers are missing",
+                style="dim",
+            )
+        )
         parts.append(Text(""))
     if data.service_error and swarm is not None and swarm.enabled:
         # A Swarm services listing failing is the *expected*, permanent
@@ -323,11 +334,13 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         # showing: a Swarm manager or worker that genuinely could not be
         # queried. Silence when `swarm` is missing or unreachable too — an
         # accusation this section cannot back up with a real measurement.
-        parts.append(Text(
-            f"{icons.WARN} Swarm service labels unreadable: {data.service_error}"
-            " — routers declared by Swarm services are missing",
-            style="dim",
-        ))
+        parts.append(
+            Text(
+                f"{icons.WARN} Swarm service labels unreadable: {data.service_error}"
+                " — routers declared by Swarm services are missing",
+                style="dim",
+            )
+        )
         parts.append(Text(""))
     if data.entrypoints:
         # Declaration order, which the collector preserves: the four
@@ -339,8 +352,9 @@ def traefik_section(info: TraefikInfo | None, cfg: Config,
         # widens the block, and a wider block can force the packer to a
         # column fewer — paying several lines to save one. `PackedColumns`
         # packs both at print time and draws whichever is actually shorter.
-        folded = [_entrypoint_block(ep, data, swarm, links=cfg.traefik.links)
-                  for ep in data.entrypoints]
+        folded = [
+            _entrypoint_block(ep, data, swarm, links=cfg.traefik.links) for ep in data.entrypoints
+        ]
         unfolded = [
             _entrypoint_block(ep, data, swarm, fold=False, links=cfg.traefik.links)
             for ep in data.entrypoints

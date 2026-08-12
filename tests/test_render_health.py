@@ -30,9 +30,7 @@ def test_unprobed_clusters_are_not_rendered_as_all_clear():
 
 
 def test_probed_but_empty_clusters_say_so():
-    output = _render(
-        HealthInfo(clusters_probed=True, peers_probed=True, dns_probed=True)
-    )
+    output = _render(HealthInfo(clusters_probed=True, peers_probed=True, dns_probed=True))
     assert "no clustered services found" in output
     assert "not checked" not in output
 
@@ -44,25 +42,37 @@ def test_unprobed_dns_is_not_rendered_as_no_dns_checks():
 
 
 def test_probed_but_empty_dns_says_so():
-    output = _render(
-        HealthInfo(clusters_probed=True, peers_probed=True, dns_probed=True)
-    )
+    output = _render(HealthInfo(clusters_probed=True, peers_probed=True, dns_probed=True))
     assert "no DNS checks" in output
 
 
 def test_healthy_cluster_shows_leader_and_members():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        ClusterService(
-            kind="postgres", name="PostgreSQL-18", reachable=True,
-            leader="pg18-swarm01-wrk-02", quorum_ok=True,
-            members=[
-                ClusterMember(name="pg18-swarm01-wrk-02", node="swarm01-wrk-02",
-                              role="primary", healthy=True),
-                ClusterMember(name="pg18-swarm01-wrk-03", node="swarm01-wrk-03",
-                              role="secondary", healthy=True),
-            ],
-        )
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            ClusterService(
+                kind="postgres",
+                name="PostgreSQL-18",
+                reachable=True,
+                leader="pg18-swarm01-wrk-02",
+                quorum_ok=True,
+                members=[
+                    ClusterMember(
+                        name="pg18-swarm01-wrk-02",
+                        node="swarm01-wrk-02",
+                        role="primary",
+                        healthy=True,
+                    ),
+                    ClusterMember(
+                        name="pg18-swarm01-wrk-03",
+                        node="swarm01-wrk-03",
+                        role="secondary",
+                        healthy=True,
+                    ),
+                ],
+            )
+        ],
+    )
     output = _render(health)
     assert "PostgreSQL-18" in output
     assert "swarm01-wrk-02" in output
@@ -81,25 +91,37 @@ def test_not_applicable_service_renders_na_and_no_failure_icon():
 
 
 def test_unobservable_member_health_renders_a_neutral_dot():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        ClusterService(
-            kind="mongodb", name="app_db", reachable=True, quorum_ok=True,
-            members=[ClusterMember(name="mongodb-4:27017", role="member", healthy=None)],
-        )
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            ClusterService(
+                kind="mongodb",
+                name="app_db",
+                reachable=True,
+                quorum_ok=True,
+                members=[ClusterMember(name="mongodb-4:27017", role="member", healthy=None)],
+            )
+        ],
+    )
     output = _render(health)
     assert "·" in output
     assert "✅ mongodb-4" not in output
 
 
 def test_member_warning_is_visible():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        ClusterService(
-            kind="postgres", name="PostgreSQL-18", reachable=True,
-            members=[ClusterMember(name="pg18-x", role="secondary", healthy=True,
-                                   warning="lag")],
-        )
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            ClusterService(
+                kind="postgres",
+                name="PostgreSQL-18",
+                reachable=True,
+                members=[
+                    ClusterMember(name="pg18-x", role="secondary", healthy=True, warning="lag")
+                ],
+            )
+        ],
+    )
     assert "lag" in _render(health)
 
 
@@ -136,10 +158,13 @@ def test_a_truncated_kind_is_named_and_does_not_hide_the_others():
 
 
 def test_peer_panel_shows_method_and_handshake_age():
-    health = HealthInfo(peers_probed=True, peers=[
-        PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
-        PeerReachability(name="ccn-02", method="wireguard", ok=False, detail="6:02"),
-    ])
+    health = HealthInfo(
+        peers_probed=True,
+        peers=[
+            PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
+            PeerReachability(name="ccn-02", method="wireguard", ok=False, detail="6:02"),
+        ],
+    )
     output = _render(health)
     assert "wg" in output.lower()
     assert "0:31" in output
@@ -147,9 +172,10 @@ def test_peer_panel_shows_method_and_handshake_age():
 
 
 def test_tcp_fallback_is_labelled_as_such():
-    health = HealthInfo(peers_probed=True, peers=[
-        PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377")
-    ])
+    health = HealthInfo(
+        peers_probed=True,
+        peers=[PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377")],
+    )
     assert "tcp" in _render(health).lower()
 
 
@@ -165,7 +191,9 @@ def test_dns_warning_renders_as_warning_not_failure():
 
 def test_narrow_width_still_renders():
     health = HealthInfo(
-        clusters_probed=True, peers_probed=True, dns_probed=True,
+        clusters_probed=True,
+        peers_probed=True,
+        dns_probed=True,
         clusters=[ClusterService(kind="postgres", name="PostgreSQL-18", reachable=True)],
         peers=[PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31")],
         dns=[DnsCheck(label="Resolver", ok=True, detail="3 ms")],
@@ -175,29 +203,39 @@ def test_narrow_width_still_renders():
 
 # -- Fix 1: the peers title reflects every peer's method, not just the first --
 
+
 def test_mixed_peer_methods_render_as_mixed():
-    health = HealthInfo(peers_probed=True, peers=[
-        PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
-        PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
-    ])
+    health = HealthInfo(
+        peers_probed=True,
+        peers=[
+            PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
+            PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
+        ],
+    )
     assert "mixed" in _render(health)
 
 
 def test_all_wireguard_peers_still_render_wg():
-    health = HealthInfo(peers_probed=True, peers=[
-        PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
-        PeerReachability(name="ccn-02", method="wireguard", ok=True, detail="1:02"),
-    ])
+    health = HealthInfo(
+        peers_probed=True,
+        peers=[
+            PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
+            PeerReachability(name="ccn-02", method="wireguard", ok=True, detail="1:02"),
+        ],
+    )
     output = _render(health)
     assert "wg" in output.lower()
     assert "mixed" not in output
 
 
 def test_all_tcp_peers_still_render_tcp():
-    health = HealthInfo(peers_probed=True, peers=[
-        PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377"),
-        PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
-    ])
+    health = HealthInfo(
+        peers_probed=True,
+        peers=[
+            PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377"),
+            PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
+        ],
+    )
     output = _render(health)
     assert "tcp" in output.lower()
     assert "mixed" not in output
@@ -205,11 +243,20 @@ def test_all_tcp_peers_still_render_tcp():
 
 # -- Fix 2: an unreported service-level quorum is distinct from "not observable" --
 
+
 def test_unreported_quorum_says_so_and_has_no_neutral_dot_in_the_header():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        ClusterService(kind="rustfs", name="rustfs-vol", reachable=True, quorum_ok=None,
-                       detail="2/2 nodes online"),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            ClusterService(
+                kind="rustfs",
+                name="rustfs-vol",
+                reachable=True,
+                quorum_ok=None,
+                detail="2/2 nodes online",
+            ),
+        ],
+    )
     output = _render(health)
     assert "quorum not reported" in output
     header_line = next(line for line in output.splitlines() if "rustfs-vol" in line)
@@ -217,10 +264,13 @@ def test_unreported_quorum_says_so_and_has_no_neutral_dot_in_the_header():
 
 
 def test_quorum_true_and_false_are_unchanged():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        ClusterService(kind="postgres", name="ok-cluster", reachable=True, quorum_ok=True),
-        ClusterService(kind="postgres", name="bad-cluster", reachable=True, quorum_ok=False),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            ClusterService(kind="postgres", name="ok-cluster", reachable=True, quorum_ok=True),
+            ClusterService(kind="postgres", name="bad-cluster", reachable=True, quorum_ok=False),
+        ],
+    )
     output = _render(health)
     assert "✅" in output
     assert "💀" in output
@@ -243,21 +293,27 @@ def test_probed_but_empty_peers_say_no_peers():
 
 def _cluster(kind, name, members=2):
     return ClusterService(
-        kind=kind, name=name, reachable=True, quorum_ok=True,
-        members=[ClusterMember(name=f"{kind}-{i}", role="peer", healthy=True)
-                 for i in range(members)],
+        kind=kind,
+        name=name,
+        reachable=True,
+        quorum_ok=True,
+        members=[
+            ClusterMember(name=f"{kind}-{i}", role="peer", healthy=True) for i in range(members)
+        ],
     )
 
 
 def test_wide_terminals_put_cluster_blocks_side_by_side():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        _cluster("postgres", "PostgreSQL-18"),
-        _cluster("kafka", "cluster-id"),
-        _cluster("glusterfs", "shared"),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            _cluster("postgres", "PostgreSQL-18"),
+            _cluster("kafka", "cluster-id"),
+            _cluster("glusterfs", "shared"),
+        ],
+    )
     out = _render(health, width=150)
-    side_by_side = [ln for ln in out.splitlines()
-                    if "PostgreSQL" in ln and "Kafka" in ln]
+    side_by_side = [ln for ln in out.splitlines() if "PostgreSQL" in ln and "Kafka" in ln]
     assert side_by_side, "at 150 columns two clusters should share a line"
 
 
@@ -265,31 +321,38 @@ def test_narrow_terminals_stack_the_blocks():
     """Width 40 is comfortably narrower than one block, so this asserts the
     fallback itself rather than where the boundary happens to sit — pinning
     that boundary would make the column padding untouchable."""
-    health = HealthInfo(clusters_probed=True, clusters=[
-        _cluster("postgres", "PostgreSQL-18"),
-        _cluster("kafka", "cluster-id"),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            _cluster("postgres", "PostgreSQL-18"),
+            _cluster("kafka", "cluster-id"),
+        ],
+    )
     out = _render(health, width=40)
-    assert not [ln for ln in out.splitlines()
-                if "PostgreSQL" in ln and "Kafka" in ln]
+    assert not [ln for ln in out.splitlines() if "PostgreSQL" in ln and "Kafka" in ln]
 
 
 def test_very_wide_terminals_keep_the_blocks_side_by_side():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        _cluster("postgres", "PostgreSQL-18"),
-        _cluster("kafka", "cluster-id"),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            _cluster("postgres", "PostgreSQL-18"),
+            _cluster("kafka", "cluster-id"),
+        ],
+    )
     out = _render(health, width=200)
-    assert [ln for ln in out.splitlines()
-            if "PostgreSQL" in ln and "Kafka" in ln]
+    assert [ln for ln in out.splitlines() if "PostgreSQL" in ln and "Kafka" in ln]
 
 
 def test_not_applicable_services_collapse_to_one_line():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        _cluster("postgres", "PostgreSQL-18"),
-        ClusterService(kind="mongodb", applicable=False),
-        ClusterService(kind="rustfs", applicable=False),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            _cluster("postgres", "PostgreSQL-18"),
+            ClusterService(kind="mongodb", applicable=False),
+            ClusterService(kind="rustfs", applicable=False),
+        ],
+    )
     out = _render(health, width=150)
     assert "n/a here:" in out
     assert "MongoDB" in out
@@ -299,18 +362,24 @@ def test_not_applicable_services_collapse_to_one_line():
 
 
 def test_an_all_not_applicable_panel_is_just_the_summary_line():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        ClusterService(kind="mongodb", applicable=False),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            ClusterService(kind="mongodb", applicable=False),
+        ],
+    )
     out = _render(health, width=150)
     assert "n/a here: MongoDB" in out
 
 
 def test_a_failed_service_keeps_its_own_block():
-    health = HealthInfo(clusters_probed=True, clusters=[
-        _cluster("postgres", "PostgreSQL-18"),
-        ClusterService(kind="rustfs", error="no running container"),
-    ])
+    health = HealthInfo(
+        clusters_probed=True,
+        clusters=[
+            _cluster("postgres", "PostgreSQL-18"),
+            ClusterService(kind="rustfs", error="no running container"),
+        ],
+    )
     out = _render(health, width=150)
     assert "no running container" in out
     assert "n/a here" not in out
@@ -318,9 +387,17 @@ def test_a_failed_service_keeps_its_own_block():
 
 # --- Transfer counters, one-way traffic, mixed endpoint families -----------
 
+
 def _wg(name, **kw):
-    base = dict(method="wireguard", ok=True, detail="0:10",
-                rx_bytes=1024, tx_bytes=2048, endpoint="10.0.0.1:51194", family="IPv4")
+    base = dict(
+        method="wireguard",
+        ok=True,
+        detail="0:10",
+        rx_bytes=1024,
+        tx_bytes=2048,
+        endpoint="10.0.0.1:51194",
+        family="IPv4",
+    )
     base.update(kw)
     return PeerReachability(name=name, **base)
 

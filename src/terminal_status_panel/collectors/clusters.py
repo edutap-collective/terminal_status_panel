@@ -587,9 +587,7 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
         # `peer status` lists the *other* peers, so zero of them means either an
         # unparsed answer or a single-node volume. Neither supports a quorum
         # claim, so the panel reports none rather than inventing a 💀.
-        quorum_ok=(
-            (connected + 1) * 2 > total_peers + 1 if total_peers > 0 else None
-        ),
+        quorum_ok=((connected + 1) * 2 > total_peers + 1 if total_peers > 0 else None),
         detail=detail,
         members=members,
     )
@@ -639,9 +637,7 @@ _KIND_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # every sidecar that merely shares the ``mongodb`` stack — an admin UI such as
 # ``mongodb_mongo-express``. Handing such a service the replica set's verdict
 # would state a health measurement about something that was never probed.
-_NEVER_A_MEMBER: tuple[str, ...] = tuple(
-    name.lower() for name in DEFAULT_INFRA_UI_SERVICES
-)
+_NEVER_A_MEMBER: tuple[str, ...] = tuple(name.lower() for name in DEFAULT_INFRA_UI_SERVICES)
 
 
 def kind_for_service(name: str) -> str | None:
@@ -739,8 +735,15 @@ def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
             status = exec_text(
                 container,
                 [
-                    "curl", "-ks", "-o", "/dev/null", "-m", f"{per_endpoint:.1f}",
-                    "-w", "%{http_code}", f"{endpoint}/health",
+                    "curl",
+                    "-ks",
+                    "-o",
+                    "/dev/null",
+                    "-m",
+                    f"{per_endpoint:.1f}",
+                    "-w",
+                    "%{http_code}",
+                    f"{endpoint}/health",
                 ],
             ).strip()
             healthy = status == "200"
@@ -748,9 +751,7 @@ def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
         except Exception as exc:
             healthy = False
             detail = str(exc)[:60]
-        members.append(
-            ClusterMember(name=endpoint, role="peer", healthy=healthy, detail=detail)
-        )
+        members.append(ClusterMember(name=endpoint, role="peer", healthy=healthy, detail=detail))
     live = sum(1 for member in members if member.healthy)
     detail = f"{live}/{len(members)} live"
     if guessed:

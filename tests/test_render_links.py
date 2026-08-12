@@ -41,13 +41,13 @@ def test_a_path_prefix_is_not_read_as_a_path_matcher():
 
 
 def test_a_base_and_a_path_join_into_a_url():
-    assert link_for("https://login.example.de", "/account") == \
-        "https://login.example.de/account"
+    assert link_for("https://login.example.de", "/account") == "https://login.example.de/account"
 
 
 def test_a_trailing_slash_on_the_base_changes_nothing():
-    assert link_for("https://login.example.de/", "/account") == \
-        link_for("https://login.example.de", "/account")
+    assert link_for("https://login.example.de/", "/account") == link_for(
+        "https://login.example.de", "/account"
+    )
 
 
 def test_no_path_yields_the_base_itself():
@@ -60,8 +60,7 @@ def test_no_base_yields_no_link():
 
 
 def test_a_path_without_a_leading_slash_still_joins_cleanly():
-    assert link_for("https://login.example.de", "account") == \
-        "https://login.example.de/account"
+    assert link_for("https://login.example.de", "account") == "https://login.example.de/account"
 
 
 def test_a_negated_rule_yields_nothing():
@@ -87,6 +86,7 @@ def test_an_exclamation_mark_inside_a_path_is_not_a_negation():
 # -- serves that prefix: everything past it must be the end of the string or
 # -- a demonstrably optional continuation, never a tail that narrows the
 # -- match to a longer, different address.
+
 
 def test_a_regexp_whose_tail_narrows_to_a_longer_exact_path_yields_nothing():
     """`/foo` is not a sub-case of `/foo.bar` -- it is a different address,
@@ -118,15 +118,17 @@ def test_a_bare_anchored_regexp_yields_its_exact_path():
 # -- a host other than the configured base, or when the host is a pattern
 # -- (`HostRegexp`/`HostSNI`) nobody can compare.
 
+
 def test_router_link_behaves_like_path_from_rule_and_link_for_composed():
-    assert router_link("https://login.example.de", "PathPrefix(`/account`)") == \
-        "https://login.example.de/account"
+    assert (
+        router_link("https://login.example.de", "PathPrefix(`/account`)")
+        == "https://login.example.de/account"
+    )
 
 
 def test_a_host_matching_the_base_still_links():
     rule = "Host(`login.example.de`) && PathPrefix(`/account`)"
-    assert router_link("https://login.example.de", rule) == \
-        "https://login.example.de/account"
+    assert router_link("https://login.example.de", rule) == "https://login.example.de/account"
 
 
 def test_a_host_other_than_the_base_yields_no_link():

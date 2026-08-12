@@ -189,8 +189,9 @@ def _service_tasks(service, id_to_name: dict[str, str]) -> tuple[list[ServiceTas
     return tasks, unassigned
 
 
-def _swarm_services(client, critical: set[str], description_label: str,
-                    id_to_name: dict[str, str]) -> list[ServiceStatus]:
+def _swarm_services(
+    client, critical: set[str], description_label: str, id_to_name: dict[str, str]
+) -> list[ServiceStatus]:
     services = []
     for svc in client.services.list():
         labels = _labels(svc)
@@ -212,9 +213,11 @@ def _swarm_services(client, critical: set[str], description_label: str,
                 # Presence, not truthiness: a service that sets the configured
                 # key to "" is saying "no description here", and falling back
                 # would resurrect the very text it was migrated away from.
-                description=(labels[description_label]
-                             if description_label in labels
-                             else labels.get(LEGACY_DESCRIPTION_LABEL)),
+                description=(
+                    labels[description_label]
+                    if description_label in labels
+                    else labels.get(LEGACY_DESCRIPTION_LABEL)
+                ),
                 tasks=tasks,
                 unassigned=unassigned,
                 job=job,
@@ -254,8 +257,7 @@ def _is_completed_job(container) -> bool:
     return state.get("Status") == "exited" and state.get("ExitCode") == 0
 
 
-def _container_groups(client) -> tuple[dict[tuple[str | None, str], list],
-                                       dict[str, str]]:
+def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[str, str]]:
     """Groups of non-Swarm containers, and every container's id → service name.
 
     The map is built here rather than in a pass of its own because
@@ -298,9 +300,9 @@ def _container_groups(client) -> tuple[dict[tuple[str | None, str], list],
     return groups, origins
 
 
-def _container_services(client, critical: set[str], description_label: str,
-                        node_name: str | None) -> tuple[list[ServiceStatus],
-                                                        dict[str, str]]:
+def _container_services(
+    client, critical: set[str], description_label: str, node_name: str | None
+) -> tuple[list[ServiceStatus], dict[str, str]]:
     """Plain and Compose containers as ServiceStatus entries, and the id map."""
     groups, origins = _container_groups(client)
     services: list[ServiceStatus] = []
@@ -316,9 +318,11 @@ def _container_services(client, critical: set[str], description_label: str,
                 desired_replicas=len(members),
                 critical=name in critical,
                 stack=stack,
-                description=(labels[description_label]
-                             if description_label in labels
-                             else labels.get(LEGACY_DESCRIPTION_LABEL)),
+                description=(
+                    labels[description_label]
+                    if description_label in labels
+                    else labels.get(LEGACY_DESCRIPTION_LABEL)
+                ),
                 # Always emitted, node or no node: the tasks are what carries
                 # the *state*, and the verdict reads `starting` off them to
                 # tell a container on its way up from a dead one. Withholding
@@ -333,8 +337,11 @@ def _container_services(client, critical: set[str], description_label: str,
     return services, origins
 
 
-def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
-                   description_label: str = DEFAULT_DESCRIPTION_LABEL) -> SwarmInfo:
+def collect_docker(
+    timeout: float = 1.5,
+    critical: list[str] | None = None,
+    description_label: str = DEFAULT_DESCRIPTION_LABEL,
+) -> SwarmInfo:
     """Return Swarm and container health; never raises."""
     critical_set = set(critical or [])
     try:
@@ -347,21 +354,20 @@ def collect_docker(timeout: float = 1.5, critical: list[str] | None = None,
             role = "manager" if swarm.get("ControlAvailable") else "worker"
             nodes, id_to_name = _node_map(client)
             local_node = id_to_name.get(swarm.get("NodeID") or "")
-            containers, origins = _container_services(client, critical_set,
-                                                      description_label, local_node)
+            containers, origins = _container_services(
+                client, critical_set, description_label, local_node
+            )
             return SwarmInfo(
                 reachable=True,
                 enabled=True,
                 node_role=role,
                 node_count=swarm.get("Nodes") or (len(nodes) or None),
-                services=_swarm_services(client, critical_set, description_label,
-                                         id_to_name),
+                services=_swarm_services(client, critical_set, description_label, id_to_name),
                 containers=containers,
                 nodes=nodes,
                 container_services=origins,
             )
-        containers, origins = _container_services(client, critical_set,
-                                                  description_label, None)
+        containers, origins = _container_services(client, critical_set, description_label, None)
         return SwarmInfo(
             reachable=True,
             enabled=False,

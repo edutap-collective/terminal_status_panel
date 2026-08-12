@@ -132,9 +132,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
             # used — inside the budget, never here.
             peer_names=_peer_names(swarm),
             client=client,
-            resolve_peer_names=(
-                None if client is None else lambda: _swarm_node_names(client)
-            ),
+            resolve_peer_names=(None if client is None else lambda: _swarm_node_names(client)),
         )
 
     traefik_info = None
@@ -174,9 +172,7 @@ def _collect_process_rows(cfg: Config) -> ProcessSnapshot | None:
     """
     if not cfg.top_processes:
         return None
-    return (
-        collect_processes(cfg.process_sample, limit=cfg.top_processes) or ProcessSnapshot()
-    )
+    return collect_processes(cfg.process_sample, limit=cfg.top_processes) or ProcessSnapshot()
 
 
 def resolve_width(arg_width: int | None, cfg: Config) -> int:
@@ -223,20 +219,28 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=None, help="fixed render width")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     parser.add_argument("--config", default=None, help="path to a TOML config file")
-    parser.add_argument("--sections", default=None,
-                        help="comma-separated sections to render: "
-                             "server,docker,health,traefik")
-    parser.add_argument("-f", "--follow", action="store_true",
-                        help="keep the panel on screen and refresh it")
-    parser.add_argument("--interval", type=float, default=None,
-                        help="seconds between refreshes in --follow")
-    parser.add_argument("--processes", type=int, default=None,
-                        help="rows per process list; 0 turns the block off")
+    parser.add_argument(
+        "--sections",
+        default=None,
+        help="comma-separated sections to render: server,docker,health,traefik",
+    )
+    parser.add_argument(
+        "-f", "--follow", action="store_true", help="keep the panel on screen and refresh it"
+    )
+    parser.add_argument(
+        "--interval", type=float, default=None, help="seconds between refreshes in --follow"
+    )
+    parser.add_argument(
+        "--processes", type=int, default=None, help="rows per process list; 0 turns the block off"
+    )
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None, sections: tuple[str, ...] = DEFAULT_SECTIONS,
-         prog: str = "status-full") -> int:
+def main(
+    argv: list[str] | None = None,
+    sections: tuple[str, ...] = DEFAULT_SECTIONS,
+    prog: str = "status-full",
+) -> int:
     """Render the status panel. Always returns 0 — never fails a login."""
     try:
         args = _parse_args(argv, prog)
@@ -247,8 +251,9 @@ def main(argv: list[str] | None = None, sections: tuple[str, ...] = DEFAULT_SECT
         cfg.top_processes = resolve_top_processes(args.processes, cfg)
         selected = _resolve_sections(args.sections, sections)
         if args.follow:
-            return run_follow(cfg, selected, width=args.width,
-                              no_color=args.no_color, interval=args.interval)
+            return run_follow(
+                cfg, selected, width=args.width, no_color=args.no_color, interval=args.interval
+            )
         width = resolve_width(args.width, cfg)
         console = build_console(width, args.no_color)
         data = collect_all(cfg, selected)
