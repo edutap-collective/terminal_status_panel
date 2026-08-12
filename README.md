@@ -1223,7 +1223,7 @@ and publishes that same artefact to one of two indexes:
 
 | Trigger | Goes to | Environment |
 |---|---|---|
-| every push to `main` | [test.pypi.org](https://test.pypi.org) | `test-pypi` |
+| every push to `main` | [test.pypi.org](https://test.pypi.org) | `release-test-pypi` |
 | publishing a GitHub Release | [pypi.org](https://pypi.org) | `pypi` |
 
 Test PyPI on every commit is deliberate: it exercises the publishing path
@@ -1254,11 +1254,14 @@ One-time setup, per index:
    - **Owner:** `edutap-collective`
    - **Repository name:** `terminal_status_panel`
    - **Workflow name:** `release.yml`
-   - **Environment name:** `pypi` for PyPI, `test-pypi` for Test PyPI
+   - **Workflow name:** `release.yml` — with `.yml`, matching the file. A
+     publisher registered against `release.yaml` matches nothing and the
+     upload is rejected as an untrusted publisher.
+   - **Environment name:** `pypi` for PyPI, `release-test-pypi` for Test PyPI
 2. In the GitHub repository → *Settings → Environments*, create the matching
    environment. Required reviewers on `pypi` gate every upload behind an
-   approval; `test-pypi` is better left ungated, since it fires on every push
-   to `main`.
+   approval; `release-test-pypi` is better left ungated, since it fires on
+   every push to `main`.
 
    `pypi` already exists and already carries a working publisher — it is what
    released v0.5.0. The environment names here follow that rather than the
