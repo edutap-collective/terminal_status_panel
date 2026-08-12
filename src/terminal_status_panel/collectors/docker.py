@@ -11,10 +11,13 @@ so a missing or hung Docker socket can never block login.
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
+
 import docker
 
 from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
-from ..model import ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
+from ..model import JobRun, ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
 from ._labels import (
     COMPOSE_PROJECT_LABEL,
     SWARM_SERVICE_LABEL,
@@ -23,6 +26,15 @@ from ._labels import (
 )
 
 STACK_LABEL = "com.docker.stack.namespace"
+
+#: Label prefix used by swarm-cronjob (https://github.com/crazy-max/swarm-cronjob),
+#: which drives a Swarm service on a cron schedule by scaling it up and letting
+#: it exit again. Such a service sits at zero replicas between runs.
+SWARM_CRONJOB_PREFIX = "swarm.cronjob"
+
+#: Swarm's own job modes (Docker 20.10+). A service in one of them is expected
+#: to end, so its resting state is zero running tasks.
+_JOB_MODES = ("ReplicatedJob", "GlobalJob")
 
 #: Raw Docker states a container without Compose labels must be in to appear at
 #: all. Anything else is a leftover from a one-off `docker run`, and on a
@@ -71,6 +83,82 @@ def _labels(service) -> dict:
     return labels
 
 
+def _job_schedule(labels: dict) -> str | None:
+    return labels.get(f"{SWARM_CRONJOB_PREFIX}.schedule")
+
+
+def _is_job(service, labels: dict) -> bool:
+    """Whether this service runs to completion rather than staying up.
+
+    Two independent sources say so, and either is enough: the swarm-cronjob
+    labels, and Swarm's own job modes (Docker 20.10+). The latter carry no
+    schedule -- something outside the cluster decides when they run -- so the
+    two are read separately rather than one implying the other.
+    """
+    if str(labels.get(f"{SWARM_CRONJOB_PREFIX}.enable", "")).lower() == "true":
+        return True
+    mode = (getattr(service, "attrs", {}) or {}).get("Spec", {}).get("Mode") or {}
+    return any(job_mode in mode for job_mode in _JOB_MODES)
+
+
+def _now() -> float:
+    """Wall clock as epoch seconds. A seam, so tests can fix "now"."""
+    return time.time()
+
+
+def _parse_timestamp(value) -> float | None:
+    """Epoch seconds from a Docker task timestamp, or None if unreadable.
+
+    Docker sends RFC 3339 with nanosecond precision and a trailing ``Z``
+    (``2026-08-12T07:28:29.81745826Z``). Measured on 2026-08-12: CPython 3.11
+    through 3.14 all parse that as-is, nine-digit fraction included, so every
+    version this package supports is covered without hand-rolled parsing.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        # Docker reports UTC. Letting a zone-less stamp default to local time
+        # would shift every age by the host's offset, silently and only off UTC.
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.timestamp()
+
+
+def _last_run(service, id_to_name: dict[str, str]) -> JobRun | None:
+    """The newest task of a job, whatever state it ended in.
+
+    Newest by timestamp, deliberately: a job that failed yesterday and
+    succeeded this morning is healthy, and picking the most *severe* task
+    instead would pin yesterday's failure to the panel for as long as Swarm
+    keeps the history. Tasks are listed unfiltered here -- a finished job has
+    no desired-state ``running`` task left, which is the whole point.
+    """
+    try:
+        tasks = service.tasks()
+    except Exception:
+        return None
+    newest = None
+    newest_at: float | None = None
+    for task in tasks:
+        status = task.get("Status") or {}
+        at = _parse_timestamp(status.get("Timestamp"))
+        if at is None:
+            continue  # undatable, so it cannot be compared against the others
+        if newest_at is None or at > newest_at:
+            newest, newest_at = task, at
+    if newest is None or newest_at is None:
+        return None
+    node_id = newest.get("NodeID")
+    return JobRun(
+        state=(newest.get("Status") or {}).get("State", "unknown"),
+        age_seconds=max(0.0, _now() - newest_at),
+        node=id_to_name.get(node_id, node_id) if node_id else None,
+    )
+
+
 def _desired_count(service) -> int | None:
     try:
         return service.attrs["Spec"]["Mode"]["Replicated"]["Replicas"]
@@ -107,6 +195,10 @@ def _swarm_services(client, critical: set[str], description_label: str,
     for svc in client.services.list():
         labels = _labels(svc)
         tasks, unassigned = _service_tasks(svc, id_to_name)
+        # The second task listing costs an API call, so only job rows pay for
+        # it -- for a long-running service the current replicas are the answer
+        # and its task history says nothing the panel shows.
+        job = _is_job(svc, labels)
         services.append(
             ServiceStatus(
                 name=svc.name,
@@ -125,6 +217,9 @@ def _swarm_services(client, critical: set[str], description_label: str,
                              else labels.get(LEGACY_DESCRIPTION_LABEL)),
                 tasks=tasks,
                 unassigned=unassigned,
+                job=job,
+                schedule=_job_schedule(labels),
+                last_run=_last_run(svc, id_to_name) if job else None,
             )
         )
     return services

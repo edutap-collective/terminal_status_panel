@@ -717,7 +717,18 @@ def _base_groups(services, node_names) -> dict[str, list]:
 
 
 def _group_desc(services) -> str:
-    return next((s.description for s in services if s.description), "")
+    """The row's description, led by a job's schedule where there is one.
+
+    A job's Working cell reports an outcome and an age -- "ok 12h" -- which
+    raises exactly the question the schedule answers: when was it meant to run?
+    Without it the reader cannot tell a job that is merely resting from one
+    that has silently stopped being triggered.
+    """
+    desc = next((s.description for s in services if s.description), "")
+    schedule = next((s.schedule for s in services if s.job and s.schedule), None)
+    if not schedule:
+        return desc
+    return f"{schedule} · {desc}" if desc else schedule
 
 
 def _split_infra_uis(services, ui_keys, node_names) -> tuple[list, list]:

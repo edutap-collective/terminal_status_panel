@@ -3,6 +3,7 @@ import pytest
 from terminal_status_panel.model import (
     ClusterMember,
     ClusterService,
+    JobRun,
     ServiceStatus,
     ServiceTask,
 )
@@ -238,3 +239,39 @@ def test_a_service_whose_tasks_failed_is_still_dead():
     tasks = [ServiceTask(f"srv-0{i}", "failed") for i in (1, 2, 3)]
     services = [ServiceStatus("s", 0, 3, tasks=tasks)]
     assert service_verdict(services).plain == "💀 0/3"
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled jobs
+# --------------------------------------------------------------------------- #
+
+
+def _job(running=0, desired=1, last_run=None, schedule="0 5 * * *"):
+    return ServiceStatus(
+        name="nightly", running_replicas=running, desired_replicas=desired,
+        job=True, schedule=schedule, last_run=last_run,
+    )
+
+
+def test_a_job_between_runs_is_not_dead():
+    """The bug this feature exists for: 0/1 is a job's resting state."""
+    run = JobRun(state="complete", age_seconds=12 * 3600, node="srv-01")
+
+    assert _cell([_job(last_run=run)]) == f"{icons.JOB} ok 12h"
+
+
+def test_a_job_whose_last_run_failed_is_dead():
+    run = JobRun(state="failed", age_seconds=20 * 3600, node="srv-01")
+
+    assert _cell([_job(last_run=run)]) == f"{icons.DEAD} ✗ 20h"
+
+
+def test_a_job_that_never_ran_is_not_observable():
+    assert _cell([_job(last_run=None)]) == f"{icons.UNKNOWN} never"
+
+
+def test_a_job_with_a_task_running_reports_replicas():
+    """While it runs, a job is an ordinary service and the count is the answer."""
+    run = JobRun(state="running", age_seconds=5.0, node="srv-01")
+
+    assert _cell([_job(running=1, desired=1, last_run=run)]) == f"{icons.OK} 1/1"

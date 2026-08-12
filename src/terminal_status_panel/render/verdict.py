@@ -26,6 +26,7 @@ _STYLES = {
     icons.DEAD: "red",
     icons.FAILED: "red",
     icons.UNKNOWN: "dim",
+    icons.JOB: "",
 }
 
 # How much each icon claims, from least to most. "Not observable" ranks *above*
@@ -34,6 +35,9 @@ _STYLES = {
 # 💀 and more specific about why.
 _SEVERITY = {
     icons.OK: 0,
+    # A job resting between successful runs claims exactly as much as ✅: it was
+    # measured, and what was measured is fine.
+    icons.JOB: 0,
     icons.UNKNOWN: 1,
     icons.WARN: 2,
     icons.DEAD: 3,
@@ -78,6 +82,51 @@ def _replica_icon(running: int, desired: int, starting: int = 0) -> str:
     if running < desired:
         return icons.WARN
     return icons.OK
+
+
+def _fmt_age(seconds: float | None) -> str:
+    """How long ago, in one unit. Coarse on purpose: the cell is three glyphs
+    wide, and "ran 12 hours ago" answers the question that "12h 04m" does."""
+    if seconds is None:
+        return "?"
+    total = int(seconds)
+    if total < 3600:
+        return f"{total // 60}m"
+    if total < 86400:
+        return f"{total // 3600}h"
+    return f"{total // 86400}d"
+
+
+def _job_cell(services: list[ServiceStatus]) -> tuple[str, str] | None:
+    """(icon, text) for a row of scheduled jobs, or None if this is not one.
+
+    A job's resting state is zero running tasks, so the replica rule -- which
+    reads ``0/1`` as an outage -- states the opposite of the truth here and is
+    replaced rather than adjusted. What the row reports instead is the outcome
+    of the last run, because that is the only thing about a sleeping job that
+    can be measured at all.
+
+    Only an all-job row qualifies. A row mixing a job with a long-running
+    service still has something that ought to be up, and the replica count
+    remains the honest answer for it.
+    """
+    if not all(service.job for service in services):
+        return None
+    running = sum(service.running_replicas for service in services)
+    if running:
+        # A run in progress is an ordinary service for as long as it lasts.
+        desired = sum(_desired(service, 0) for service in services)
+        return _replica_icon(running, desired), f"{running}/{desired}"
+    runs = [service.last_run for service in services if service.last_run]
+    if not runs:
+        # Never ran, or Swarm has already pruned the history: either way this
+        # is an absence of evidence, not evidence of health.
+        return icons.UNKNOWN, "never"
+    newest = min(runs, key=lambda run: (run.age_seconds is None, run.age_seconds or 0))
+    age = _fmt_age(newest.age_seconds)
+    if newest.failed:
+        return icons.DEAD, f"{icons.FAILED} {age}"
+    return icons.JOB, f"ok {age}"
 
 
 def _cluster_icon(cluster: ClusterService) -> str:
@@ -139,6 +188,9 @@ def verdict_icon(
     """
     if not services:
         return ""
+    job = _job_cell(services)
+    if job is not None:
+        return job[0]
     running, desired = _counts(services, node_count)
     starting = sum(1 for s in services for t in s.tasks if t.starting)
     replica = _replica_icon(running, desired, starting)
@@ -169,6 +221,10 @@ def service_verdict(
     """The ``Working`` cell for one row: an icon and a running/desired count."""
     if not services:
         return Text("")
+    job = _job_cell(services)
+    if job is not None:
+        icon, text = job
+        return Text(f"{icon} {text}", style=_STYLES.get(icon, ""))
     icon = verdict_icon(services, kind=kind, cluster=cluster, node_count=node_count)
     running, desired = _counts(services, node_count)
     return Text(f"{icon} {running}/{desired}", style=_STYLES.get(icon, ""))
