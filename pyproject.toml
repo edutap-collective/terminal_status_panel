@@ -42,6 +42,10 @@ test = [
     "pytest-cov",
     # Test-only: the Traefik cross-check builds an SSLContext from a client
     # certificate, and the only honest way to test that is with a real one.
+    #
+    # Adding anything here means editing .github/workflows/ci.yml too: the
+    # FreeBSD job installs these by name because its pip predates
+    # `--group`, and it goes red on the next push if the two drift.
     # Generated per run rather than committed -- a fixture certificate expires,
     # and a suite that goes red one morning for a reason unrelated to the
     # change that triggered it teaches people to ignore it.

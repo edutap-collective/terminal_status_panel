@@ -67,19 +67,25 @@ jobs:
           # and derive the flavour prefix from it, so the job follows whatever
           # the release ships instead of guessing.
           #
-          # psutil comes from pkg rather than pip because building it from
-          # source is the difference between a one-minute job and a ten-minute
-          # one.
+          # psutil and cryptography come from pkg rather than pip: both carry
+          # compiled extensions, there are no wheels for FreeBSD, and building
+          # them from source is the difference between a one-minute job and a
+          # ten-minute one.
           prepare: |
             set -e
             pkg install -y python3
             PYVER=$(python3 -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')
             echo "FreeBSD default Python flavour: py${PYVER}"
-            pkg install -y "py${PYVER}-pip" "py${PYVER}-psutil" "py${PYVER}-sqlite3"
+            pkg install -y "py${PYVER}-pip" "py${PYVER}-psutil" "py${PYVER}-sqlite3" \
+              "py${PYVER}-cryptography"
           # The test requirements are named here rather than installed as a
           # dependency group: `pip install --group` needs pip 25.1, and this job
-          # deliberately takes whatever pip the FreeBSD release ships. Keep in
-          # step with the `test` group in pyproject.toml -- it is two entries.
+          # deliberately takes whatever pip the FreeBSD release ships.
+          #
+          # This list must be kept in step with the `test` group in
+          # pyproject.toml by hand, and has already drifted once: cryptography
+          # was added there for the TLS tests and this job went red on the next
+          # push. pyproject.toml carries a note pointing back here.
           run: |
             set -e
             python3 -m pip install --break-system-packages -e .
