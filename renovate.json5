@@ -1,0 +1,24 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    ":semanticCommits",
+  ],
+  // The package declares lower bounds and ships no lock file, so there is
+  // nothing to bump for runtime dependencies. What is worth watching is the
+  // pinned tooling: the ruff floor-and-ceiling in pyproject, the hook
+  // revisions in .pre-commit-config.yaml, and the GitHub Actions versions.
+  enabledManagers: ["github-actions", "pre-commit", "pep621"],
+  "pre-commit": {
+    enabled: true,
+  },
+  packageRules: [
+    {
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+      // One PR a week rather than one per action: these move often and each
+      // bump costs a full matrix run across four interpreters and a FreeBSD VM.
+      schedule: ["before 6am on monday"],
+    },
+  ],
+}
