@@ -1,6 +1,6 @@
 [project]
 name = "terminal-status-panel"
-version = "0.5.0"
+version = "0.6.0"
 description = "Colorful login status panel for servers: system, resources, and Docker Swarm health"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,20 +32,28 @@ dependencies = [
     "httpx",  # the optional cross-check against Traefik's own /api/rawdata
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pdbp",
-	"pytest",
-	"ruff",
-	"pillow",  # only to regenerate bundled logos via tools/generate_logos.py
-]
+# Development tooling lives in dependency groups (PEP 735), not in extras.
+# An extra is part of the published metadata and anyone installing the package
+# can select it; a group is local to this checkout and never reaches PyPI.
+# Nothing here is something a consumer of the panel would ever want.
+[dependency-groups]
 test = [
-    "pytest",
+    "pytest>=8",
     "pytest-cov",
+    # Test-only: the Traefik cross-check builds an SSLContext from a client
+    # certificate, and the only honest way to test that is with a real one.
+    # Generated per run rather than committed -- a fixture certificate expires,
+    # and a suite that goes red one morning for a reason unrelated to the
+    # change that triggered it teaches people to ignore it.
+    "cryptography>=44",
 ]
-typecheck  = [
-    "mypy",
-    "pytest-stub",
+typecheck = ["ty"]
+dev = [
+    {include-group = "test"},
+    {include-group = "typecheck"},
+    "pdbp",
+    "ruff>=0.16,<0.17",
+    "pillow",  # only to regenerate bundled logos via tools/generate_logos.py
 ]
 
 [project.scripts]
@@ -82,23 +90,42 @@ testpaths = [
     "tests"
 ]
 
-[tool.isort]
-profile = "plone"
-src_paths = ["src", "tests"]
-
-[tool.check-manifest]
-ignore = [
-    ".editorconfig",
-    ".pre-commit-config.yaml",
-    "tox.ini",
-    ".flake8",
-    "tests/data/generated_passes/*",
-]
-
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.format]
+# Written out rather than inherited: adopting a formatter is a decision about
+# every file in the repository, so it should be readable as one.
+quote-style = "double"
+indent-style = "space"
+
 [tool.ruff.lint]
-select = ["E", "F", "I"]
-per-file-ignores = {"tests/test_collectors_clusters.py" = ["E501"]}
+# The rule set the sibling packages use.
+select = ["E", "F", "W", "B", "I", "UP", "D", "S"]
+# D203/D213 contradict the other pydocstyle rules ruff applies, so they are
+# excluded for that reason rather than by preference.
+#
+# D401 (imperative mood) is a deliberate departure from the sibling packages.
+# This codebase documents by describing the thing rather than the call -- "The
+# panel's status vocabulary", "True when the task runs" -- and the rule fires
+# 49 times without a single "Returns the ..." among them. For a property in
+# particular, "Return true when the task runs" is the worse sentence. Enforcing
+# it would mean rewriting 49 good docstrings into weaker ones.
+ignore = ["D203", "D213", "D401"]
+
+[tool.ruff.lint.per-file-ignores]
+# `tests/**` rather than `tests/*`: a single star does not cross a directory
+# separator. Tests carry no docstring requirement, and `assert` is what a test
+# is made of -- S101 fires 1416 times across this suite and says nothing.
+# S108 fires on "/tmp/" in test_platform_defaults, where it is a mountpoint
+# *value* fed to the ignore-list logic, not a file anything opens.
+"tests/**" = ["D", "S101", "S108"]
+# One-off developer scripts, not API.
+"tools/**" = ["D"]
+# Fixture data quoted verbatim from the systems it describes: a cluster status
+# payload and a set of Traefik router labels. The formatter cannot break a
+# string literal, and rewrapping the fixture by hand would mean the test no
+# longer shows what the real input looks like.
+"tests/test_collectors_clusters.py" = ["E501"]
+"tests/test_collectors_traefik_parse.py" = ["E501"]

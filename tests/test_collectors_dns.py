@@ -48,8 +48,12 @@ def test_read_hosts_file_survives_a_missing_file():
 def test_resolver_check_reports_latency(tmp_path):
     resolver = _StubResolver(answers={("node1.example", "A"): ["10.0.0.1"]})
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=[], expectations=[], timeout=1.0,
-        resolver=resolver, hosts_path=_hosts(tmp_path, ""),
+        fqdn="node1.example",
+        peer_names=[],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
+        hosts_path=_hosts(tmp_path, ""),
     )
     resolver_check = [c for c in checks if c.label.startswith("Resolver")][0]
     assert resolver_check.ok is True
@@ -62,8 +66,12 @@ def test_forward_and_reverse_are_consistent(tmp_path):
         reverse={"10.0.0.1": ["node1.example."]},
     )
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=[], expectations=[], timeout=1.0,
-        resolver=resolver, hosts_path=_hosts(tmp_path, ""),
+        fqdn="node1.example",
+        peer_names=[],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
+        hosts_path=_hosts(tmp_path, ""),
     )
     own = [c for c in checks if c.label == "own FQDN"][0]
     assert own.ok is True
@@ -75,8 +83,12 @@ def test_reverse_pointing_elsewhere_is_a_failure(tmp_path):
         reverse={"10.0.0.1": ["somebodyelse.example."]},
     )
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=[], expectations=[], timeout=1.0,
-        resolver=resolver, hosts_path=_hosts(tmp_path, ""),
+        fqdn="node1.example",
+        peer_names=[],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
+        hosts_path=_hosts(tmp_path, ""),
     )
     own = [c for c in checks if c.label == "own FQDN"][0]
     assert own.ok is False
@@ -90,8 +102,11 @@ def test_all_peers_resolving_is_one_summary_check(tmp_path):
         }
     )
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=["node1.example", "node2.example"],
-        expectations=[], timeout=1.0, resolver=resolver,
+        fqdn="node1.example",
+        peer_names=["node1.example", "node2.example"],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
         hosts_path=_hosts(tmp_path, ""),
     )
     peers = [c for c in checks if c.label == "Peers"][0]
@@ -102,8 +117,11 @@ def test_all_peers_resolving_is_one_summary_check(tmp_path):
 def test_a_peer_that_does_not_resolve_fails_the_summary(tmp_path):
     resolver = _StubResolver(answers={("node1.example", "A"): ["10.0.0.1"]})
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=["node1.example", "ghost.example"],
-        expectations=[], timeout=1.0, resolver=resolver,
+        fqdn="node1.example",
+        peer_names=["node1.example", "ghost.example"],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
         hosts_path=_hosts(tmp_path, ""),
     )
     peers = [c for c in checks if c.label == "Peers"][0]
@@ -114,9 +132,12 @@ def test_a_peer_that_does_not_resolve_fails_the_summary(tmp_path):
 def test_expectation_with_matching_address_passes(tmp_path):
     resolver = _StubResolver(answers={("login.example.net", "A"): ["10.9.9.9"]})
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=[],
-        expectations=[("login.example.net", ["10.9.9.9"])], timeout=1.0,
-        resolver=resolver, hosts_path=_hosts(tmp_path, ""),
+        fqdn="node1.example",
+        peer_names=[],
+        expectations=[("login.example.net", ["10.9.9.9"])],
+        timeout=1.0,
+        resolver=resolver,
+        hosts_path=_hosts(tmp_path, ""),
     )
     check = [c for c in checks if c.label == "login.example.net"][0]
     assert check.ok is True
@@ -125,9 +146,12 @@ def test_expectation_with_matching_address_passes(tmp_path):
 def test_expectation_with_wrong_address_fails(tmp_path):
     resolver = _StubResolver(answers={("login.example.net", "A"): ["10.9.9.9"]})
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=[],
-        expectations=[("login.example.net", ["10.1.1.1"])], timeout=1.0,
-        resolver=resolver, hosts_path=_hosts(tmp_path, ""),
+        fqdn="node1.example",
+        peer_names=[],
+        expectations=[("login.example.net", ["10.1.1.1"])],
+        timeout=1.0,
+        resolver=resolver,
+        hosts_path=_hosts(tmp_path, ""),
     )
     check = [c for c in checks if c.label == "login.example.net"][0]
     assert check.ok is False
@@ -137,8 +161,11 @@ def test_expectation_with_wrong_address_fails(tmp_path):
 def test_hosts_file_diverging_from_dns_is_a_warning_not_a_failure(tmp_path):
     resolver = _StubResolver(answers={("node1.example", "A"): ["10.0.0.1"]})
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=["node1.example"], expectations=[],
-        timeout=1.0, resolver=resolver,
+        fqdn="node1.example",
+        peer_names=["node1.example"],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
         hosts_path=_hosts(tmp_path, "10.0.0.99 node1.example\n"),
     )
     hosts_check = [c for c in checks if c.label == "/etc/hosts"][0]
@@ -149,8 +176,11 @@ def test_hosts_file_diverging_from_dns_is_a_warning_not_a_failure(tmp_path):
 def test_hosts_file_agreeing_with_dns_passes(tmp_path):
     resolver = _StubResolver(answers={("node1.example", "A"): ["10.0.0.1"]})
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=["node1.example"], expectations=[],
-        timeout=1.0, resolver=resolver,
+        fqdn="node1.example",
+        peer_names=["node1.example"],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
         hosts_path=_hosts(tmp_path, "10.0.0.1 node1.example\n"),
     )
     hosts_check = [c for c in checks if c.label == "/etc/hosts"][0]
@@ -169,7 +199,11 @@ def test_collect_dns_never_raises_when_the_resolver_explodes(tmp_path):
             raise RuntimeError("resolver on fire")
 
     checks = dns_collector.collect_dns(
-        fqdn="node1.example", peer_names=["node1.example"], expectations=[],
-        timeout=1.0, resolver=_Broken(), hosts_path=_hosts(tmp_path, ""),
+        fqdn="node1.example",
+        peer_names=["node1.example"],
+        expectations=[],
+        timeout=1.0,
+        resolver=_Broken(),
+        hosts_path=_hosts(tmp_path, ""),
     )
     assert all(check.ok is not True for check in checks)

@@ -1,0 +1,20 @@
+---
+# Run with prek (a drop-in runner for this format) or pre-commit:
+#   prek install && prek run --all-files
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # The pre-rendered logos are half-block art: trailing spaces are pixels.
+        exclude: \.ans$
+      - id: end-of-file-fixer
+        exclude: \.ans$
+      - id: check-yaml
+      - id: check-toml

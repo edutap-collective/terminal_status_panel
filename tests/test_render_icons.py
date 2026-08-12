@@ -11,5 +11,7 @@ def test_both_renderers_use_the_shared_glyphs():
     assert (panels._OK, panels._WARN, panels._DEAD) == (icons.OK, icons.WARN, icons.DEAD)
     assert (health.OK, health.WARN, health.DEAD) == (icons.OK, icons.WARN, icons.DEAD)
     assert (health.UNKNOWN, health.TRUNCATED, health.FAILED) == (
-        icons.UNKNOWN, icons.TRUNCATED, icons.FAILED,
+        icons.UNKNOWN,
+        icons.TRUNCATED,
+        icons.FAILED,
     )

@@ -9,8 +9,19 @@ import psutil
 from ..model import FilesystemUsage, ResourceUsage
 
 PSEUDO_FSTYPES: set[str] = {
-    "tmpfs", "devtmpfs", "overlay", "squashfs", "proc", "sysfs", "devfs",
-    "autofs", "cgroup", "cgroup2", "mqueue", "debugfs", "tracefs",
+    "tmpfs",
+    "devtmpfs",
+    "overlay",
+    "squashfs",
+    "proc",
+    "sysfs",
+    "devfs",
+    "autofs",
+    "cgroup",
+    "cgroup2",
+    "mqueue",
+    "debugfs",
+    "tracefs",
 }
 
 #: On APFS the sealed system volume mounted at "/" and the writable data volume

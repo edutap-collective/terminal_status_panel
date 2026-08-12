@@ -33,7 +33,7 @@ def test_install_block_is_idempotent_and_uninstallable(tmp_path):
 
     install.apply("block", rc, ("full",))
     text = rc.read_text()
-    assert "export FOO=1" in text          # preserved existing content
+    assert "export FOO=1" in text  # preserved existing content
     assert "status-full" in text
     assert text.count(install._BEGIN) == 1
 

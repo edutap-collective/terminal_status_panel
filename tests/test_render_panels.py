@@ -26,9 +26,15 @@ def _text(renderable, width=100) -> str:
 
 
 def test_system_overview_shows_fields():
-    info = SystemInfo(hostname="srv01", os_name="Debian", os_version="12",
-                      kernel="6.1.0", uptime_seconds=90000, user="root",
-                      ip_addresses=["10.0.0.5"])
+    info = SystemInfo(
+        hostname="srv01",
+        os_name="Debian",
+        os_version="12",
+        kernel="6.1.0",
+        uptime_seconds=90000,
+        user="root",
+        ip_addresses=["10.0.0.5"],
+    )
     out = _text(panels.system_overview(info))
     assert "SYSTEM OVERVIEW" in out
     assert "srv01" in out
@@ -42,28 +48,40 @@ def test_system_overview_handles_none():
 
 
 def test_missing_os_identity_is_named_not_hidden():
-    info = SystemInfo(hostname="host", os_name=None, os_version=None,
-                      kernel="Linux 6.1.0", uptime_seconds=60, user="root")
+    info = SystemInfo(
+        hostname="host",
+        os_name=None,
+        os_version=None,
+        kernel="Linux 6.1.0",
+        uptime_seconds=60,
+        user="root",
+    )
     out = _text(panels.system_overview(info))
     assert "OS identity unavailable" in out
 
 
 def test_memory_panel_renders_bars():
     res = ResourceUsage(
-        mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
-        swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
+        mem_total=32_000_000_000,
+        mem_used=20_400_000_000,
+        mem_percent=64.0,
+        swap_total=8_000_000_000,
+        swap_used=600_000_000,
+        swap_percent=8.0,
     )
     out = _text(panels.memory_panel(res, Config()))
     assert "RAM" in out
     assert "SWAP" in out
-    assert "64" in out   # percent shown
-    assert "█" in out    # bar drawn
+    assert "64" in out  # percent shown
+    assert "█" in out  # bar drawn
 
 
 def test_load_panel_shows_per_core():
     res = ResourceUsage(
-        load_avg=(1.0, 0.7, 0.4), cpu_count=4,
-        cpu_percent=12.3, cpu_per_core=[8.1, 11.4, 6.2, 9.3],
+        load_avg=(1.0, 0.7, 0.4),
+        cpu_count=4,
+        cpu_percent=12.3,
+        cpu_per_core=[8.1, 11.4, 6.2, 9.3],
     )
     out = _text(panels.load_panel(res, Config()))
     assert "SYSTEM LOAD" in out
@@ -75,10 +93,12 @@ def test_load_panel_shows_per_core():
 
 
 def test_filesystem_panel_is_a_table():
-    res = ResourceUsage(filesystems=[
-        FilesystemUsage("/", 230_000_000_000, 210_000_000_000, 91.0),
-        FilesystemUsage("/data", 500_000_000_000, 120_000_000_000, 24.0),
-    ])
+    res = ResourceUsage(
+        filesystems=[
+            FilesystemUsage("/", 230_000_000_000, 210_000_000_000, 91.0),
+            FilesystemUsage("/data", 500_000_000_000, 120_000_000_000, 24.0),
+        ]
+    )
     out = _text(panels.filesystem_panel(res))
     assert "FILESYSTEM USAGE" in out
     assert "Size" in out
@@ -88,8 +108,9 @@ def test_filesystem_panel_is_a_table():
 
 
 def test_updates_panel_lists_counts():
-    out = _text(panels.updates_panel(UpdateInfo(supported=True, available=12,
-                                                security=5, standard=7)))
+    out = _text(
+        panels.updates_panel(UpdateInfo(supported=True, available=12, security=5, standard=7))
+    )
     assert "Available updates" in out
     assert "Security updates" in out
     assert "12" in out
@@ -104,37 +125,101 @@ def test_updates_panel_unsupported():
 def test_services_section_merges_per_node_replicas():
     N1, N2, N3 = "swarm01-mgr-01", "swarm01-wrk-01", "swarm01-wrk-02"
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=3,
-        nodes=[SwarmNode(N1, reachable=True, role="manager", leader=True),
-               SwarmNode(N2, reachable=True, role="worker"),
-               SwarmNode(N3, reachable=False, role="worker", state="down")],
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=3,
+        nodes=[
+            SwarmNode(N1, reachable=True, role="manager", leader=True),
+            SwarmNode(N2, reachable=True, role="worker"),
+            SwarmNode(N3, reachable=False, role="worker", state="down"),
+        ],
         services=[
             # One kafka service per node — must collapse to a single "kafka" row.
-            ServiceStatus(f"kafka_kafka-{N1}", 1, 1, stack="kafka", description="Kafka broker",
-                          tasks=[ServiceTask(N1, "running")]),
-            ServiceStatus(f"kafka_kafka-{N2}", 1, 1, stack="kafka", description="Kafka broker",
-                          tasks=[ServiceTask(N2, "running")]),
-            ServiceStatus(f"kafka_kafka-{N3}", 1, 1, stack="kafka", description="Kafka broker",
-                          tasks=[ServiceTask(N3, "failed")]),
+            ServiceStatus(
+                f"kafka_kafka-{N1}",
+                1,
+                1,
+                stack="kafka",
+                description="Kafka broker",
+                tasks=[ServiceTask(N1, "running")],
+            ),
+            ServiceStatus(
+                f"kafka_kafka-{N2}",
+                1,
+                1,
+                stack="kafka",
+                description="Kafka broker",
+                tasks=[ServiceTask(N2, "running")],
+            ),
+            ServiceStatus(
+                f"kafka_kafka-{N3}",
+                1,
+                1,
+                stack="kafka",
+                description="Kafka broker",
+                tasks=[ServiceTask(N3, "failed")],
+            ),
             # PostgreSQL: per-node pg replicas + a distinct monitor service.
-            ServiceStatus(f"PostgreSQL-18_pg-{N1}", 1, 1, stack="PostgreSQL-18",
-                          description="PG", tasks=[ServiceTask(N1, "running")]),
-            ServiceStatus(f"PostgreSQL-18_pg-{N2}", 1, 1, stack="PostgreSQL-18",
-                          description="PG", tasks=[ServiceTask(N2, "running")]),
-            ServiceStatus("PostgreSQL-18_pg-monitor", 1, 1, stack="PostgreSQL-18",
-                          description="PG monitor", tasks=[ServiceTask(N3, "running")]),
+            ServiceStatus(
+                f"PostgreSQL-18_pg-{N1}",
+                1,
+                1,
+                stack="PostgreSQL-18",
+                description="PG",
+                tasks=[ServiceTask(N1, "running")],
+            ),
+            ServiceStatus(
+                f"PostgreSQL-18_pg-{N2}",
+                1,
+                1,
+                stack="PostgreSQL-18",
+                description="PG",
+                tasks=[ServiceTask(N2, "running")],
+            ),
+            ServiceStatus(
+                "PostgreSQL-18_pg-monitor",
+                1,
+                1,
+                stack="PostgreSQL-18",
+                description="PG monitor",
+                tasks=[ServiceTask(N3, "running")],
+            ),
             # traefik: two distinct services.
-            ServiceStatus("traefik_sockproxy", 1, 1, stack="traefik",
-                          description="socket proxy", tasks=[ServiceTask(N1, "running")]),
-            ServiceStatus("traefik_traefik", 3, 3, stack="traefik", description="ingress",
-                          tasks=[ServiceTask(N1, "running"), ServiceTask(N2, "running"),
-                                 ServiceTask(N3, "running")]),
-            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="eduTAP frontend",
-                          tasks=[ServiceTask(N1, "running")]),
-            ServiceStatus("registry", 1, 1, description="Docker registry",
-                          tasks=[ServiceTask(N2, "running")]),
-            ServiceStatus("watchtower", 1, 1, description="Auto-update",
-                          tasks=[ServiceTask(N3, "running")]),
+            ServiceStatus(
+                "traefik_sockproxy",
+                1,
+                1,
+                stack="traefik",
+                description="socket proxy",
+                tasks=[ServiceTask(N1, "running")],
+            ),
+            ServiceStatus(
+                "traefik_traefik",
+                3,
+                3,
+                stack="traefik",
+                description="ingress",
+                tasks=[
+                    ServiceTask(N1, "running"),
+                    ServiceTask(N2, "running"),
+                    ServiceTask(N3, "running"),
+                ],
+            ),
+            ServiceStatus(
+                "eduTAP_web",
+                1,
+                1,
+                stack="eduTAP",
+                description="eduTAP frontend",
+                tasks=[ServiceTask(N1, "running")],
+            ),
+            ServiceStatus(
+                "registry", 1, 1, description="Docker registry", tasks=[ServiceTask(N2, "running")]
+            ),
+            ServiceStatus(
+                "watchtower", 1, 1, description="Auto-update", tasks=[ServiceTask(N3, "running")]
+            ),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -175,17 +260,34 @@ def _swarm_with_origins(services=(), containers=(), nodes=None) -> SwarmInfo:
     each other as module-level definitions.
     """
     return SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
-        services=list(services), containers=list(containers),
-        nodes=list(nodes or [SwarmNode(name="node-01", reachable=True,
-                                       role="manager", leader=True,
-                                       state="ready", availability="active")]),
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
+        services=list(services),
+        containers=list(containers),
+        nodes=list(
+            nodes
+            or [
+                SwarmNode(
+                    name="node-01",
+                    reachable=True,
+                    role="manager",
+                    leader=True,
+                    state="ready",
+                    availability="active",
+                )
+            ]
+        ),
     )
 
 
 def _origin_status(name, stack=None, running=1, desired=1, node="node-01") -> ServiceStatus:
     return ServiceStatus(
-        name=name, running_replicas=running, desired_replicas=desired, stack=stack,
+        name=name,
+        running_replicas=running,
+        desired_replicas=desired,
+        stack=stack,
         tasks=[ServiceTask(node=node, state="running")] * running,
     )
 
@@ -219,7 +321,7 @@ def test_an_empty_compose_block_is_omitted_entirely():
 
 
 def test_an_empty_category_inside_a_present_block_keeps_its_placeholder():
-    """"Swarm is running but has no infrastructure" is a statement."""
+    """ "Swarm is running but has no infrastructure" is a statement."""
     swarm = _swarm_with_origins(services=[_origin_status("api", stack="backend")])
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "Infrastructure" in out
@@ -261,8 +363,9 @@ def test_an_infrastructure_shaped_stackless_entry_claims_no_project():
 
 
 def test_the_summary_counts_containers_without_calling_them_services():
-    swarm = _swarm_with_origins(containers=[_origin_status("web", stack="portal"),
-                                            _origin_status("db", stack="portal")])
+    swarm = _swarm_with_origins(
+        containers=[_origin_status("web", stack="portal"), _origin_status("db", stack="portal")]
+    )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "0 services" in out
     assert "2 containers" in out
@@ -271,14 +374,23 @@ def test_the_summary_counts_containers_without_calling_them_services():
 def _mixed_availability_swarm() -> SwarmInfo:
     """One active, one drained, one down node — no services."""
     return SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=3,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=3,
         nodes=[
-            SwarmNode("srv-01", reachable=True, role="manager", leader=True,
-                      state="ready", availability="active"),
-            SwarmNode("srv-02", reachable=True, role="worker",
-                      state="ready", availability="drain"),
-            SwarmNode("srv-03", reachable=False, role="worker",
-                      state="down", availability="active"),
+            SwarmNode(
+                "srv-01",
+                reachable=True,
+                role="manager",
+                leader=True,
+                state="ready",
+                availability="active",
+            ),
+            SwarmNode("srv-02", reachable=True, role="worker", state="ready", availability="drain"),
+            SwarmNode(
+                "srv-03", reachable=False, role="worker", state="down", availability="active"
+            ),
         ],
     )
 
@@ -300,9 +412,14 @@ def test_swarm_summary_counts_unavailable_nodes():
 
 def test_swarm_summary_omits_capacity_note_when_all_nodes_are_active():
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=2,
-        nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active"),
-               SwarmNode("srv-02", reachable=True, state="ready", availability="active")],
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=2,
+        nodes=[
+            SwarmNode("srv-01", reachable=True, state="ready", availability="active"),
+            SwarmNode("srv-02", reachable=True, state="ready", availability="active"),
+        ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "2 nodes  ·" in out
@@ -314,7 +431,10 @@ def test_node_with_empty_availability_falls_back_to_unavailable():
     # "" not in (None, "active") — this pins the same fallback _node_capacity
     # already applies, so both read "unavailable" instead of a blank label.
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-09", reachable=True, state="ready", availability="")],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -331,31 +451,72 @@ def _line_index(out: str, predicate) -> int:
 def test_infra_uis_are_grouped_into_a_pseudo_stack():
     N1, N2 = "srv-01", "srv-02"
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=2,
-        nodes=[SwarmNode(N1, reachable=True, state="ready", availability="active"),
-               SwarmNode(N2, reachable=True, state="ready", availability="active")],
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=2,
+        nodes=[
+            SwarmNode(N1, reachable=True, state="ready", availability="active"),
+            SwarmNode(N2, reachable=True, state="ready", availability="active"),
+        ],
         services=[
-            ServiceStatus("kafka_kafka", 1, 1, stack="kafka", description="Broker",
-                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(
+                "kafka_kafka",
+                1,
+                1,
+                stack="kafka",
+                description="Broker",
+                tasks=[ServiceTask(N1, "running")],
+            ),
             # A UI living inside a real stack must leave that stack.
-            ServiceStatus("kafka_kafbat-ui", 1, 1, stack="kafka", description="Kafka UI",
-                          tasks=[ServiceTask(N2, "running")]),
+            ServiceStatus(
+                "kafka_kafbat-ui",
+                1,
+                1,
+                stack="kafka",
+                description="Kafka UI",
+                tasks=[ServiceTask(N2, "running")],
+            ),
             # A UI deployed as its own stack.
-            ServiceStatus("cloudbeaver_cloudbeaver", 1, 1, stack="cloudbeaver",
-                          description="SQL UI", tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(
+                "cloudbeaver_cloudbeaver",
+                1,
+                1,
+                stack="cloudbeaver",
+                description="SQL UI",
+                tasks=[ServiceTask(N1, "running")],
+            ),
             # A UI deployed as its own single-service Compose stack -- the
             # normal shape a Compose UI takes, and the case this hoisting
             # must cover. (A genuinely stackless container is covered
             # separately by test_a_stackless_admin_ui_claims_no_project,
             # which must NOT be hoisted here.)
-            ServiceStatus("mongo-express", 1, 1, stack="mongo-express",
-                          description="Mongo UI", tasks=[ServiceTask(N1, "running")]),
-            ServiceStatus("eduTAP_web", 1, 1, stack="eduTAP", description="frontend",
-                          tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(
+                "mongo-express",
+                1,
+                1,
+                stack="mongo-express",
+                description="Mongo UI",
+                tasks=[ServiceTask(N1, "running")],
+            ),
+            ServiceStatus(
+                "eduTAP_web",
+                1,
+                1,
+                stack="eduTAP",
+                description="frontend",
+                tasks=[ServiceTask(N1, "running")],
+            ),
             # A real infrastructure stack that sorts alphabetically before
             # 'infra-uis' — the pseudo stack must still come first.
-            ServiceStatus("elasticsearch_es", 1, 1, stack="elasticsearch",
-                          description="Search", tasks=[ServiceTask(N1, "running")]),
+            ServiceStatus(
+                "elasticsearch_es",
+                1,
+                1,
+                stack="elasticsearch",
+                description="Search",
+                tasks=[ServiceTask(N1, "running")],
+            ),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -389,11 +550,21 @@ def test_infra_uis_are_grouped_into_a_pseudo_stack():
 def test_single_infra_ui_keeps_its_own_name():
     """The Compose case: a UI deployed as its own single-service stack."""
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[ServiceStatus("mongo-express", 1, 1, stack="mongo-express",
-                                description="Mongo UI",
-                                tasks=[ServiceTask("srv-01", "running")])],
+        services=[
+            ServiceStatus(
+                "mongo-express",
+                1,
+                1,
+                stack="mongo-express",
+                description="Mongo UI",
+                tasks=[ServiceTask("srv-01", "running")],
+            )
+        ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     # Not collapsed to a single row labelled 'infra-uis' — the UI stays named.
@@ -429,13 +600,23 @@ def test_infra_ui_services_win_over_infrastructure_stacks():
     the 'infra-uis' pseudo stack instead of becoming its own top-level
     infrastructure stack."""
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus("kafka-ui_kafka-ui", 1, 1, stack="kafka-ui",
-                          description="Kafka UI", tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("mongodb_mongodb", 1, 1, stack="mongodb",
-                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus(
+                "kafka-ui_kafka-ui",
+                1,
+                1,
+                stack="kafka-ui",
+                description="Kafka UI",
+                tasks=[ServiceTask("srv-01", "running")],
+            ),
+            ServiceStatus(
+                "mongodb_mongodb", 1, 1, stack="mongodb", tasks=[ServiceTask("srv-01", "running")]
+            ),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -453,30 +634,52 @@ def test_ui_sidecar_keeps_its_stack_for_attribution():
     the 'kafka-ui' UI key) keeps 'stack/service' as its label — the UI itself
     still renders under its plain, unqualified name."""
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus("kafka-ui_kafka-ui", 1, 1, stack="kafka-ui",
-                          description="Kafka UI", tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("kafka-ui_agent", 1, 1, stack="kafka-ui",
-                          description="Kafka UI sidecar", tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus(
+                "kafka-ui_kafka-ui",
+                1,
+                1,
+                stack="kafka-ui",
+                description="Kafka UI",
+                tasks=[ServiceTask("srv-01", "running")],
+            ),
+            ServiceStatus(
+                "kafka-ui_agent",
+                1,
+                1,
+                stack="kafka-ui",
+                description="Kafka UI sidecar",
+                tasks=[ServiceTask("srv-01", "running")],
+            ),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "kafka-ui/agent" in out
     # The UI row itself stays plain, not qualified as 'kafka-ui/kafka-ui'.
     lines = out.splitlines()
-    ui_line = next(ln for ln in lines if ln.strip().startswith("kafka-ui") and
-                   "kafka-ui/agent" not in ln)
+    ui_line = next(
+        ln for ln in lines if ln.strip().startswith("kafka-ui") and "kafka-ui/agent" not in ln
+    )
     assert "kafka-ui/kafka-ui" not in ui_line
 
 
 def test_no_infra_uis_row_without_matching_services():
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[ServiceStatus("kafka_kafka", 1, 1, stack="kafka",
-                                tasks=[ServiceTask("srv-01", "running")])],
+        services=[
+            ServiceStatus(
+                "kafka_kafka", 1, 1, stack="kafka", tasks=[ServiceTask("srv-01", "running")]
+            )
+        ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert "infra-uis" not in out
@@ -484,11 +687,13 @@ def test_no_infra_uis_row_without_matching_services():
 
 def test_the_matrix_has_a_working_column():
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus("app_web", 3, 3, stack="app",
-                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus("app_web", 3, 3, stack="app", tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -499,7 +704,10 @@ def test_the_matrix_has_a_working_column():
 def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
     """Nine such rows render blank today — the outage is invisible."""
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[ServiceStatus("mystack_admin_backend", 0, 3, stack="mystack")],
     )
@@ -509,7 +717,10 @@ def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
 
 def test_a_service_scaled_to_zero_is_not_marked_dead():
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[ServiceStatus("app_paused", 0, 0, stack="app")],
     )
@@ -520,23 +731,36 @@ def test_a_service_scaled_to_zero_is_not_marked_dead():
 
 def test_the_kafka_row_follows_the_cluster_verdict_not_the_replicas():
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
-                                tasks=[ServiceTask("srv-01", "running")])],
+        services=[
+            ServiceStatus(
+                "kafka_kafka-srv-01", 5, 5, stack="kafka", tasks=[ServiceTask("srv-01", "running")]
+            )
+        ],
     )
-    health = HealthInfo(clusters_probed=True,
-                        clusters=[ClusterService(kind="kafka", quorum_ok=False)])
+    health = HealthInfo(
+        clusters_probed=True, clusters=[ClusterService(kind="kafka", quorum_ok=False)]
+    )
     out = _text(panels.services_section(swarm, Config(), health), width=170)
     assert f"{icons.DEAD} 5/5" in out
 
 
 def test_without_health_a_clustered_service_is_not_observable():
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
-        services=[ServiceStatus("kafka_kafka-srv-01", 5, 5, stack="kafka",
-                                tasks=[ServiceTask("srv-01", "running")])],
+        services=[
+            ServiceStatus(
+                "kafka_kafka-srv-01", 5, 5, stack="kafka", tasks=[ServiceTask("srv-01", "running")]
+            )
+        ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     assert f"{icons.UNKNOWN} 5/5" in out
@@ -549,8 +773,14 @@ def _five_node_swarm_with_one_drained(services) -> SwarmInfo:
         for i in range(1, 5)
     ]
     nodes.append(SwarmNode("srv-05", reachable=True, state="ready", availability="drain"))
-    return SwarmInfo(reachable=True, enabled=True, node_role="manager", node_count=5,
-                     nodes=nodes, services=services)
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=5,
+        nodes=nodes,
+        services=services,
+    )
 
 
 def test_a_global_service_counts_the_tasks_swarm_scheduled():
@@ -558,23 +788,31 @@ def test_a_global_service_counts_the_tasks_swarm_scheduled():
     against every node would claim a degradation nobody measured — while
     ``docker service ls`` reads a contented 4/4."""
     traefik = ServiceStatus(
-        "traefik_traefik", 4, None, stack="traefik",
+        "traefik_traefik",
+        4,
+        None,
+        stack="traefik",
         tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 5)],
     )
-    out = _text(panels.services_section(
-        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
+    out = _text(
+        panels.services_section(_five_node_swarm_with_one_drained([traefik]), Config()), width=170
+    )
     assert f"{icons.OK} 4/4" in out
     assert f"{icons.WARN} 4/5" not in out
 
 
 def test_a_global_service_missing_a_task_is_still_degraded():
     traefik = ServiceStatus(
-        "traefik_traefik", 3, None, stack="traefik",
+        "traefik_traefik",
+        3,
+        None,
+        stack="traefik",
         tasks=[ServiceTask(f"srv-0{i}", "running") for i in range(1, 4)]
-             + [ServiceTask("srv-04", "failed")],
+        + [ServiceTask("srv-04", "failed")],
     )
-    out = _text(panels.services_section(
-        _five_node_swarm_with_one_drained([traefik]), Config()), width=170)
+    out = _text(
+        panels.services_section(_five_node_swarm_with_one_drained([traefik]), Config()), width=170
+    )
     assert f"{icons.WARN} 3/4" in out
 
 
@@ -582,7 +820,11 @@ def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
     """``_node_map`` swallows a failed node listing, so an empty node list next
     to a non-zero node_count is reachable — and '/0' would be a lie."""
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=4, nodes=[],
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=4,
+        nodes=[],
         services=[ServiceStatus("traefik_traefik", 4, None, stack="traefik")],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -592,8 +834,14 @@ def test_a_global_row_without_tasks_falls_back_to_the_reported_node_count():
 
 def _tasks(*states):
     """One ServiceStatus holding tasks on node 'srv-01' with the given states."""
-    return [ServiceStatus("svc", sum(s == "running" for s in states), len(states),
-                          tasks=[ServiceTask("srv-01", s) for s in states])]
+    return [
+        ServiceStatus(
+            "svc",
+            sum(s == "running" for s in states),
+            len(states),
+            tasks=[ServiceTask("srv-01", s) for s in states],
+        )
+    ]
 
 
 def test_a_single_running_task_still_renders_the_bare_glyph():
@@ -640,10 +888,7 @@ NODES = ["swarm01-mgr-01", "swarm01-wrk-01"]
 
 
 def test_an_ordinal_suffix_is_stripped():
-    assert (
-        panels._base_service_name("mystack_connector_1", NODES)
-        == "mystack_connector"
-    )
+    assert panels._base_service_name("mystack_connector_1", NODES) == "mystack_connector"
 
 
 def test_ordinal_stripping_survives_more_than_one_digit():
@@ -679,16 +924,28 @@ def test_ordinal_instances_collapse_into_one_row():
     stack-named row — that single-service collapse is a distinct, pre-existing
     case with its own tests."""
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=3,
-        nodes=[SwarmNode(n, reachable=True, state="ready", availability="active")
-               for n in ("srv-01", "srv-02", "srv-03")],
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=3,
+        nodes=[
+            SwarmNode(n, reachable=True, state="ready", availability="active")
+            for n in ("srv-01", "srv-02", "srv-03")
+        ],
         services=[
-            ServiceStatus(f"mystack_connector_{i}", 1, 1, stack="mystack",
-                          tasks=[ServiceTask(f"srv-0{i}", "running")])
+            ServiceStatus(
+                f"mystack_connector_{i}",
+                1,
+                1,
+                stack="mystack",
+                tasks=[ServiceTask(f"srv-0{i}", "running")],
+            )
             for i in (1, 2, 3)
-        ] + [
-            ServiceStatus("mystack_web", 1, 1, stack="mystack",
-                          tasks=[ServiceTask("srv-01", "running")]),
+        ]
+        + [
+            ServiceStatus(
+                "mystack_web", 1, 1, stack="mystack", tasks=[ServiceTask("srv-01", "running")]
+            ),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -701,14 +958,21 @@ def test_ordinal_instances_collapse_into_one_row():
 
 def test_bugsink_is_infrastructure():
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_role="manager", node_count=1,
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
         nodes=[SwarmNode("srv-01", reachable=True, state="ready", availability="active")],
         services=[
-            ServiceStatus("bugsink_bugsink", 1, 1, stack="bugsink",
-                          description="Bugsink (error tracker)",
-                          tasks=[ServiceTask("srv-01", "running")]),
-            ServiceStatus("app_web", 1, 1, stack="app",
-                          tasks=[ServiceTask("srv-01", "running")]),
+            ServiceStatus(
+                "bugsink_bugsink",
+                1,
+                1,
+                stack="bugsink",
+                description="Bugsink (error tracker)",
+                tasks=[ServiceTask("srv-01", "running")],
+            ),
+            ServiceStatus("app_web", 1, 1, stack="app", tasks=[ServiceTask("srv-01", "running")]),
         ],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
@@ -744,8 +1008,12 @@ def _swarm_with(node_name, reachable):
         node_role="manager",
         nodes=[
             SwarmNode(name="node-a", reachable=True, state="ready", availability="active"),
-            SwarmNode(name=node_name, reachable=reachable,
-                      state="ready" if reachable else "down", availability="active"),
+            SwarmNode(
+                name=node_name,
+                reachable=reachable,
+                state="ready" if reachable else "down",
+                availability="active",
+            ),
         ],
     )
 
@@ -757,8 +1025,7 @@ def _peer(name, ok, **kw):
 def test_down_node_without_handshake_points_at_the_network():
     swarm = _swarm_with("node-c", reachable=False)
     health = HealthInfo(
-        peers=[_peer("wg-node-c.example.net", False, detail="never",
-                     rx_bytes=0, tx_bytes=174080)],
+        peers=[_peer("wg-node-c.example.net", False, detail="never", rx_bytes=0, tx_bytes=174080)],
         peers_probed=True,
     )
     output = _text(panels.services_section(swarm, Config(), health))
@@ -768,8 +1035,7 @@ def test_down_node_without_handshake_points_at_the_network():
 def test_down_node_with_healthy_tunnel_points_at_docker():
     swarm = _swarm_with("node-c", reachable=False)
     health = HealthInfo(
-        peers=[_peer("wg-node-c.example.net", True, detail="0:10",
-                     rx_bytes=1024, tx_bytes=2048)],
+        peers=[_peer("wg-node-c.example.net", True, detail="0:10", rx_bytes=1024, tx_bytes=2048)],
         peers_probed=True,
     )
     output = _text(panels.services_section(swarm, Config(), health))
@@ -779,8 +1045,9 @@ def test_down_node_with_healthy_tunnel_points_at_docker():
 def test_healthy_node_gets_no_annotation():
     """The line is crowded. The note appears only where it explains something."""
     swarm = _swarm_with("node-c", reachable=True)
-    health = HealthInfo(peers=[_peer("wg-node-c.example.net", True, detail="0:10")],
-                        peers_probed=True)
+    health = HealthInfo(
+        peers=[_peer("wg-node-c.example.net", True, detail="0:10")], peers_probed=True
+    )
     output = _text(panels.services_section(swarm, Config(), health))
     assert "wg:" not in output
 
@@ -809,8 +1076,7 @@ def test_stale_handshake_is_not_reported_as_none():
     the wrong word for one that merely aged out."""
     swarm = _swarm_with("node-c", reachable=False)
     health = HealthInfo(
-        peers=[_peer("wg-node-c.example.net", False, detail="5:00",
-                     rx_bytes=1024, tx_bytes=2048)],
+        peers=[_peer("wg-node-c.example.net", False, detail="5:00", rx_bytes=1024, tx_bytes=2048)],
         peers_probed=True,
     )
     output = _text(panels.services_section(swarm, Config(), health))
@@ -819,9 +1085,14 @@ def test_stale_handshake_is_not_reported_as_none():
 
 
 def test_long_address_lists_are_capped_with_a_visible_remainder():
-    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
-                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
-                      ip_addresses=[f"10.0.0.{n}" for n in range(101, 113)])
+    info = SystemInfo(
+        hostname="host",
+        os_name="Debian GNU/Linux 12",
+        kernel="Linux 6.1.0",
+        uptime_seconds=60,
+        user="root",
+        ip_addresses=[f"10.0.0.{n}" for n in range(101, 113)],
+    )
     out = _text(panels.system_overview(info), width=200)
     assert "10.0.0.108" in out
     assert "10.0.0.109" not in out
@@ -829,9 +1100,14 @@ def test_long_address_lists_are_capped_with_a_visible_remainder():
 
 
 def test_short_address_lists_show_no_remainder():
-    info = SystemInfo(hostname="host", os_name="Debian GNU/Linux 12",
-                      kernel="Linux 6.1.0", uptime_seconds=60, user="root",
-                      ip_addresses=["10.0.0.1", "10.0.0.2"])
+    info = SystemInfo(
+        hostname="host",
+        os_name="Debian GNU/Linux 12",
+        kernel="Linux 6.1.0",
+        uptime_seconds=60,
+        user="root",
+        ip_addresses=["10.0.0.1", "10.0.0.2"],
+    )
     out = _text(panels.system_overview(info), width=200)
     assert "more)" not in out
 
@@ -857,8 +1133,12 @@ def test_short_mount_handles_width_one():
 
 def _fs_regression_resource() -> ResourceUsage:
     return ResourceUsage(
-        mem_total=32_000_000_000, mem_used=20_400_000_000, mem_percent=64.0,
-        swap_total=8_000_000_000, swap_used=600_000_000, swap_percent=8.0,
+        mem_total=32_000_000_000,
+        mem_used=20_400_000_000,
+        mem_percent=64.0,
+        swap_total=8_000_000_000,
+        swap_used=600_000_000,
+        swap_percent=8.0,
         filesystems=[
             # total=950.0 GB, used=850.0 GB, avail=total-used=100.0 GB
             FilesystemUsage("/", 1_020_054_732_800, 912_680_550_400, 89.0),
@@ -917,7 +1197,7 @@ def test_filesystem_numeric_columns_survive_a_narrow_terminal():
     disappear instead of taking space from them.
     """
     out = _text(panels.system_status(_fs_regression_resource(), Config()), width=80)
-    fs_block = out[out.index("FILESYSTEM USAGE"):]
+    fs_block = out[out.index("FILESYSTEM USAGE") :]
 
     # No mid-number cut, e.g. "926…": the fixed columns render exactly as
     # they did before the bar existed, wrapped onto extra lines rather than
@@ -939,7 +1219,7 @@ def test_filesystem_usage_bar_reappears_on_a_wide_terminal():
     that gets to squeeze them.
     """
     out = _text(panels.system_status(_fs_regression_resource(), Config()), width=215)
-    fs_block = out[out.index("FILESYSTEM USAGE"):]
+    fs_block = out[out.index("FILESYSTEM USAGE") :]
 
     assert "950.0 GB" in fs_block
     assert "850.0 GB" in fs_block
@@ -973,7 +1253,7 @@ def test_filesystem_usage_bar_is_capped_to_the_memory_bar_width():
     cover.
     """
     out = _text(panels.system_status(_fs_regression_resource(), Config()), width=215)
-    fs_block = out[out.index("FILESYSTEM USAGE"):]
+    fs_block = out[out.index("FILESYSTEM USAGE") :]
 
     bar_lines = [line for line in fs_block.splitlines() if "█" in line or "░" in line]
     assert len(bar_lines) == 2
@@ -986,9 +1266,16 @@ def test_filesystem_usage_bar_is_capped_to_the_memory_bar_width():
 # TOP CPU / TOP RAM row
 # --------------------------------------------------------------------------- #
 
+
 def _render_status(**kwargs) -> str:
-    res = ResourceUsage(mem_total=8 * 1024**3, mem_used=1024**3, mem_percent=12.5,
-                        load_avg=(0.5, 0.4, 0.3), cpu_count=4, cpu_percent=10.0)
+    res = ResourceUsage(
+        mem_total=8 * 1024**3,
+        mem_used=1024**3,
+        mem_percent=12.5,
+        load_avg=(0.5, 0.4, 0.3),
+        cpu_count=4,
+        cpu_percent=10.0,
+    )
     console = Console(width=200, force_terminal=False, color_system=None)
     with console.capture() as capture:
         console.print(system_status(res, Config(), **kwargs))
@@ -998,14 +1285,29 @@ def _render_status(**kwargs) -> str:
 def _snapshot():
     return ProcessSnapshot(
         top_cpu=[
-            ProcessInfo(pid=7372, name="pg_autoctl", cpu_percent=22.3,
-                        memory_percent=0.0, origin="container e23ce43dcbe0"),
-            ProcessInfo(pid=1920, name="glusterfsd", cpu_percent=19.1,
-                        memory_percent=0.1, origin="glusterd.service"),
+            ProcessInfo(
+                pid=7372,
+                name="pg_autoctl",
+                cpu_percent=22.3,
+                memory_percent=0.0,
+                origin="container e23ce43dcbe0",
+            ),
+            ProcessInfo(
+                pid=1920,
+                name="glusterfsd",
+                cpu_percent=19.1,
+                memory_percent=0.1,
+                origin="glusterd.service",
+            ),
         ],
         top_memory=[
-            ProcessInfo(pid=1079456, name="java", cpu_percent=0.0,
-                        memory_percent=7.0, origin="container efc841ba0f44"),
+            ProcessInfo(
+                pid=1079456,
+                name="java",
+                cpu_percent=0.0,
+                memory_percent=7.0,
+                origin="container efc841ba0f44",
+            ),
         ],
         sampled=0.3,
     )
@@ -1018,8 +1320,9 @@ def test_the_column_labels_are_english():
 
 
 def test_a_known_container_shows_its_service_name():
-    out = _render_status(processes=_snapshot(),
-                         origins={"e23ce43dcbe0feef12bc0199df6bf45d": "pg_pg-monitor"})
+    out = _render_status(
+        processes=_snapshot(), origins={"e23ce43dcbe0feef12bc0199df6bf45d": "pg_pg-monitor"}
+    )
     assert "pg_pg-monitor" in out
 
 
@@ -1048,9 +1351,11 @@ def test_a_service_name_wider_than_its_column_is_truncated():
     than left to push the row out of alignment.
     """
     long_name = "a" * 39 + ".service"  # a plain systemd unit, 47 characters
-    snapshot = ProcessSnapshot(top_memory=[
-        ProcessInfo(pid=4242, name="hog", memory_percent=3.0, origin=long_name),
-    ])
+    snapshot = ProcessSnapshot(
+        top_memory=[
+            ProcessInfo(pid=4242, name="hog", memory_percent=3.0, origin=long_name),
+        ]
+    )
     out = _render_status(processes=snapshot)
     assert long_name not in out
     truncated = long_name[: panels._SERVICE_WIDTH - 1] + "…"
@@ -1068,9 +1373,11 @@ def test_a_service_name_wider_than_its_column_is_truncated():
 def test_a_service_name_exactly_at_the_column_width_is_not_truncated():
     exact_name = "b" * 14 + ".service"  # precisely _SERVICE_WIDTH characters
     assert len(exact_name) == panels._SERVICE_WIDTH
-    snapshot = ProcessSnapshot(top_memory=[
-        ProcessInfo(pid=99, name="proc", memory_percent=1.0, origin=exact_name),
-    ])
+    snapshot = ProcessSnapshot(
+        top_memory=[
+            ProcessInfo(pid=99, name="proc", memory_percent=1.0, origin=exact_name),
+        ]
+    )
     out = _render_status(processes=snapshot)
     assert exact_name in out
     assert "…" not in out
@@ -1082,8 +1389,7 @@ def test_the_sampled_window_is_shown_in_the_heading():
 
 
 def test_a_disabled_cpu_sample_shows_only_the_memory_list():
-    snapshot = ProcessSnapshot(top_cpu=[], top_memory=_snapshot().top_memory,
-                               sampled=0.0)
+    snapshot = ProcessSnapshot(top_cpu=[], top_memory=_snapshot().top_memory, sampled=0.0)
     out = _render_status(processes=snapshot)
     assert "TOP RAM" in out
     assert "CPU sampling is off" in out
@@ -1110,11 +1416,10 @@ def test_an_empty_snapshot_says_so_rather_than_showing_nothing():
 
 def test_the_memory_column_is_shown_in_bytes():
     snapshot = ProcessSnapshot(
-        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0,
-                            memory_percent=0.0)],
-        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0,
-                                memory_bytes=2 * 1024**3)],
-        sampled=0.3)
+        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0, memory_percent=0.0)],
+        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0, memory_bytes=2 * 1024**3)],
+        sampled=0.3,
+    )
     out = _render_status(processes=snapshot)
     # Not `"MEM" in out`: `%MEM` already contains the substring "MEM", so that
     # assertion passes even without the new column. The header word list is
@@ -1134,7 +1439,8 @@ def test_an_absent_memory_figure_shows_the_dash_not_n_a():
     combined line would pick up the wrong table's cells.
     """
     table = panels._process_table(
-        [ProcessInfo(pid=1, name="app", memory_percent=None, memory_bytes=None)], None,
+        [ProcessInfo(pid=1, name="app", memory_percent=None, memory_bytes=None)],
+        None,
     )
     out = _text(table, width=100)
     line = next(line for line in out.splitlines() if "app" in line)
@@ -1151,11 +1457,10 @@ def test_the_column_labels_are_english_and_in_order():
     """Split rather than searched: `%MEM` contains `MEM`, so `str.index` would
     find the wrong one and the order would pass however it was arranged."""
     snapshot = ProcessSnapshot(
-        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0,
-                            memory_percent=0.0)],
-        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0,
-                                memory_bytes=1024)],
-        sampled=0.3)
+        top_cpu=[ProcessInfo(pid=1, name="test", cpu_percent=0.0, memory_percent=0.0)],
+        top_memory=[ProcessInfo(pid=1, name="app", memory_percent=7.0, memory_bytes=1024)],
+        sampled=0.3,
+    )
     out = _render_status(processes=snapshot)
     header = next(line for line in out.splitlines() if "%CPU" in line and "MEM" in line)
     # Two lists sit side by side, so the header carries both sets of labels.
@@ -1173,9 +1478,16 @@ def test_the_column_labels_are_english_and_in_order():
 # breaks the numeric columns instead of the columns this panel means to give
 # way (`SERVICE`, `PROCESS`). These tests render at their own explicit widths.
 
+
 def _render_status_at(width: int, **kwargs) -> str:
-    res = ResourceUsage(mem_total=8 * 1024**3, mem_used=1024**3, mem_percent=12.5,
-                        load_avg=(0.5, 0.4, 0.3), cpu_count=4, cpu_percent=10.0)
+    res = ResourceUsage(
+        mem_total=8 * 1024**3,
+        mem_used=1024**3,
+        mem_percent=12.5,
+        load_avg=(0.5, 0.4, 0.3),
+        cpu_count=4,
+        cpu_percent=10.0,
+    )
     console = Console(width=width, force_terminal=False, color_system=None)
     with console.capture() as capture:
         console.print(system_status(res, Config(), **kwargs))
@@ -1189,14 +1501,32 @@ def _wide_snapshot() -> ProcessSnapshot:
     across two lines, a PID truncated to `1079…`)."""
     return ProcessSnapshot(
         top_cpu=[
-            ProcessInfo(pid=3708, name="dockerd", cpu_percent=0.5, memory_percent=1.0,
-                        memory_bytes=int(128.5 * 1024**2), origin="containerd.service"),
-            ProcessInfo(pid=1920, name="glusterfsd", cpu_percent=19.1, memory_percent=0.1,
-                        memory_bytes=45 * 1024**2, origin="glusterd.service"),
+            ProcessInfo(
+                pid=3708,
+                name="dockerd",
+                cpu_percent=0.5,
+                memory_percent=1.0,
+                memory_bytes=int(128.5 * 1024**2),
+                origin="containerd.service",
+            ),
+            ProcessInfo(
+                pid=1920,
+                name="glusterfsd",
+                cpu_percent=19.1,
+                memory_percent=0.1,
+                memory_bytes=45 * 1024**2,
+                origin="glusterd.service",
+            ),
         ],
         top_memory=[
-            ProcessInfo(pid=1079456, name="java", cpu_percent=0.0, memory_percent=7.0,
-                        memory_bytes=2 * 1024**3, origin="container efc841ba0f44"),
+            ProcessInfo(
+                pid=1079456,
+                name="java",
+                cpu_percent=0.0,
+                memory_percent=7.0,
+                memory_bytes=2 * 1024**3,
+                origin="container efc841ba0f44",
+            ),
         ],
         sampled=0.3,
     )
@@ -1225,7 +1555,7 @@ def test_process_lists_stack_when_they_do_not_fit():
     assert "TOP RAM" not in header  # stacked, not side by side -- own heading
 
     assert "128.5 MB" in out  # not "128…" with "MB" wrapped onto its own line
-    assert "1079456" in out   # not "1079…" or "456…"
+    assert "1079456" in out  # not "1079…" or "456…"
     assert "456…" not in out
     assert not any(line.strip() == "MB" for line in out.splitlines())
 
@@ -1241,8 +1571,12 @@ def test_process_lists_stack_when_they_do_not_fit():
 
 def _job_service(schedule="0 5 * * *", description=None):
     return ServiceStatus(
-        name="nightly", running_replicas=0, desired_replicas=1,
-        job=True, schedule=schedule, description=description,
+        name="nightly",
+        running_replicas=0,
+        desired_replicas=1,
+        job=True,
+        schedule=schedule,
+        description=description,
     )
 
 
@@ -1262,3 +1596,41 @@ def test_a_job_without_a_schedule_keeps_its_description():
     services = [_job_service(schedule=None, description="migration")]
 
     assert panels._group_desc(services) == "migration"
+
+
+def test_the_swarm_cronjob_controller_counts_as_infrastructure():
+    """The thing that *drives* the jobs is infrastructure, not an application.
+
+    It carries no data and serves no user; it scales other services up on a
+    schedule. Filed under Services it would sit among the very jobs it
+    triggers, where a reader asking "why did nothing run last night" would not
+    think to look.
+    """
+    controller = _origin_status("app", stack="swarm-cronjob")
+
+    infra, service, _ = panels._classify_origin([controller], Config(), ["node-01"])
+
+    assert [name for name, _ in infra] == ["swarm-cronjob"]
+    assert service == []
+
+
+def test_the_controller_is_recognised_with_either_separator():
+    """As a Swarm stack the name carries a hyphen; as a Compose project it is
+    commonly an underscore. Both name the same controller."""
+    for stack in ("swarm-cronjob", "swarm_cronjob"):
+        entry = _origin_status("app", stack=stack)
+
+        infra, service, _ = panels._classify_origin([entry], Config(), ["node-01"])
+
+        assert [name for name, _ in infra] == [stack], stack
+        assert service == [], stack
+
+
+def test_an_application_stack_is_not_infrastructure():
+    """The guard for the test above: this is what a non-match looks like."""
+    infra, service, _ = panels._classify_origin(
+        [_origin_status("app", stack="billing")], Config(), ["node-01"]
+    )
+
+    assert infra == []
+    assert [name for name, _ in service] == ["billing"]

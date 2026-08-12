@@ -48,13 +48,19 @@ def _wired():
             TraefikEntrypoint(name="https", address=":443", port=443),
         ],
         routers=[
-            TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt", "kafbat"],
-                          rule="PathPrefix(`/portale/kafka-ui`)", service="kafbat-ui",
-                          origin="kafbat-ui_kafbat-ui"),
+            TraefikRouter(
+                name="kafbat-ui",
+                entrypoints=["portalmgmt", "kafbat"],
+                rule="PathPrefix(`/portale/kafka-ui`)",
+                service="kafbat-ui",
+                origin="kafbat-ui_kafbat-ui",
+            ),
         ],
-        services={"kafbat-ui": TraefikServiceRef(
-            name="kafbat-ui", port=8080, scheme="http",
-            docker_service="kafbat-ui_kafbat-ui")},
+        services={
+            "kafbat-ui": TraefikServiceRef(
+                name="kafbat-ui", port=8080, scheme="http", docker_service="kafbat-ui_kafbat-ui"
+            )
+        },
     )
 
 
@@ -94,10 +100,15 @@ def test_an_entrypoint_without_a_router_says_so():
 
 def test_an_orphaned_router_gets_its_own_block_naming_the_entrypoint():
     info = _wired()
-    info.routers.append(TraefikRouter(
-        name="image_api", entrypoints=["websecure"],
-        rule="Host(`www.example.net`)", service="image_api",
-        origin="mystack_image_api"))
+    info.routers.append(
+        TraefikRouter(
+            name="image_api",
+            entrypoints=["websecure"],
+            rule="Host(`www.example.net`)",
+            service="image_api",
+            origin="mystack_image_api",
+        )
+    )
     out = _render(info)
     assert "ORPHANED" in out
     assert "image_api" in out
@@ -119,8 +130,7 @@ def test_a_router_on_a_known_and_an_unknown_entrypoint_appears_in_both_places():
     info = TraefikInfo(
         reachable=True,
         entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
-        routers=[TraefikRouter(name="half", entrypoints=["portalmgmt", "nosuch"],
-                               service="half")],
+        routers=[TraefikRouter(name="half", entrypoints=["portalmgmt", "nosuch"], service="half")],
     )
     out = _render(info)
     # Once under the entrypoint that exists, once in the orphan block.
@@ -131,9 +141,15 @@ def test_a_router_on_a_known_and_an_unknown_entrypoint_appears_in_both_places():
 
 def test_internal_routers_are_shown_but_dimmed_last():
     info = _wired()
-    info.routers.append(TraefikRouter(name="ping-router", entrypoints=["portalmgmt"],
-                                      rule="Path(`/_traefik_ping_`)",
-                                      service="ping@internal", source="file"))
+    info.routers.append(
+        TraefikRouter(
+            name="ping-router",
+            entrypoints=["portalmgmt"],
+            rule="Path(`/_traefik_ping_`)",
+            service="ping@internal",
+            source="file",
+        )
+    )
     out = _render(info)
     assert "ping-router" in out
     # The application router leads its entrypoint's branch.
@@ -141,10 +157,13 @@ def test_internal_routers_are_shown_but_dimmed_last():
 
 
 def test_a_service_backed_by_docker_shows_the_shared_verdict():
-    swarm = SwarmInfo(reachable=True, enabled=True, services=[
-        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
-                      tasks=[ServiceTask("srv-01", "running")]),
-    ])
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        services=[
+            ServiceStatus("kafbat-ui_kafbat-ui", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
     out = _render(_wired(), swarm=swarm)
     assert f"{icons.OK} 1/1" in out
 
@@ -258,7 +277,8 @@ def test_a_router_pointing_at_a_compose_container_is_confirmed():
         services={"web": TraefikServiceRef(name="web", docker_service="web")},
     )
     swarm = SwarmInfo(
-        reachable=True, enabled=False,
+        reachable=True,
+        enabled=False,
         containers=[ServiceStatus(name="web", running_replicas=1, desired_replicas=1)],
     )
     assert "no such service" not in _render(info, swarm)
@@ -278,14 +298,21 @@ def test_a_router_declared_by_a_compose_container_is_confirmed():
     all, so nothing here is more forgiving than the real collector."""
     info = TraefikInfo(
         reachable=True,
-        routers=[TraefikRouter(name="db", service="db", entrypoints=["https"],
-                               origin="course-statistics-db")],
+        routers=[
+            TraefikRouter(
+                name="db", service="db", entrypoints=["https"], origin="course-statistics-db"
+            )
+        ],
         services={"db": TraefikServiceRef(name="db", docker_service="db")},
     )
     swarm = SwarmInfo(
-        reachable=True, enabled=False,
-        containers=[ServiceStatus(name="db", stack="course-statistics",
-                                  running_replicas=1, desired_replicas=1)],
+        reachable=True,
+        enabled=False,
+        containers=[
+            ServiceStatus(
+                name="db", stack="course-statistics", running_replicas=1, desired_replicas=1
+            )
+        ],
     )
     out = _render(info, swarm)
     assert "no such service" not in out
@@ -299,9 +326,9 @@ def test_a_router_pointing_nowhere_is_still_reported_missing():
         services={"web": TraefikServiceRef(name="web", docker_service="web")},
     )
     swarm = SwarmInfo(
-        reachable=True, enabled=False,
-        containers=[ServiceStatus(name="something-else", running_replicas=1,
-                                  desired_replicas=1)],
+        reachable=True,
+        enabled=False,
+        containers=[ServiceStatus(name="something-else", running_replicas=1, desired_replicas=1)],
     )
     assert "no such service" in _render(info, swarm)
 
@@ -325,7 +352,9 @@ def test_a_swarm_service_target_still_matches():
         services={"api": TraefikServiceRef(name="api", docker_service="api")},
     )
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_count=1,
+        reachable=True,
+        enabled=True,
+        node_count=1,
         services=[ServiceStatus(name="api", running_replicas=1, desired_replicas=1)],
     )
     assert "no such service" not in _render(info, swarm)
@@ -336,7 +365,10 @@ def test_a_global_service_uses_the_reported_node_count_like_docker_infos():
     a non-zero count is normal. Counting only the list renders `· 0/0` here and
     `💀 0/3` in DOCKER INFOS — two verdicts for one service."""
     swarm = SwarmInfo(
-        reachable=True, enabled=True, node_count=3, nodes=[],
+        reachable=True,
+        enabled=True,
+        node_count=3,
+        nodes=[],
         services=[ServiceStatus("kafbat-ui_kafbat-ui", 0, None)],
     )
     out = _render(_wired(), swarm=swarm)
@@ -433,7 +465,7 @@ def test_the_container_error_changes_no_verdict():
     notice = next(i for i, ln in enumerate(with_error) if "container labels unreadable" in ln)
     # The notice and the blank line under it are the only additions: every
     # other line, verdicts included, is the one rendered without the failure.
-    assert with_error[:notice] + with_error[notice + 2:] == without
+    assert with_error[:notice] + with_error[notice + 2 :] == without
 
 
 def test_service_error_is_hidden_on_a_compose_only_host():
@@ -455,7 +487,8 @@ def test_service_error_is_hidden_when_swarm_state_is_unmeasured():
     info.service_error = "RuntimeError: boom"
     assert "service labels unreadable" not in _render(info, swarm=None)
     assert "service labels unreadable" not in _render(
-        info, swarm=SwarmInfo(reachable=False, enabled=False))
+        info, swarm=SwarmInfo(reachable=False, enabled=False)
+    )
 
 
 def test_service_error_is_shown_when_swarm_is_active_but_unreadable():
@@ -495,12 +528,14 @@ def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
 def test_an_entrypoint_head_carries_the_worst_verdict_below_it():
     """A wall of branches has to say at a glance which one to read first."""
     info = _wired()
-    info.routers.append(TraefikRouter(
-        name="broken", entrypoints=["portalmgmt"], service="gone"))
-    swarm = SwarmInfo(reachable=True, enabled=True, services=[
-        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
-                      tasks=[ServiceTask("srv-01", "running")]),
-    ])
+    info.routers.append(TraefikRouter(name="broken", entrypoints=["portalmgmt"], service="gone"))
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        services=[
+            ServiceStatus("kafbat-ui_kafbat-ui", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
     out = _render(info, swarm=swarm, width=60)
     heads = [ln for ln in out.splitlines() if ":2020" in ln]
     assert icons.FAILED in heads[0]
@@ -532,17 +567,25 @@ def test_a_file_provider_service_is_not_reported_as_a_missing_docker_service():
     that was never supposed to be there."""
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="login_example_net", address=":2009",
-                                       port=2009)],
-        routers=[TraefikRouter(name="account-api", entrypoints=["login_example_net"],
-                               rule="PathPrefix(`/api`)",
-                               service="account-api-placeholder", source="file")],
-        services={"account-api-placeholder": TraefikServiceRef(
-            name="account-api-placeholder", source="file",
-            upstreams=["http://user-account.internal"])},
+        entrypoints=[TraefikEntrypoint(name="login_example_net", address=":2009", port=2009)],
+        routers=[
+            TraefikRouter(
+                name="account-api",
+                entrypoints=["login_example_net"],
+                rule="PathPrefix(`/api`)",
+                service="account-api-placeholder",
+                source="file",
+            )
+        ],
+        services={
+            "account-api-placeholder": TraefikServiceRef(
+                name="account-api-placeholder",
+                source="file",
+                upstreams=["http://user-account.internal"],
+            )
+        },
     )
-    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=True, services=[]),
-                  width=100)
+    out = _render(info, swarm=SwarmInfo(reachable=True, enabled=True, services=[]), width=100)
     assert "no such service" not in out
     assert "http://user-account.internal" in out
     assert icons.UNKNOWN in out
@@ -552,10 +595,15 @@ def test_an_orphaned_router_names_the_service_carrying_the_label():
     """The block says which router and which entrypoint, but the label lives on
     a Docker service — without its name you cannot go and fix it."""
     info = _wired()
-    info.routers.append(TraefikRouter(
-        name="image_api", entrypoints=["websecure"],
-        rule="Host(`www.example.net`)", service="image_api",
-        origin="mystack_image_api"))
+    info.routers.append(
+        TraefikRouter(
+            name="image_api",
+            entrypoints=["websecure"],
+            rule="Host(`www.example.net`)",
+            service="image_api",
+            origin="mystack_image_api",
+        )
+    )
     out = _render(info, width=120)
     assert "mystack_image_api" in out
 
@@ -608,13 +656,21 @@ def _ragged():
     blocks to share one column instead of a row each.
     """
     routers = [
-        TraefikRouter(name=f"busy_{index}", entrypoints=["portal_admin"],
-                      rule=f"PathPrefix(`/busy/{index}`)", service=f"busy_{index}")
+        TraefikRouter(
+            name=f"busy_{index}",
+            entrypoints=["portal_admin"],
+            rule=f"PathPrefix(`/busy/{index}`)",
+            service=f"busy_{index}",
+        )
         for index in range(5)
     ]
     routers += [
-        TraefikRouter(name=f"quiet_{name}", entrypoints=[name],
-                      rule="PathPrefix(`/`)", service=f"quiet_{name}")
+        TraefikRouter(
+            name=f"quiet_{name}",
+            entrypoints=[name],
+            rule="PathPrefix(`/`)",
+            service=f"quiet_{name}",
+        )
         for name in ("status_public", "status_internal", "eam_dev")
     ]
     return TraefikInfo(
@@ -626,8 +682,9 @@ def _ragged():
             TraefikEntrypoint(name="eam_dev", address=":2021", port=2021),
         ],
         routers=routers,
-        services={router.service: TraefikServiceRef(name=router.service, port=8080)
-                  for router in routers},
+        services={
+            router.service: TraefikServiceRef(name=router.service, port=8080) for router in routers
+        },
     )
 
 
@@ -673,11 +730,17 @@ def _internal(middlewares=None, mw_defs=None):
     return TraefikInfo(
         reachable=True,
         entrypoints=[TraefikEntrypoint(name="default", address=":8088", port=8088)],
-        routers=[TraefikRouter(name="ping-router", entrypoints=["default"],
-                               rule="Path(`/_traefik_ping_`)", service="ping@internal",
-                               middlewares=middlewares or [], source="file")],
-        services={"ping@internal": TraefikServiceRef(name="ping@internal",
-                                                     source="file")},
+        routers=[
+            TraefikRouter(
+                name="ping-router",
+                entrypoints=["default"],
+                rule="Path(`/_traefik_ping_`)",
+                service="ping@internal",
+                middlewares=middlewares or [],
+                source="file",
+            )
+        ],
+        services={"ping@internal": TraefikServiceRef(name="ping@internal", source="file")},
         middlewares=mw_defs or {},
     )
 
@@ -702,9 +765,10 @@ def test_the_folded_head_carries_only_its_own_branch_glyph():
 
 
 def test_a_middleware_keeps_the_internal_target_on_its_own_line():
-    info = _internal(middlewares=["strip"],
-                     mw_defs={"strip": TraefikMiddleware(name="strip",
-                                                         kind="stripprefix")})
+    info = _internal(
+        middlewares=["strip"],
+        mw_defs={"strip": TraefikMiddleware(name="strip", kind="stripprefix")},
+    )
     out = _render(info)
     lines = out.splitlines()
     head = next(line for line in lines if "ping-router" in line)
@@ -713,13 +777,15 @@ def test_a_middleware_keeps_the_internal_target_on_its_own_line():
 
 
 def test_a_measured_service_keeps_its_own_line():
-    swarm = SwarmInfo(reachable=True, enabled=True, services=[
-        ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
-                      tasks=[ServiceTask("srv-01", "running")]),
-    ])
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        services=[
+            ServiceStatus("kafbat-ui_kafbat-ui", 1, 1, tasks=[ServiceTask("srv-01", "running")]),
+        ],
+    )
     out = _render(_wired(), swarm=swarm)
-    head = next(line for line in out.splitlines()
-                if "└─ kafbat-ui" in line and "→" not in line)
+    head = next(line for line in out.splitlines() if "└─ kafbat-ui" in line and "→" not in line)
     assert "kafbat-ui_kafbat-ui" not in head
 
 
@@ -736,8 +802,11 @@ def _six_ping():
         for index, name in enumerate(names)
     ]
     router = TraefikRouter(
-        name="ping-router", entrypoints=names, rule="Path(`/_traefik_ping_`)",
-        service="ping@internal", source="file",
+        name="ping-router",
+        entrypoints=names,
+        rule="Path(`/_traefik_ping_`)",
+        service="ping@internal",
+        source="file",
     )
     return TraefikInfo(
         reachable=True,
@@ -776,9 +845,7 @@ def test_folding_never_costs_the_six_ping_router_shape_a_column():
     # — the same chrome (rule and trailing blank) around the same six
     # branches, forced always-unfolded.
     info = _six_ping()
-    unfolded_blocks = [
-        _entrypoint_block(ep, info, None, fold=False) for ep in info.entrypoints
-    ]
+    unfolded_blocks = [_entrypoint_block(ep, info, None, fold=False) for ep in info.entrypoints]
     unfolded_section = section("TRAEFIK WIRING", Group(PackedColumns(unfolded_blocks), Text("")))
     unfolded_console = Console(width=120, force_terminal=False, color_system=None)
     with unfolded_console.capture() as capture:
@@ -828,17 +895,25 @@ def _link_targets(out: str) -> list[str]:
 def _linked():
     return TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
-                                       port=2009)],
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009", port=2009)],
         routers=[
-            TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
-                          rule="PathPrefix(`/account`)", service="account-spa"),
-            TraefikRouter(name="odd-one", entrypoints=["login_example_de"],
-                          rule="PathPrefix(`/a`) || PathPrefix(`/b`)",
-                          service="odd-one"),
+            TraefikRouter(
+                name="account-spa",
+                entrypoints=["login_example_de"],
+                rule="PathPrefix(`/account`)",
+                service="account-spa",
+            ),
+            TraefikRouter(
+                name="odd-one",
+                entrypoints=["login_example_de"],
+                rule="PathPrefix(`/a`) || PathPrefix(`/b`)",
+                service="odd-one",
+            ),
         ],
-        services={"account-spa": TraefikServiceRef(name="account-spa", port=8080),
-                  "odd-one": TraefikServiceRef(name="odd-one", port=8081)},
+        services={
+            "account-spa": TraefikServiceRef(name="account-spa", port=8080),
+            "odd-one": TraefikServiceRef(name="odd-one", port=8081),
+        },
     )
 
 
@@ -911,10 +986,15 @@ def test_the_service_line_is_never_linked():
     """
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009",
-                                       port=2009)],
-        routers=[TraefikRouter(name="account-spa", entrypoints=["login_example_de"],
-                               rule="PathPrefix(`/account`)", service="account-backend")],
+        entrypoints=[TraefikEntrypoint(name="login_example_de", address=":2009", port=2009)],
+        routers=[
+            TraefikRouter(
+                name="account-spa",
+                entrypoints=["login_example_de"],
+                rule="PathPrefix(`/account`)",
+                service="account-backend",
+            )
+        ],
         services={"account-backend": TraefikServiceRef(name="account-backend", port=8080)},
     )
     out = _render_linked(info, _cfg_with_links())
@@ -957,8 +1037,7 @@ def _linked_without_routers():
     `account-spa` and `odd-one` hanging on it."""
     return TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="metrics_example_de", address=":2010",
-                                       port=2010)],
+        entrypoints=[TraefikEntrypoint(name="metrics_example_de", address=":2010", port=2010)],
         routers=[],
         services={},
     )

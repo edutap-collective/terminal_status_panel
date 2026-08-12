@@ -79,6 +79,14 @@ out in five tiers:
     panel does **not** judge whether a job is overdue; that would require
     evaluating the cron expression against the clock.
 
+    The controller that drives these jobs — swarm-cronjob itself — is
+    classified as **Infrastructure**, not as a Service: it carries no data and
+    serves no user, and filing it among the jobs it triggers is precisely
+    where nobody looks when asking why nothing ran last night. Its absence is
+    worth noticing, too: labelled jobs with no controller running are jobs
+    nothing will ever start, and the panel shows each of them resting at
+    `⏰ ok <age>` until the age itself gives it away.
+
   A global-mode service (Traefik here) reports no replica count, so the
   denominator is the number of tasks Swarm actually scheduled — the same one
   `docker service ls` shows. Counting against every node instead would render
@@ -289,7 +297,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `resources.ignore_mountpoints` | platform-dependent | Mountpoint prefixes hidden from the filesystem table. Defaults to `["/System/Volumes/", "/Library/Developer/CoreSimulator/"]` on macOS and to `[]` elsewhere. An explicitly empty list hides nothing rather than falling back to the default. |
 | `resources.process_sample` | `0.3` | Seconds to sample process CPU usage over for the TOP CPU row (see [Top processes](#top-processes)). `0` or less disables the CPU ranking; TOP RAM is unaffected. |
 | `resources.top_processes` | `5` | Rows per process table in the TOP CPU / TOP RAM row (see [Top processes](#top-processes)). `--processes N` on the command line wins over this. A value that cannot be read as a whole number falls back to `5`; a negative value means `0`. `0` removes the whole row, and with it the `process_sample` sampling wait — a different switch from `process_sample`, which only removes the CPU ranking and leaves TOP RAM in place. |
-| `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink"]` | Case-insensitive substrings. A **stack** (or Compose project) whose name matches goes into that origin's **Infrastructure** table; every other stack goes into **Service**. An entry with no stack at all is never classified this way — it has no project to be filed under, so `docker run -d redis` lands in **Standalone containers** like any other stackless entry, however infrastructural its name. |
+| `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink", "swarm-cronjob", "swarm_cronjob"]` | Case-insensitive substrings. A **stack** (or Compose project) whose name matches goes into that origin's **Infrastructure** table; every other stack goes into **Service**. An entry with no stack at all is never classified this way — it has no project to be filed under, so `docker run -d redis` lands in **Standalone containers** like any other stackless entry, however infrastructural its name. |
 | `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastructure** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
 | `thresholds.memory.warning` / `.critical` | `75` / `90` | RAM usage % thresholds (yellow / red). |
@@ -1208,31 +1216,49 @@ pull request across Python 3.11–3.13.
 
 ## Publishing to PyPI
 
-Releases are automated. Pushing a version tag `vX.Y.Z` triggers
-`.github/workflows/release.yml`, which builds the sdist + wheel and publishes to
-PyPI via **Trusted Publishing (OIDC)** — no API token is stored in the repo.
+Releases are automated by `.github/workflows/release.yml`, which publishes via
+**Trusted Publishing (OIDC)** — no API token is stored in the repository. It
+builds once, with [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations),
+and publishes that same artefact to one of two indexes:
+
+| Trigger | Goes to | Environment |
+|---|---|---|
+| every push to `main` | [test.pypi.org](https://test.pypi.org) | `release-test-pypi` |
+| publishing a GitHub Release | [pypi.org](https://pypi.org) | `release-pypi` |
+
+Test PyPI on every commit is deliberate: it exercises the publishing path
+continuously, so release day is not the first time it runs.
+
+The workflow calls the repository's CI rather than restating its checks — a
+release gate that duplicates them drifts from them, and it drifts silently. A
+tag is additionally checked against the version in `pyproject.toml`, so a
+mistyped tag or a forgotten bump fails before upload rather than on PyPI,
+where the wrong number cannot be taken back.
 
 Release steps:
 
 ```bash
 # 1. bump the version in pyproject.toml (must match the tag)
-# 2. commit, then tag and push
-git commit -am "release: v0.1.0"
-git tag v0.1.0
+# 2. commit, tag and push
+git commit -am "release: v0.6.0"
+git tag v0.6.0
 git push && git push --tags
+# 3. publish a GitHub Release for that tag -- this is what uploads to PyPI
 ```
 
-One-time setup (before the first release):
+One-time setup, per index:
 
-1. On <https://pypi.org> → *Your projects* → *Publishing*, add a **pending
-   trusted publisher** with:
-   - **PyPI project name:** `terminal-status-panel`
+1. On the index (<https://pypi.org> or <https://test.pypi.org>) → *Your
+   projects* → *Publishing*, add a **pending trusted publisher**:
+   - **Project name:** `terminal-status-panel`
    - **Owner:** `edutap-collective`
    - **Repository name:** `terminal_status_panel`
    - **Workflow name:** `release.yml`
-   - **Environment name:** `pypi`
-2. In the GitHub repo → *Settings → Environments*, create an environment named
-   `pypi` (optionally add required reviewers to gate publishes).
+   - **Environment name:** `release-pypi` for PyPI, `release-test-pypi` for Test PyPI
+2. In the GitHub repository → *Settings → Environments*, create the matching
+   environment. Required reviewers on `release-pypi` gate every upload behind
+   an approval; `release-test-pypi` is better left ungated, since it fires on
+   every push to `main`.
 
 ## License
 

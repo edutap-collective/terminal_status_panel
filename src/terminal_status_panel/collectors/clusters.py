@@ -61,6 +61,7 @@ class ContainerIndex:
     """
 
     def __init__(self, client) -> None:
+        """Wrap *client*, whose listings this cache serves to every probe."""
         self._client = client
         self._cache: dict[str, tuple[Any, Exception | None]] = {}
         self._locks: dict[str, threading.Lock] = {
@@ -506,8 +507,11 @@ def _gluster(arguments: list[str], timeout: float) -> str:
     exception so the caller reports it as a real error.
     """
     try:
+        # S607: resolved through PATH deliberately. gluster lives in
+        # /usr/sbin on Debian and /usr/local/sbin on FreeBSD, and the panel
+        # runs on both.
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["sudo", "-n", "gluster", *arguments, "--xml"],
+            ["sudo", "-n", "gluster", *arguments, "--xml"],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -528,7 +532,9 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
     """Parse ``gluster peer status --xml`` and ``gluster volume status --xml``."""
     members: list[ClusterMember] = []
 
-    peers = ElementTree.fromstring(peer_xml)
+    # S314: not untrusted input -- this is the host's own `gluster --xml`
+    # output, produced by the command above. Nothing remote reaches it.
+    peers = ElementTree.fromstring(peer_xml)  # noqa: S314
     connected = 0
     total_peers = 0
     for peer in peers.iter("peer"):
@@ -545,7 +551,7 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
             )
         )
 
-    volume = ElementTree.fromstring(volume_xml)
+    volume = ElementTree.fromstring(volume_xml)  # noqa: S314 - see above
     # `gluster volume status --xml` with no volume name given (as we call it)
     # returns *all* volumes on the host as sibling <volume> elements. We only
     # report the first one — iterating <node> over the whole document would
@@ -587,9 +593,7 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
         # `peer status` lists the *other* peers, so zero of them means either an
         # unparsed answer or a single-node volume. Neither supports a quorum
         # claim, so the panel reports none rather than inventing a 💀.
-        quorum_ok=(
-            (connected + 1) * 2 > total_peers + 1 if total_peers > 0 else None
-        ),
+        quorum_ok=((connected + 1) * 2 > total_peers + 1 if total_peers > 0 else None),
         detail=detail,
         members=members,
     )
@@ -639,9 +643,7 @@ _KIND_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # every sidecar that merely shares the ``mongodb`` stack — an admin UI such as
 # ``mongodb_mongo-express``. Handing such a service the replica set's verdict
 # would state a health measurement about something that was never probed.
-_NEVER_A_MEMBER: tuple[str, ...] = tuple(
-    name.lower() for name in DEFAULT_INFRA_UI_SERVICES
-)
+_NEVER_A_MEMBER: tuple[str, ...] = tuple(name.lower() for name in DEFAULT_INFRA_UI_SERVICES)
 
 
 def kind_for_service(name: str) -> str | None:
@@ -707,7 +709,10 @@ def _load_full_attributes(container) -> None:
         return
     try:
         reload_attributes()
-    except Exception:
+    except Exception:  # noqa: S110
+        # Best-effort refresh of an optional cache. Failing to reload leaves
+        # the previous values in place, which is the same answer this probe
+        # would have given a moment earlier.
         pass
 
 
@@ -739,8 +744,15 @@ def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
             status = exec_text(
                 container,
                 [
-                    "curl", "-ks", "-o", "/dev/null", "-m", f"{per_endpoint:.1f}",
-                    "-w", "%{http_code}", f"{endpoint}/health",
+                    "curl",
+                    "-ks",
+                    "-o",
+                    "/dev/null",
+                    "-m",
+                    f"{per_endpoint:.1f}",
+                    "-w",
+                    "%{http_code}",
+                    f"{endpoint}/health",
                 ],
             ).strip()
             healthy = status == "200"
@@ -748,9 +760,7 @@ def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
         except Exception as exc:
             healthy = False
             detail = str(exc)[:60]
-        members.append(
-            ClusterMember(name=endpoint, role="peer", healthy=healthy, detail=detail)
-        )
+        members.append(ClusterMember(name=endpoint, role="peer", healthy=healthy, detail=detail))
     live = sum(1 for member in members if member.healthy)
     detail = f"{live}/{len(members)} live"
     if guessed:

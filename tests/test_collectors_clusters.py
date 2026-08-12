@@ -118,6 +118,7 @@ def test_the_index_reports_the_same_failure_to_every_probe():
 
 def test_a_sparsely_listed_container_is_still_matched_by_name():
     """A sparse listing carries "Names", and docker-py's .name is then None."""
+
     class _SparseContainer:
         name = None
         attrs = {"Names": ["/PostgreSQL-18_pg-swarm01-mgr-01.1.abc"]}
@@ -191,9 +192,13 @@ def test_parse_pg_state_marks_a_member_in_transition():
 
 
 def test_parse_pg_state_reports_no_quorum_when_most_members_are_down():
-    broken = "\n".join(PG_STATE.splitlines()[:4]) + "\n" + "\n".join(
-        line.replace("secondary |           secondary", "draining  |           draining ")
-        for line in PG_STATE.splitlines()[4:]
+    broken = (
+        "\n".join(PG_STATE.splitlines()[:4])
+        + "\n"
+        + "\n".join(
+            line.replace("secondary |           secondary", "draining  |           draining ")
+            for line in PG_STATE.splitlines()[4:]
+        )
     )
     service = clusters.parse_pg_state(broken)
     assert service.quorum_ok is False
@@ -246,6 +251,7 @@ def test_probe_postgres_reports_an_exec_failure_as_error():
 
 def test_probe_postgres_reports_docker_api_failure_as_error():
     """Docker socket failure must be distinct from 'not applicable'."""
+
     class _FailingClient:
         class _FailingColl:
             def list(self, *a, **k):
@@ -315,9 +321,9 @@ def test_parse_mongo_hello_only_claims_health_where_it_has_evidence():
 
 
 def test_parse_mongo_hello_without_a_primary_has_no_quorum():
-    service = clusters.parse_mongo_hello(MONGO_HELLO.replace(
-        '"primary":"mongodb-swarm02-app-2:27017",', ""
-    ))
+    service = clusters.parse_mongo_hello(
+        MONGO_HELLO.replace('"primary":"mongodb-swarm02-app-2:27017",', "")
+    )
     assert service.leader is None
     assert service.quorum_ok is False
 
@@ -335,9 +341,7 @@ def test_probe_mongodb_is_not_applicable_without_a_local_container():
 
 
 def test_probe_mongodb_runs_mongosh_unauthenticated():
-    container = _FakeContainer(
-        "mongodb_swarm02-app-1.1.abc", exec_result=(0, MONGO_HELLO.encode())
-    )
+    container = _FakeContainer("mongodb_swarm02-app-1.1.abc", exec_result=(0, MONGO_HELLO.encode()))
     service = clusters.probe_mongodb(_index([container]))
     command = container.commands[0]
     assert command[0] == "mongosh"
@@ -348,6 +352,7 @@ def test_probe_mongodb_runs_mongosh_unauthenticated():
 
 def test_probe_mongodb_reports_docker_api_failure_as_error():
     """Docker socket failure must be distinct from 'not applicable'."""
+
     class _FailingClient:
         class _FailingColl:
             def list(self, *a, **k):
@@ -444,6 +449,7 @@ def test_probe_kafka_is_not_applicable_without_a_local_broker():
 
 def test_probe_kafka_reports_docker_api_failure_as_error():
     """Docker socket failure must be distinct from 'not applicable'."""
+
     class _FailingClient:
         class _FailingColl:
             def list(self, *a, **k):
@@ -679,7 +685,8 @@ def test_probe_glusterfs_uses_the_timeout_it_was_given(monkeypatch):
 def test_probe_cluster_hands_glusterfs_its_configured_timeout(monkeypatch):
     seen = []
     monkeypatch.setattr(
-        clusters, "probe_glusterfs",
+        clusters,
+        "probe_glusterfs",
         lambda timeout: seen.append(timeout) or ClusterService(kind="glusterfs"),
     )
     clusters.probe_cluster(_index([]), "glusterfs", timeout=0.7)
@@ -694,9 +701,7 @@ def test_probe_rustfs_splits_its_timeout_across_the_endpoints():
     container = _FakeContainer(
         "rustfs_rustfs.1.abc",
         exec_result=(0, b"200"),
-        env=[
-            "RUSTFS_VOLUMES=https://a:9000/data https://b:9000/data https://c:9000/data"
-        ],
+        env=["RUSTFS_VOLUMES=https://a:9000/data https://b:9000/data https://c:9000/data"],
     )
     clusters.probe_rustfs(_index([container]), timeout=3.0)
     assert _curl_timeouts(container) == [1.0, 1.0, 1.0]
@@ -789,6 +794,7 @@ def test_probe_rustfs_marks_a_non_200_endpoint_unhealthy():
 
 def test_probe_rustfs_reports_docker_api_failure_as_error():
     """Docker socket failure must be distinct from 'not applicable'."""
+
     class _FailingClient:
         class _FailingColl:
             def list(self, *a, **k):
@@ -819,15 +825,20 @@ def test_probe_rustfs_all_endpoints_failing_yields_not_reachable():
 
 def test_probe_rustfs_majority_endpoints_healthy_yields_quorum():
     """2/3 endpoints healthy → reachable=True, quorum_ok=True (majority)."""
+
     # Simulate three endpoints: two answer 200, one answers 500.
     # We'll create a container that tracks each call and returns different
     # status codes.
     class _MultiEndpointContainer:
         def __init__(self):
             self.name = "rustfs_rustfs.1.abc"
-            self.attrs = {"Config": {"Env": [
-                "RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data https://rustfs-c:9000/data"
-            ]}}
+            self.attrs = {
+                "Config": {
+                    "Env": [
+                        "RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data https://rustfs-c:9000/data"
+                    ]
+                }
+            }
             self.call_count = 0
             self.commands = []
 
@@ -882,47 +893,73 @@ def test_locate_member_returns_the_container_when_one_runs():
 def test_a_crash_looping_service_is_an_error_not_not_applicable():
     """No container runs, but Swarm still wants a task here — the live RustFS case:
     a replicated service pinned to this hostname by a placement constraint."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
-                                                       hostname="swarm01-mgr-01")])
-    container, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="swarm01-mgr-01",
+        services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1, hostname="swarm01-mgr-01")],
+    )
+    container, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert container is None
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
 
 def test_a_service_pinned_to_another_hostname_is_still_not_applicable():
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
-                                                       hostname="swarm01-wrk-01")])
-    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="swarm01-mgr-01",
+        services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1, hostname="swarm01-wrk-01")],
+    )
+    _, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert verdict.applicable is False
     assert verdict.error is None
 
 
 def test_no_matching_service_at_all_is_not_applicable():
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[_FakeSwarmService("something_else", replicas=1,
-                                                       hostname="swarm01-mgr-01")])
-    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="swarm01-mgr-01",
+        services=[_FakeSwarmService("something_else", replicas=1, hostname="swarm01-mgr-01")],
+    )
+    _, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert verdict.applicable is False
 
 
 def test_a_global_mode_service_is_wanted_on_every_node():
     """Global mode has no placement constraint to check — Swarm runs it everywhere."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", global_mode=True)])
-    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="swarm01-mgr-01",
+        services=[_FakeSwarmService("rustfs_rustfs-x", global_mode=True)],
+    )
+    _, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
 
 def test_a_replicated_service_with_zero_replicas_is_not_applicable():
     """Swarm wants nothing running, even if pinned here."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=0,
-                                                       hostname="swarm01-mgr-01")])
-    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="swarm01-mgr-01",
+        services=[_FakeSwarmService("rustfs_rustfs-x", replicas=0, hostname="swarm01-mgr-01")],
+    )
+    _, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert verdict.applicable is False
 
 
@@ -931,10 +968,15 @@ def test_an_unpinned_replicated_service_is_not_applicable():
     we cannot claim Swarm wants it *here* without over-claiming. A crash loop of an
     unpinned service is therefore not flagged by this check (DOCKER INFOS still
     shows it correctly, via the Swarm service list)."""
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
-                                                       hostname=None)])
-    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="swarm01-mgr-01",
+        services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1, hostname=None)],
+    )
+    _, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert verdict.applicable is False
     assert verdict.error is None
 
@@ -944,9 +986,12 @@ def test_a_placement_constraint_without_spaces_is_still_recognised():
     service.attrs["Spec"]["TaskTemplate"]["Placement"] = {
         "Constraints": ["node.hostname==swarm01-mgr-01"]
     }
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[service])
-    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    client = _SwarmClient(
+        containers=[], node_id="node-1", hostname="swarm01-mgr-01", services=[service]
+    )
+    _, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert verdict.applicable is True
     assert "no running container" in verdict.error
 
@@ -957,15 +1002,20 @@ def test_a_swarm_query_failure_degrades_to_not_applicable():
             raise RuntimeError("swarm unreachable")
 
     client = _Broken(containers=[], node_id="node-1", services=[])
-    _, verdict, _ = clusters.locate_member(clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS)
+    _, verdict, _ = clusters.locate_member(
+        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+    )
     assert verdict.applicable is False
     assert verdict.error is None
 
 
 def test_probe_rustfs_reports_a_crash_loop_as_an_error():
-    client = _SwarmClient(containers=[], node_id="node-1", hostname="swarm01-mgr-01",
-                          services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1,
-                                                       hostname="swarm01-mgr-01")])
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="swarm01-mgr-01",
+        services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1, hostname="swarm01-mgr-01")],
+    )
     service = clusters.probe_rustfs(clusters.ContainerIndex(client))
     assert service.kind == "rustfs"
     assert "no running container" in service.error
@@ -973,12 +1023,17 @@ def test_probe_rustfs_reports_a_crash_loop_as_an_error():
 
 def test_probe_rustfs_minority_endpoints_healthy_loses_quorum():
     """1/3 endpoints healthy → reachable=True, quorum_ok=False (not majority)."""
+
     class _MultiEndpointContainer:
         def __init__(self):
             self.name = "rustfs_rustfs.1.abc"
-            self.attrs = {"Config": {"Env": [
-                "RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data https://rustfs-c:9000/data"
-            ]}}
+            self.attrs = {
+                "Config": {
+                    "Env": [
+                        "RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data https://rustfs-c:9000/data"
+                    ]
+                }
+            }
             self.call_count = 0
             self.commands = []
 

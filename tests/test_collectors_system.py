@@ -49,9 +49,7 @@ def test_collect_system_degrades_on_error(monkeypatch):
 
 def test_darwin_identity_comes_from_the_system_version_plist(monkeypatch, tmp_path):
     plist = tmp_path / "SystemVersion.plist"
-    plist.write_bytes(
-        plistlib.dumps({"ProductName": "macOS", "ProductVersion": "26.5.2"})
-    )
+    plist.write_bytes(plistlib.dumps({"ProductName": "macOS", "ProductVersion": "26.5.2"}))
     monkeypatch.setattr(system_collector.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(system_collector, "MACOS_VERSION_PLIST", str(plist))
 
@@ -61,9 +59,7 @@ def test_darwin_identity_comes_from_the_system_version_plist(monkeypatch, tmp_pa
 def test_darwin_without_a_readable_plist_reports_nothing(monkeypatch, tmp_path):
     """No fabricated fallback: an unidentifiable system says so."""
     monkeypatch.setattr(system_collector.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(
-        system_collector, "MACOS_VERSION_PLIST", str(tmp_path / "absent.plist")
-    )
+    monkeypatch.setattr(system_collector, "MACOS_VERSION_PLIST", str(tmp_path / "absent.plist"))
 
     assert system_collector._os_identity() == (None, None)
 
@@ -95,9 +91,7 @@ def test_rhel_family_identity(monkeypatch):
 
 def test_suse_family_identity(monkeypatch):
     monkeypatch.setattr(system_collector.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(
-        system_collector.distro, "name", lambda pretty=False: "openSUSE Tumbleweed"
-    )
+    monkeypatch.setattr(system_collector.distro, "name", lambda pretty=False: "openSUSE Tumbleweed")
     monkeypatch.setattr(system_collector.distro, "version", lambda: "20260801")
 
     assert system_collector._os_identity() == ("openSUSE Tumbleweed", "20260801")
@@ -170,11 +164,7 @@ def test_the_collector_does_not_cap_the_address_list(monkeypatch):
     monkeypatch.setattr(
         system_collector.psutil,
         "net_if_addrs",
-        lambda: {
-            "en0": [
-                _Addr(socket_module.AF_INET, f"10.0.0.{n}") for n in range(1, 21)
-            ]
-        },
+        lambda: {"en0": [_Addr(socket_module.AF_INET, f"10.0.0.{n}") for n in range(1, 21)]},
     )
 
     assert len(system_collector._collect_ips()) == 20

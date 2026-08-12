@@ -24,6 +24,8 @@ DEFAULT_CONFIG_PATH = "/etc/terminal-status-panel/config.toml"
 
 @dataclass
 class Thresholds:
+    """Where a measurement stops being ok and starts being worth showing."""
+
     memory_warning: float = 75.0
     memory_critical: float = 90.0
     swap_warning: float = field(default_factory=platform_defaults.swap_warning)
@@ -35,37 +37,68 @@ class Thresholds:
 
 @dataclass
 class DnsExpectation:
+    """A name the operator expects to resolve, and to what."""
+
     name: str
     addresses: list[str] = field(default_factory=list)
 
 
 @dataclass
 class HealthConfig:
+    """What the CLUSTER HEALTH section may probe, and how long it may take."""
+
     budget: float = 5.0
-    timeouts: dict[str, float] = field(
-        default_factory=lambda: dict(DEFAULT_HEALTH_TIMEOUTS)
-    )
+    timeouts: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_HEALTH_TIMEOUTS))
     enabled: list[str] = field(default_factory=lambda: list(DEFAULT_HEALTH_KINDS))
     dns_expect: list[DnsExpectation] = field(default_factory=list)
 
 
 DEFAULT_INFRASTRUCTURE_STACKS = [
-    "postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer",
-    "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql",
-    "elasticsearch", "bugsink",
+    "postgresql",
+    "postgres",
+    "kafka",
+    "mongodb",
+    "rustfs",
+    "portainer",
+    "traefik",
+    "registry",
+    "minio",
+    "redis",
+    "valkey",
+    "mariadb",
+    "mysql",
+    "elasticsearch",
+    "bugsink",
+    # The controller that drives scheduled jobs by scaling their services up
+    # (https://github.com/crazy-max/swarm-cronjob). Infrastructure rather than
+    # an application: it carries no data and serves no user. Both separators
+    # are listed because the keys are matched as substrings -- a Swarm stack
+    # is usually "swarm-cronjob", a Compose project "swarm_cronjob".
+    "swarm-cronjob",
+    "swarm_cronjob",
 ]
 
 # Admin web UIs for infrastructure services. Matched case-insensitively against
 # the stack name *and* the service name; matches are grouped into the
 # "infra-uis" pseudo stack and win over DEFAULT_INFRASTRUCTURE_STACKS.
 DEFAULT_INFRA_UI_SERVICES = [
-    "kafbat-ui", "kafka-ui", "kafdrop",
-    "cloudbeaver", "pgadmin", "adminer",
-    "mongo-express", "mongo-gui",
-    "rustfs-console", "rustfs-ui",
-    "s3-browser", "s3browser", "s3manager",
-    "redisinsight", "redis-commander",
-    "dozzle", "kibana",
+    "kafbat-ui",
+    "kafka-ui",
+    "kafdrop",
+    "cloudbeaver",
+    "pgadmin",
+    "adminer",
+    "mongo-express",
+    "mongo-gui",
+    "rustfs-console",
+    "rustfs-ui",
+    "s3-browser",
+    "s3browser",
+    "s3manager",
+    "redisinsight",
+    "redis-commander",
+    "dozzle",
+    "kibana",
 ]
 
 DEFAULT_HEALTH_KINDS = ("postgres", "mongodb", "kafka", "glusterfs", "rustfs")
@@ -115,6 +148,8 @@ class TraefikApiConfig:
 
 @dataclass
 class Config:
+    """Everything the panel reads from its config file, with defaults."""
+
     width: int = 80
     docker_timeout: float = 1.5
     critical_services: list[str] = field(default_factory=list)
@@ -122,12 +157,8 @@ class Config:
     infrastructure_stacks: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRASTRUCTURE_STACKS)
     )
-    infra_ui_services: list[str] = field(
-        default_factory=lambda: list(DEFAULT_INFRA_UI_SERVICES)
-    )
-    ignore_mountpoints: list[str] = field(
-        default_factory=platform_defaults.ignore_mountpoints
-    )
+    infra_ui_services: list[str] = field(default_factory=lambda: list(DEFAULT_INFRA_UI_SERVICES))
+    ignore_mountpoints: list[str] = field(default_factory=platform_defaults.ignore_mountpoints)
     thresholds: Thresholds = field(default_factory=Thresholds)
     health: HealthConfig = field(default_factory=HealthConfig)
     traefik: TraefikApiConfig = field(default_factory=TraefikApiConfig)
@@ -211,14 +242,14 @@ def _health_config(data: dict) -> HealthConfig:
                 )
             )
 
-    return HealthConfig(
-        budget=budget, timeouts=timeouts, enabled=kinds, dns_expect=expectations
-    )
+    return HealthConfig(budget=budget, timeouts=timeouts, enabled=kinds, dns_expect=expectations)
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:
-    """Load config from *path* (or the default location). Never raises on a
-    missing or unreadable file — falls back to defaults."""
+    """Load config from *path*, or from the default location.
+
+    Never raises on a missing or unreadable file — falls back to defaults.
+    """
     target = os.fspath(path) if path is not None else DEFAULT_CONFIG_PATH
     try:
         with open(target, "rb") as fh:
@@ -299,8 +330,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
         critical_services=_list_setting(services.get("critical"), []),
-        description_label=str(docker.get("description_label",
-                                        DEFAULT_DESCRIPTION_LABEL)),
+        description_label=str(docker.get("description_label", DEFAULT_DESCRIPTION_LABEL)),
         infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),
         ignore_mountpoints=_list_setting(ignore, platform_defaults.ignore_mountpoints()),

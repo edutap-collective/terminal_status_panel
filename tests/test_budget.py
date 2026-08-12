@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -14,6 +15,7 @@ def no_leftover_stragglers():
     depend on source order — and the "nothing to wait for" one would pass only
     because a preceding test happened to drain the list.
     """
+
     def clear():
         with budget_module._stragglers_lock:
             budget_module._stragglers.clear()
@@ -25,21 +27,31 @@ def no_leftover_stragglers():
 
 def test_an_abandoned_check_gets_a_short_grace_at_interpreter_exit():
     """A thread frozen inside subprocess.run at exit leaves its child running
-    as an orphan. The grace lets it finish — or kill its child — first."""
+    as an orphan. The grace lets it finish — or kill its child — first.
+
+    The check blocks on an event rather than on a sleep, so the assertions do
+    not race the clock. Sleeping 0.15s against a 0.25s grace leaves 0.1s of
+    slack, which a loaded CI runner can spend on scheduling alone -- this test
+    failed exactly that way on macOS. With an event, "still unfinished" and
+    "finished once released" are both facts rather than bets.
+    """
     finished = []
+    release = threading.Event()
 
     def slow():
-        time.sleep(0.15)
+        release.wait(timeout=5)
         finished.append(True)
 
     run_with_budget({"slow": slow}, budget=0.01)
     assert finished == []  # abandoned, as the budget requires
+    release.set()  # from here the check needs no time worth measuring
     budget_module._join_stragglers()  # what the atexit hook calls
     assert finished == [True]
 
 
 def test_the_exit_grace_is_bounded():
     """It is paid by a login shell, so it must never become a wait."""
+
     def endless():
         time.sleep(5)
 
@@ -87,6 +99,7 @@ def test_budget_bounds_wall_clock_not_the_sum():
 def test_a_task_is_truncated_at_its_own_timeout_while_the_others_run_on():
     """A per-task timeout only means something if the task that overruns it is
     the only one that loses its result."""
+
     def slow():
         time.sleep(5)
         return "too late"
@@ -96,9 +109,7 @@ def test_a_task_is_truncated_at_its_own_timeout_while_the_others_run_on():
         return "ok"
 
     started = time.monotonic()
-    result = run_with_budget(
-        {"slow": slow, "steady": steady}, budget=3.0, timeouts={"slow": 0.1}
-    )
+    result = run_with_budget({"slow": slow, "steady": steady}, budget=3.0, timeouts={"slow": 0.1})
     elapsed = time.monotonic() - started
     assert result.results == {"steady": "ok"}
     assert result.truncated == ["slow"]

@@ -33,9 +33,16 @@ class _FakeProcess:
     final read in the row loop's guarded block.
     """
 
-    def __init__(self, pid: int, name: str, cpu_percent: float = 0.0,
-                 memory_percent: float = 0.0, rss: int = 0,
-                 vanishes: bool = False, fails_at_memory_info: bool = False) -> None:
+    def __init__(
+        self,
+        pid: int,
+        name: str,
+        cpu_percent: float = 0.0,
+        memory_percent: float = 0.0,
+        rss: int = 0,
+        vanishes: bool = False,
+        fails_at_memory_info: bool = False,
+    ) -> None:
         self.pid = pid
         self._name = name
         self._cpu_percent = cpu_percent
@@ -68,8 +75,9 @@ def test_a_systemd_unit_is_reported_verbatim(tmp_path, monkeypatch):
 
 
 def test_a_docker_scope_becomes_a_short_container_id(tmp_path, monkeypatch):
-    _write_cgroup(tmp_path, 7372,
-                  "0::/system.slice/docker-e23ce43dcbe0feef12bc0199df6bf45d.scope\n")
+    _write_cgroup(
+        tmp_path, 7372, "0::/system.slice/docker-e23ce43dcbe0feef12bc0199df6bf45d.scope\n"
+    )
     monkeypatch.setattr(processes, "PROC", str(tmp_path))
     # Twelve hex characters -- Docker's own short form, so the value can be
     # pasted straight into `docker inspect`.
@@ -129,8 +137,14 @@ def test_a_disabled_sample_reports_no_cpu_ranking_rather_than_zeros(tmp_path, mo
     assert snapshot.top_cpu == []
     assert snapshot.sampled == 0.0
     assert snapshot.top_memory == [
-        ProcessInfo(pid=100, name="only-process", cpu_percent=None,
-                    memory_percent=3.0, memory_bytes=0, origin=None),
+        ProcessInfo(
+            pid=100,
+            name="only-process",
+            cpu_percent=None,
+            memory_percent=3.0,
+            memory_bytes=0,
+            origin=None,
+        ),
     ]
 
 
@@ -210,23 +224,28 @@ def test_a_row_carries_the_resident_memory_in_bytes(monkeypatch, tmp_path):
     same `rss` here means the two columns can never be seen to disagree.
     """
     monkeypatch.setattr(processes, "PROC", str(tmp_path))
-    monkeypatch.setattr(processes.psutil, "process_iter",
-                        lambda: [_FakeProcess(101, "app", memory_percent=7.0,
-                                              rss=2 * 1024**3)])
+    monkeypatch.setattr(
+        processes.psutil,
+        "process_iter",
+        lambda: [_FakeProcess(101, "app", memory_percent=7.0, rss=2 * 1024**3)],
+    )
     snapshot = processes.collect_processes(sample=0.0)
     assert snapshot is not None
     assert snapshot.top_memory[0].memory_bytes == 2 * 1024**3
 
 
-def test_a_process_that_raises_while_being_read_is_still_skipped_whole(monkeypatch,
-                                                                       tmp_path):
+def test_a_process_that_raises_while_being_read_is_still_skipped_whole(monkeypatch, tmp_path):
     """One more attribute is now read inside that `try`, so the skip path is
     worth re-checking: a row with a hole in it would be worse than no row."""
     monkeypatch.setattr(processes, "PROC", str(tmp_path))
-    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
-        _FakeProcess(101, "app", memory_percent=1.0, rss=1024),
-        _FakeProcess(102, "gone", memory_percent=9.0, rss=4096, vanishes=True),
-    ])
+    monkeypatch.setattr(
+        processes.psutil,
+        "process_iter",
+        lambda: [
+            _FakeProcess(101, "app", memory_percent=1.0, rss=1024),
+            _FakeProcess(102, "gone", memory_percent=9.0, rss=4096, vanishes=True),
+        ],
+    )
     snapshot = processes.collect_processes(sample=0.0)
     assert snapshot is not None
     assert [row.pid for row in snapshot.top_memory] == [101]
@@ -240,11 +259,14 @@ def test_a_process_that_fails_at_the_memory_read_is_skipped_whole(tmp_path, monk
     fails there specifically, which is what pins the read to the guarded block.
     """
     monkeypatch.setattr(processes, "PROC", str(tmp_path))
-    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
-        _FakeProcess(101, "app", memory_percent=1.0, rss=1024),
-        _FakeProcess(102, "gone", memory_percent=9.0, rss=4096,
-                     fails_at_memory_info=True),
-    ])
+    monkeypatch.setattr(
+        processes.psutil,
+        "process_iter",
+        lambda: [
+            _FakeProcess(101, "app", memory_percent=1.0, rss=1024),
+            _FakeProcess(102, "gone", memory_percent=9.0, rss=4096, fails_at_memory_info=True),
+        ],
+    )
     snapshot = processes.collect_processes(sample=0.0)
     assert snapshot is not None
     assert [row.pid for row in snapshot.top_memory] == [101]
@@ -255,10 +277,14 @@ def test_the_percent_and_byte_columns_cannot_disagree(monkeypatch, tmp_path):
     larger `memory_bytes` -- both are read from the same `rss`, so the two
     columns must never be seen to rank two processes differently."""
     monkeypatch.setattr(processes, "PROC", str(tmp_path))
-    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
-        _FakeProcess(1, "small", memory_percent=1.0, rss=1024),
-        _FakeProcess(2, "big", memory_percent=9.0, rss=9 * 1024),
-    ])
+    monkeypatch.setattr(
+        processes.psutil,
+        "process_iter",
+        lambda: [
+            _FakeProcess(1, "small", memory_percent=1.0, rss=1024),
+            _FakeProcess(2, "big", memory_percent=9.0, rss=9 * 1024),
+        ],
+    )
     snapshot = processes.collect_processes(sample=0.0)
     assert snapshot is not None
     by_percent = max(snapshot.top_memory, key=lambda row: row.memory_percent)
@@ -268,10 +294,13 @@ def test_the_percent_and_byte_columns_cannot_disagree(monkeypatch, tmp_path):
 
 def test_the_limit_is_honoured_above_the_default(monkeypatch, tmp_path):
     monkeypatch.setattr(processes, "PROC", str(tmp_path))
-    monkeypatch.setattr(processes.psutil, "process_iter", lambda: [
-        _FakeProcess(n, f"p{n}", memory_percent=float(n), rss=n * 1024)
-        for n in range(1, 12)
-    ])
+    monkeypatch.setattr(
+        processes.psutil,
+        "process_iter",
+        lambda: [
+            _FakeProcess(n, f"p{n}", memory_percent=float(n), rss=n * 1024) for n in range(1, 12)
+        ],
+    )
     snapshot = processes.collect_processes(sample=0.0, limit=8)
     assert snapshot is not None
     assert len(snapshot.top_memory) == 8

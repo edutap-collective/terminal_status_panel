@@ -52,9 +52,7 @@ def _distribute(heights: Sequence[int], count: int) -> list[list[int]]:
     return [sorted(column) for column in columns if column]
 
 
-def pack_blocks(
-    blocks: Sequence[Sequence[Text]], width: int, gap: int = 4
-) -> list[list[int]]:
+def pack_blocks(blocks: Sequence[Sequence[Text]], width: int, gap: int = 4) -> list[list[int]]:
     """Group *blocks* into as many columns as *width* holds, balanced by height.
 
     Returns one list of block indices per column, each in declaration order, so
@@ -112,6 +110,7 @@ class PackedColumns:
         gap: int = 4,
         alternative: Iterable[Sequence[Text]] | None = None,
     ) -> None:
+        """Hold both candidate layouts until the console reveals its width."""
         self.blocks = list(blocks)
         self.gap = gap
         self.alternative = None if alternative is None else list(alternative)
@@ -134,9 +133,8 @@ class PackedColumns:
         grid.add_row(*cells)
         return grid
 
-    def __rich_console__(
-        self, console: Console, options: ConsoleOptions
-    ) -> RenderResult:
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        """Pack both candidates against the real width and yield the shorter."""
         primary = self._grid(self.blocks, options.max_width)
         if primary is None:
             return

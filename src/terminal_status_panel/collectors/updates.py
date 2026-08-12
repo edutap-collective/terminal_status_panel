@@ -18,7 +18,7 @@ APT_CHECK = "/usr/lib/update-notifier/apt-check"
 def collect_updates(timeout: float = 1.5) -> UpdateInfo:
     """Return the update counts; never raises."""
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603 - fixed absolute path, no shell
             [APT_CHECK],
             capture_output=True,
             text=True,
