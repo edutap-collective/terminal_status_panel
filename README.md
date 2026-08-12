@@ -1223,8 +1223,8 @@ and publishes that same artefact to one of two indexes:
 
 | Trigger | Goes to | Environment |
 |---|---|---|
-| every push to `main` | [test.pypi.org](https://test.pypi.org) | `release-test-pypi` |
-| publishing a GitHub Release | [pypi.org](https://pypi.org) | `release-pypi` |
+| every push to `main` | [test.pypi.org](https://test.pypi.org) | `test-pypi` |
+| publishing a GitHub Release | [pypi.org](https://pypi.org) | `pypi` |
 
 Test PyPI on every commit is deliberate: it exercises the publishing path
 continuously, so release day is not the first time it runs.
@@ -1254,11 +1254,17 @@ One-time setup, per index:
    - **Owner:** `edutap-collective`
    - **Repository name:** `terminal_status_panel`
    - **Workflow name:** `release.yml`
-   - **Environment name:** `release-pypi` for PyPI, `release-test-pypi` for Test PyPI
+   - **Environment name:** `pypi` for PyPI, `test-pypi` for Test PyPI
 2. In the GitHub repository → *Settings → Environments*, create the matching
-   environment. Required reviewers on `release-pypi` gate every upload behind
-   an approval; `release-test-pypi` is better left ungated, since it fires on
-   every push to `main`.
+   environment. Required reviewers on `pypi` gate every upload behind an
+   approval; `test-pypi` is better left ungated, since it fires on every push
+   to `main`.
+
+   `pypi` already exists and already carries a working publisher — it is what
+   released v0.5.0. The environment names here follow that rather than the
+   other way round: renaming it would mean deleting and re-registering the
+   publisher on pypi.org, which is real risk on a live index in exchange for
+   nothing but a tidier name.
 
 ## License
 
