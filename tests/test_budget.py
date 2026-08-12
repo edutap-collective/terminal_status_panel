@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -26,15 +27,24 @@ def no_leftover_stragglers():
 
 def test_an_abandoned_check_gets_a_short_grace_at_interpreter_exit():
     """A thread frozen inside subprocess.run at exit leaves its child running
-    as an orphan. The grace lets it finish — or kill its child — first."""
+    as an orphan. The grace lets it finish — or kill its child — first.
+
+    The check blocks on an event rather than on a sleep, so the assertions do
+    not race the clock. Sleeping 0.15s against a 0.25s grace leaves 0.1s of
+    slack, which a loaded CI runner can spend on scheduling alone -- this test
+    failed exactly that way on macOS. With an event, "still unfinished" and
+    "finished once released" are both facts rather than bets.
+    """
     finished = []
+    release = threading.Event()
 
     def slow():
-        time.sleep(0.15)
+        release.wait(timeout=5)
         finished.append(True)
 
     run_with_budget({"slow": slow}, budget=0.01)
     assert finished == []  # abandoned, as the budget requires
+    release.set()  # from here the check needs no time worth measuring
     budget_module._join_stragglers()  # what the atexit hook calls
     assert finished == [True]
 

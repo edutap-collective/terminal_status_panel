@@ -23,6 +23,23 @@ from .render.layout import build_layout
 MIN_INTERVAL = 1.0
 
 
+def _monotonic() -> float:
+    """The loop's clock, as a seam a test can take over.
+
+    Called rather than using ``time.monotonic`` directly so that a test can
+    dictate how long a pass "took" by replacing *this* function. Replacing
+    ``time.monotonic`` itself would swap the clock for the whole process --
+    including the daemon threads in ``budget`` -- and whichever of them called
+    it first would consume the value this loop was meant to read.
+    """
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    """The loop's wait, as a seam for the same reason as ``_monotonic``."""
+    time.sleep(seconds)
+
+
 def default_interval(sections: tuple[str, ...], cfg: Config) -> float:
     """The refresh interval for these sections.
 
@@ -172,7 +189,7 @@ def run_follow(
     try:
         with console.screen() as screen:
             while True:
-                started = time.monotonic()
+                started = _monotonic()
                 error: str | None = None
                 try:
                     # Re-read the size every pass, so resizing the window
@@ -191,7 +208,7 @@ def run_follow(
                     # stop. The next one may well succeed.
                     rendered = []
                     error = f"{type(exc).__name__}: {exc}"
-                elapsed = time.monotonic() - started
+                elapsed = _monotonic() - started
                 delay = next_delay(chosen, elapsed)
                 # `delay` is only the *remaining* wait, not the cadence: on an
                 # ordinary pass elapsed + delay is `chosen` again, but once the
@@ -219,6 +236,6 @@ def run_follow(
                 screen.update(
                     Segments(chain.from_iterable((*line, Segment.line()) for line in lines))
                 )
-                time.sleep(delay)
+                _sleep(delay)
     except KeyboardInterrupt:
         return 0

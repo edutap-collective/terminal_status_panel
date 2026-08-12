@@ -1,5 +1,7 @@
 import io
 import re
+import threading
+import time
 
 import pytest
 from rich.console import Console
@@ -175,7 +177,7 @@ def test_without_a_terminal_it_renders_once_and_returns(monkeypatch, capsys):
     monkeypatch.setattr(cli, "collect_resources", lambda *a, **k: None)
     monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
     slept = []
-    monkeypatch.setattr(follow.time, "sleep", slept.append)
+    monkeypatch.setattr(follow, "_sleep", slept.append)
     assert follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=None) == 0
     assert slept == []
     assert "SYSTEM" in capsys.readouterr().out
@@ -183,14 +185,14 @@ def test_without_a_terminal_it_renders_once_and_returns(monkeypatch, capsys):
 
 def test_an_interrupt_ends_the_loop_cleanly(monkeypatch):
     monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
-    monkeypatch.setattr(follow.time, "sleep", _StopAfter(1))
+    monkeypatch.setattr(follow, "_sleep", _StopAfter(1))
     assert follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=5.0) == 0
 
 
 def test_a_failing_pass_does_not_end_the_loop(monkeypatch):
     monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
     stopper = _StopAfter(3)
-    monkeypatch.setattr(follow.time, "sleep", stopper)
+    monkeypatch.setattr(follow, "_sleep", stopper)
 
     def boom(*args, **kwargs):
         raise RuntimeError("collector fell over")
@@ -211,7 +213,7 @@ def test_an_interval_below_the_floor_is_raised(monkeypatch):
     monkeypatch.setattr(cli, "collect_resources", lambda *a, **k: None)
     monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
     stopper = _StopAfter(1)
-    monkeypatch.setattr(follow.time, "sleep", stopper)
+    monkeypatch.setattr(follow, "_sleep", stopper)
     follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=0.1)
     # Not `>= MIN_INTERVAL`: `next_delay` subtracts the pass's real elapsed
     # time from the chosen interval, so the delay is always a little under
@@ -242,7 +244,7 @@ def test_an_explicit_zero_interval_is_floored_not_ignored(monkeypatch):
 
     monkeypatch.setattr(cli, "collect_all", boom)
     stopper = _StopAfter(1)
-    monkeypatch.setattr(follow.time, "sleep", stopper)
+    monkeypatch.setattr(follow, "_sleep", stopper)
     follow.run_follow(Config(), ("health",), width=100, no_color=True, interval=0.0)
     # An ignored zero would fall back to the 20s health default; a floored
     # zero lands near MIN_INTERVAL instead, the same shape the floor test
@@ -268,7 +270,7 @@ def test_each_pass_redraws_the_whole_screen(monkeypatch):
     monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
 
     stopper = _StopAfter(2)
-    monkeypatch.setattr(follow.time, "sleep", stopper)
+    monkeypatch.setattr(follow, "_sleep", stopper)
 
     follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=5.0)
 
@@ -282,25 +284,32 @@ def test_each_pass_redraws_the_whole_screen(monkeypatch):
 def _run_one_pass_and_capture(monkeypatch, *, interval: float, monotonic_calls: list[float]) -> str:
     """A single pass of `run_follow`, with a controlled elapsed time.
 
-    `started`/`elapsed` inside the loop both come from `time.monotonic`,
+    `started`/`elapsed` inside the loop both come from `follow._monotonic`,
     called exactly twice per pass with the stubbed collectors below doing
     nothing measurable in between -- so handing it a fixed two-value sequence
     is what lets a test dictate exactly how long a pass "took" without an
     actual sleep. Returns the frame's plain text, ANSI sequences stripped.
+
+    The module's own seams are replaced, never `time.monotonic` and
+    `time.sleep` themselves. Those are process-wide, and the daemon threads in
+    `budget` call both: a straggler left over from an earlier test would land
+    its own `sleep` in `stopper.delays`, or eat a value out of this iterator,
+    and the assertions would then be measuring that thread instead of this
+    loop. Observed in CI as `delay == 0.1` where 19.38 was expected.
     """
     monkeypatch.setattr(follow.sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(cli, "collect_resources", lambda *a, **k: None)
     monkeypatch.setattr(cli, "collect_processes", lambda *a, **k: None)
 
     calls = iter(monotonic_calls)
-    monkeypatch.setattr(follow.time, "monotonic", lambda: next(calls))
+    monkeypatch.setattr(follow, "_monotonic", lambda: next(calls))
 
     buffer = io.StringIO()
     capturing = Console(file=buffer, force_terminal=True, width=100, height=24)
     monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
 
     stopper = _StopAfter(1)
-    monkeypatch.setattr(follow.time, "sleep", stopper)
+    monkeypatch.setattr(follow, "_sleep", stopper)
 
     follow.run_follow(Config(), ("server",), width=100, no_color=True, interval=interval)
     return _strip_ansi(buffer.getvalue()), stopper.delays[0]
@@ -361,7 +370,7 @@ def test_follow_mode_keeps_the_panels_colour(monkeypatch):
     monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
 
     stopper = _StopAfter(1)
-    monkeypatch.setattr(follow.time, "sleep", stopper)
+    monkeypatch.setattr(follow, "_sleep", stopper)
 
     follow.run_follow(Config(), ("server",), width=100, no_color=False, interval=5.0)
     follow_sgr = _count_sgr(buffer.getvalue())
@@ -420,8 +429,37 @@ def test_follow_mode_keeps_the_panels_hyperlinks(monkeypatch):
         file=buffer, force_terminal=True, width=100, height=30, color_system="standard"
     )
     monkeypatch.setattr(cli, "build_console", lambda width, no_color: capturing)
-    monkeypatch.setattr(follow.time, "sleep", _StopAfter(1))
+    monkeypatch.setattr(follow, "_sleep", _StopAfter(1))
 
     follow.run_follow(cfg, ("traefik",), width=100, no_color=False, interval=5.0)
 
     assert "\x1b]8;" in buffer.getvalue(), "the frame carries no hyperlink"
+
+
+def test_a_stray_thread_cannot_hijack_the_loop_measurements(monkeypatch):
+    """The regression the seams exist for.
+
+    An earlier version replaced `time.sleep` and `time.monotonic` themselves,
+    which are process-wide. The daemon threads in `budget` call both, so a
+    straggler left over from an earlier test could land its own `sleep` in the
+    captured delays -- and did, in CI, where this assertion read 0.1 instead
+    of 19.38. Patching the module's seams leaves such a thread on the real
+    clock, where it belongs.
+    """
+    started = threading.Event()
+
+    def straggler():
+        started.wait(timeout=5)
+        time.sleep(0.1)  # the real one: it must not reach the assertions
+
+    thread = threading.Thread(target=straggler, daemon=True, name="check-leftover")
+    thread.start()
+    started.set()
+
+    plain, delay = _run_one_pass_and_capture(
+        monkeypatch, interval=20.0, monotonic_calls=[0.0, 0.62]
+    )
+
+    assert "every 20s" in plain, plain
+    assert delay == pytest.approx(19.38)
+    thread.join(timeout=5)
