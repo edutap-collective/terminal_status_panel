@@ -35,9 +35,15 @@ def test_both_spellings_of_the_prefix_are_found():
     case-sensitive parser drops exactly the five that matter."""
     names = {ep.name for ep in parse.parse_entrypoints(ARGS)}
     assert names == {
-        "dashboard", "ping", "default", "https",
-        "login_example_net", "portalmgmt", "www_example_net",
-        "db-ui", "kafbat",
+        "dashboard",
+        "ping",
+        "default",
+        "https",
+        "login_example_net",
+        "portalmgmt",
+        "www_example_net",
+        "db-ui",
+        "kafbat",
     }
 
 
@@ -55,8 +61,11 @@ def test_entrypoints_keep_the_order_the_arguments_declare_them_in():
     names = [ep.name for ep in parse.parse_entrypoints(ARGS)]
     assert names[:4] == ["dashboard", "ping", "default", "https"]
     assert names[4:] == [
-        "login_example_net", "portalmgmt", "www_example_net",
-        "db-ui", "kafbat",
+        "login_example_net",
+        "portalmgmt",
+        "www_example_net",
+        "db-ui",
+        "kafbat",
     ]
 
 
@@ -110,12 +119,10 @@ KAFBAT_LABELS = {
 IMAGE_API_LABELS = {
     "traefik.docker.network": "traefik-public",
     "traefik.enable": "true",
-    "traefik.http.middlewares.image_api_stripprefix.stripprefix.prefixes":
-        "/wallet/image-api",
+    "traefik.http.middlewares.image_api_stripprefix.stripprefix.prefixes": "/wallet/image-api",
     "traefik.http.routers.image_api.entrypoints": "websecure",
     "traefik.http.routers.image_api.middlewares": "image_api_stripprefix",
-    "traefik.http.routers.image_api.rule":
-        "Host(`www.example.net`) && PathPrefix(`/wallet/image-api`)",
+    "traefik.http.routers.image_api.rule": "Host(`www.example.net`) && PathPrefix(`/wallet/image-api`)",
     "traefik.http.routers.image_api.tls": "true",
     "traefik.http.services.image_api.loadbalancer.server.port": "8090",
 }
@@ -148,7 +155,9 @@ def test_docker_name_can_differ_from_origin():
     service name (what ServiceStatus.name calls it) are two different
     strings -- this is the case the container collector needs."""
     routers, _, services = parse.parse_labels(
-        KAFBAT_LABELS, origin="course-statistics-db", docker_name="db",
+        KAFBAT_LABELS,
+        origin="course-statistics-db",
+        docker_name="db",
     )
     assert routers[0].origin == "course-statistics-db"
     assert services["kafbat-ui"].docker_service == "db"
@@ -306,8 +315,12 @@ def test_the_capitalised_entrypoints_key_is_also_read():
     routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
     ping = [r for r in routers if r.name == "ping-router"][0]
     assert ping.entrypoints == [
-        "login_example_net", "portalmgmt", "www_example_net",
-        "db-ui", "kafbat", "default",
+        "login_example_net",
+        "portalmgmt",
+        "www_example_net",
+        "db-ui",
+        "kafbat",
+        "default",
     ]
 
 
@@ -392,7 +405,7 @@ def test_a_payload_without_routers_yields_nothing():
 
 
 def test_a_router_without_a_status_is_not_reported_as_rejected():
-    """"Traefik reported no status" is not observable. Only a status the
+    """ "Traefik reported no status" is not observable. Only a status the
     parser could read, and that is not `enabled`, may become a rejection —
     otherwise the tree would show a measured-failure marker for a router
     nothing was ever measured about."""

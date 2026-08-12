@@ -6,7 +6,8 @@ from terminal_status_panel.model import UpdateInfo
 
 def test_parses_apt_check_output(monkeypatch):
     monkeypatch.setattr(
-        updates.subprocess, "run",
+        updates.subprocess,
+        "run",
         lambda *a, **k: SimpleNamespace(stderr="12;5", stdout=""),
     )
     info = updates.collect_updates()

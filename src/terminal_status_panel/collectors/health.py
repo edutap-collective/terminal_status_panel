@@ -130,16 +130,12 @@ def collect_health(
     dns: list[DnsCheck] = list(outcome.results.get("dns") or [])
     if "peers" in outcome.failed:
         peers.append(
-            PeerReachability(
-                name="?", method="tcp", ok=False, detail=outcome.failed["peers"]
-            )
+            PeerReachability(name="?", method="tcp", ok=False, detail=outcome.failed["peers"])
         )
     if "dns" in outcome.failed:
         dns.append(DnsCheck(label="DNS", ok=False, detail=outcome.failed["dns"]))
 
-    truncated = [
-        name.removeprefix(_CLUSTER_TASK_PREFIX) for name in outcome.truncated
-    ]
+    truncated = [name.removeprefix(_CLUSTER_TASK_PREFIX) for name in outcome.truncated]
 
     # We had either an answer or something to ask about — a peer name to check.
     # A truncated peers check still had peer names, so it counts as probed too.

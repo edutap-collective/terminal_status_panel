@@ -90,8 +90,9 @@ class ServiceTask:
     # The states Docker walks through before `running`. A task in one of them
     # has not been measured yet -- rendering it as 💀 claims a failure that
     # nobody observed.
-    _STARTING = frozenset({"new", "allocated", "pending", "assigned",
-                           "accepted", "preparing", "ready", "starting"})
+    _STARTING = frozenset(
+        {"new", "allocated", "pending", "assigned", "accepted", "preparing", "ready", "starting"}
+    )
 
     @property
     def running(self) -> bool:

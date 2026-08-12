@@ -42,6 +42,7 @@ def test_a_non_mapping_label_value_does_not_raise():
 
 # --- the one Compose-identity rule -------------------------------------------
 
+
 def test_a_compose_container_is_named_by_its_service_label():
     labels = {COMPOSE_PROJECT_LABEL: "portal", COMPOSE_SERVICE_LABEL: "db"}
     assert compose_identity(labels, "portal-db-1") == "db"

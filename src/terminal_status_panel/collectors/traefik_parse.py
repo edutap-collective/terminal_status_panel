@@ -51,9 +51,7 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
             continue
         seen.add(name)
         address = match.group("address")
-        found.append(
-            TraefikEntrypoint(name=name, address=address, port=_port_of(address))
-        )
+        found.append(TraefikEntrypoint(name=name, address=address, port=_port_of(address)))
     return found
 
 
@@ -85,9 +83,7 @@ _MIDDLEWARE = re.compile(
     r"^traefik\.http\.middlewares\.(?P<name>[^.]+)\.(?P<kind>[^.]+)\.(?P<key>.+)$",
     re.IGNORECASE,
 )
-_SERVICE = re.compile(
-    r"^traefik\.http\.services\.(?P<name>[^.]+)\.(?P<key>.+)$", re.IGNORECASE
-)
+_SERVICE = re.compile(r"^traefik\.http\.services\.(?P<name>[^.]+)\.(?P<key>.+)$", re.IGNORECASE)
 
 
 def _csv(value: str) -> list[str]:

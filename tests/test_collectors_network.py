@@ -2,13 +2,17 @@
 from terminal_status_panel.collectors import network
 
 # interface line: 5 fields. peer lines: 9 fields.
-WG_DUMP = "\t".join(["wg0", "privkey", "pubkey", "51820", "off"]) + "\n" + "\n".join(
-    "\t".join(row)
-    for row in [
-        ["wg0", "peerA", "(none)", "10.1.0.1:51820", "10.9.0.1/32", "1000", "1", "2", "25"],
-        ["wg0", "peerB", "(none)", "10.1.0.2:51820", "10.9.0.2/32", "700", "1", "2", "25"],
-        ["wg0", "peerC", "(none)", "(none)", "10.9.0.3/32", "0", "0", "0", "off"],
-    ]
+WG_DUMP = (
+    "\t".join(["wg0", "privkey", "pubkey", "51820", "off"])
+    + "\n"
+    + "\n".join(
+        "\t".join(row)
+        for row in [
+            ["wg0", "peerA", "(none)", "10.1.0.1:51820", "10.9.0.1/32", "1000", "1", "2", "25"],
+            ["wg0", "peerB", "(none)", "10.1.0.2:51820", "10.9.0.2/32", "700", "1", "2", "25"],
+            ["wg0", "peerC", "(none)", "(none)", "10.9.0.3/32", "0", "0", "0", "off"],
+        ]
+    )
 )
 
 HOSTS = {"wg-node-a": {"10.9.0.1"}, "wg-node-b": {"10.9.0.2"}}
@@ -35,8 +39,7 @@ def test_a_peer_without_allowed_ips_is_still_identifiable():
     """An empty (or "(none)") allowed-ips column would otherwise render as a
     bare "✅ " with nothing to identify the peer."""
     for allowed_ips in ("", "(none)"):
-        row = ["wg0", "AbCdEfGh0123456=", "(none)", "(none)", allowed_ips,
-               "1000", "1", "2", "off"]
+        row = ["wg0", "AbCdEfGh0123456=", "(none)", "(none)", allowed_ips, "1000", "1", "2", "off"]
         peer = network.parse_wg_dump("\t".join(row), now=1000.0, hosts=HOSTS)[0]
         assert peer.name.strip(), f"blank peer name for allowed-ips {allowed_ips!r}"
         assert "AbCdEfGh" in peer.name
@@ -111,6 +114,7 @@ def test_collect_peers_never_raises(monkeypatch):
 # stays at zero is a different fault from a peer that has gone quiet, and it
 # calls for a different search. The parser has to keep the two apart.
 
+
 def test_transfer_counters_are_parsed():
     peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
     assert peers[0].rx_bytes == 1
@@ -144,14 +148,23 @@ def test_endpoint_family_ipv4():
 
 
 def test_endpoint_family_ipv6():
-    row = ["wg0", "peerZ", "(none)", "[2001:4ca0:4f06:1::aa3:3954]:51194",
-           "10.9.0.4/32", "1000", "1", "2", "off"]
+    row = [
+        "wg0",
+        "peerZ",
+        "(none)",
+        "[2001:4ca0:4f06:1::aa3:3954]:51194",
+        "10.9.0.4/32",
+        "1000",
+        "1",
+        "2",
+        "off",
+    ]
     peer = network.parse_wg_dump("\t".join(row), now=1000.0, hosts=HOSTS)[0]
     assert peer.family == "IPv6"
 
 
 def test_a_peer_without_endpoint_has_no_family():
-    """"(none)" means never resolved. No grounds to claim IPv4."""
+    """ "(none)" means never resolved. No grounds to claim IPv4."""
     peers = network.parse_wg_dump(WG_DUMP, now=1000.0, hosts=HOSTS)
     assert peers[2].endpoint is None
     assert peers[2].family is None

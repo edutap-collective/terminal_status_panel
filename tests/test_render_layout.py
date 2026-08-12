@@ -31,8 +31,9 @@ def _render(renderable, width=100) -> str:
 def test_build_layout_contains_all_sections():
     data = PanelData(
         system=SystemInfo(hostname="srv01", ip_addresses=["10.0.0.5"]),
-        resources=ResourceUsage(mem_percent=64.0, mem_used=1, mem_total=2,
-                                cpu_percent=12.0, cpu_per_core=[10.0, 14.0]),
+        resources=ResourceUsage(
+            mem_percent=64.0, mem_used=1, mem_total=2, cpu_percent=12.0, cpu_per_core=[10.0, 14.0]
+        ),
         swarm=SwarmInfo(reachable=False),
         updates=UpdateInfo(supported=True, available=3, security=1, standard=2),
     )
@@ -108,20 +109,31 @@ def _traefik_data():
     )
 
     return PanelData(
-        swarm=SwarmInfo(reachable=True, enabled=True, services=[
-            ServiceStatus("kafbat-ui_kafbat-ui", 1, 1,
-                          tasks=[ServiceTask("srv-01", "running")]),
-        ]),
+        swarm=SwarmInfo(
+            reachable=True,
+            enabled=True,
+            services=[
+                ServiceStatus(
+                    "kafbat-ui_kafbat-ui", 1, 1, tasks=[ServiceTask("srv-01", "running")]
+                ),
+            ],
+        ),
         traefik=TraefikInfo(
             reachable=True,
-            entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020",
-                                           port=2020)],
-            routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"],
-                                   rule="PathPrefix(`/portale/kafka-ui`)",
-                                   service="kafbat-ui")],
-            services={"kafbat-ui": TraefikServiceRef(
-                name="kafbat-ui", port=8080, scheme="http",
-                docker_service="kafbat-ui_kafbat-ui")},
+            entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
+            routers=[
+                TraefikRouter(
+                    name="kafbat-ui",
+                    entrypoints=["portalmgmt"],
+                    rule="PathPrefix(`/portale/kafka-ui`)",
+                    service="kafbat-ui",
+                )
+            ],
+            services={
+                "kafbat-ui": TraefikServiceRef(
+                    name="kafbat-ui", port=8080, scheme="http", docker_service="kafbat-ui_kafbat-ui"
+                )
+            },
         ),
     )
 
@@ -146,11 +158,16 @@ def test_the_server_section_hands_the_origin_map_to_the_process_rows():
     data = PanelData(
         resources=ResourceUsage(),
         processes=ProcessSnapshot(
-            top_memory=[ProcessInfo(pid=1, name="java", memory_percent=7.0,
-                                    origin="container abcdef123456")],
-            sampled=0.3),
-        swarm=SwarmInfo(reachable=True, enabled=True,
-                        container_services={"abcdef123456789": "stack_app_backend"}),
+            top_memory=[
+                ProcessInfo(pid=1, name="java", memory_percent=7.0, origin="container abcdef123456")
+            ],
+            sampled=0.3,
+        ),
+        swarm=SwarmInfo(
+            reachable=True,
+            enabled=True,
+            container_services={"abcdef123456789": "stack_app_backend"},
+        ),
     )
     out = _render(build_layout(data, Config(), ("server",)), width=200)
     assert "stack_app_backend" in out

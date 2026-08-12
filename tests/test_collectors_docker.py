@@ -15,8 +15,17 @@ _AT_2130Z = datetime(2026, 8, 12, 21, 30, tzinfo=timezone.utc).timestamp()
 class _FakeService:
     """*tasks* is a list of (node_id | None, state) for desired-state=running."""
 
-    def __init__(self, name, desired, tasks, stack=None, description=None,
-                 raw_labels=None, mode=None, history=None):
+    def __init__(
+        self,
+        name,
+        desired,
+        tasks,
+        stack=None,
+        description=None,
+        raw_labels=None,
+        mode=None,
+        history=None,
+    ):
         self.name = name
         labels = {}
         if stack is not None:
@@ -25,8 +34,7 @@ class _FakeService:
             labels[docker_collector.LEGACY_DESCRIPTION_LABEL] = description
         labels.update(raw_labels or {})
         self.attrs = {
-            "Spec": {"Mode": mode or {"Replicated": {"Replicas": desired}},
-                     "Labels": labels}
+            "Spec": {"Mode": mode or {"Replicated": {"Replicas": desired}}, "Labels": labels}
         }
         self._tasks = tasks
         #: (node_id, state, timestamp) for tasks Swarm has already shut down --
@@ -43,8 +51,7 @@ class _FakeService:
         if filters and filters.get("desired-state") == "running":
             return result
         for node_id, state, timestamp in self._history:
-            task = {"Status": {"State": state, "Timestamp": timestamp},
-                    "DesiredState": "shutdown"}
+            task = {"Status": {"State": state, "Timestamp": timestamp}, "DesiredState": "shutdown"}
             if node_id is not None:
                 task["NodeID"] = node_id
             result.append(task)
@@ -52,8 +59,9 @@ class _FakeService:
 
 
 class _FakeNode:
-    def __init__(self, node_id, hostname, state="ready", role="worker", leader=False,
-                 availability="active"):
+    def __init__(
+        self, node_id, hostname, state="ready", role="worker", leader=False, availability="active"
+    ):
         self.id = node_id
         self.attrs = {
             "ID": node_id,
@@ -99,7 +107,8 @@ class _FakeClient:
 
 def test_unreachable_when_from_env_raises(monkeypatch):
     monkeypatch.setattr(
-        docker_collector.docker, "from_env",
+        docker_collector.docker,
+        "from_env",
         lambda *a, **k: (_ for _ in ()).throw(Exception("no socket")),
     )
     result = docker_collector.collect_docker(timeout=0.1)
@@ -110,12 +119,12 @@ def test_unreachable_when_from_env_raises(monkeypatch):
 def test_swarm_active_counts_running_replicas(monkeypatch):
     client = _FakeClient(
         "active",
-        nodes=[_FakeNode("n1", "srv-01"), _FakeNode("n2", "srv-02"),
-               _FakeNode("n3", "srv-03")],
+        nodes=[_FakeNode("n1", "srv-01"), _FakeNode("n2", "srv-02"), _FakeNode("n3", "srv-03")],
         services=[
             _FakeService("postgres", desired=1, tasks=[("n1", "running")]),
-            _FakeService("kafka", desired=3,
-                         tasks=[("n1", "running"), ("n2", "running"), ("n3", "failed")]),
+            _FakeService(
+                "kafka", desired=3, tasks=[("n1", "running"), ("n2", "running"), ("n3", "failed")]
+            ),
         ],
     )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
@@ -136,10 +145,16 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
         _FakeNode("n3", "srv-ccn-02", state="down"),
     ]
     services = [
-        _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="PostgreSQL-18",
-                     description="PostgreSQL database, version 18"),
-        _FakeService("kafka", desired=2, tasks=[("n2", "running"), ("n3", "failed")],
-                     stack="kafka"),
+        _FakeService(
+            "pg",
+            desired=1,
+            tasks=[("n1", "running")],
+            stack="PostgreSQL-18",
+            description="PostgreSQL database, version 18",
+        ),
+        _FakeService(
+            "kafka", desired=2, tasks=[("n2", "running"), ("n3", "failed")], stack="kafka"
+        ),
         _FakeService("registry", desired=1, tasks=[(None, "pending")]),  # unassigned
     ]
     client = _FakeClient("active", services=services, nodes=nodes)
@@ -157,7 +172,9 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
 
     kafka = next(s for s in result.services if s.name == "kafka")
     assert {(t.node, t.state) for t in kafka.tasks} == {
-        ("srv-ccn-01", "running"), ("srv-ccn-02", "failed")}
+        ("srv-ccn-01", "running"),
+        ("srv-ccn-02", "failed"),
+    }
 
     reg = next(s for s in result.services if s.name == "registry")
     assert reg.stack is None
@@ -167,8 +184,7 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
 def test_custom_description_label(monkeypatch):
     svc = _FakeService("app", desired=1, tasks=[("n1", "running")])
     svc.attrs["Spec"]["Labels"]["info"] = "my custom description"
-    client = _FakeClient("active", services=[svc],
-                         nodes=[_FakeNode("n1", "srv-01")])
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-01")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker(description_label="info")
     assert result.services[0].description == "my custom description"
@@ -180,8 +196,7 @@ def test_swarm_inactive_falls_back_to_containers(monkeypatch):
             self.name = name
             self.id = f"id-{name}"
             self.status = "running"
-            self.attrs = {"State": {"Status": "running", "ExitCode": 0},
-                          "Config": {"Labels": {}}}
+            self.attrs = {"State": {"Status": "running", "ExitCode": 0}, "Config": {"Labels": {}}}
 
     client = _FakeClient("inactive", containers=[_C("redis"), _C("nginx")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
@@ -189,15 +204,17 @@ def test_swarm_inactive_falls_back_to_containers(monkeypatch):
     assert result.reachable is True and result.enabled is False
     assert result.services == []
     assert {c.name for c in result.containers} == {"redis", "nginx"}
-    assert all(c.running_replicas == 1 and c.desired_replicas == 1
-              for c in result.containers)
+    assert all(c.running_replicas == 1 and c.desired_replicas == 1 for c in result.containers)
 
 
 def test_drained_node_is_ready_but_not_operational(monkeypatch):
-    client = _FakeClient("active", nodes=[
-        _FakeNode("n1", "srv-01"),
-        _FakeNode("n2", "srv-02", availability="drain"),
-    ])
+    client = _FakeClient(
+        "active",
+        nodes=[
+            _FakeNode("n1", "srv-01"),
+            _FakeNode("n2", "srv-02", availability="drain"),
+        ],
+    )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     active, drained = docker_collector.collect_docker().nodes
 
@@ -222,6 +239,7 @@ def test_missing_availability_field_stays_operational(monkeypatch):
 
 # --- description label: neutral default, legacy key still honoured ----------
 
+
 def test_default_description_label_is_vendor_neutral():
     from terminal_status_panel.config import Config
 
@@ -232,8 +250,13 @@ def test_default_description_label_is_vendor_neutral():
 def test_legacy_label_is_still_read(monkeypatch):
     """Installations predating the rename set the old key and no config. They
     must keep their descriptions without changing anything."""
-    svc = _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="s",
-                       raw_labels={"lmu.service.description": "from the old key"})
+    svc = _FakeService(
+        "pg",
+        desired=1,
+        tasks=[("n1", "running")],
+        stack="s",
+        raw_labels={"lmu.service.description": "from the old key"},
+    )
     client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-a")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
@@ -241,9 +264,13 @@ def test_legacy_label_is_still_read(monkeypatch):
 
 
 def test_configured_label_wins_over_the_legacy_one(monkeypatch):
-    svc = _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="s",
-                       raw_labels={"status.description": "current",
-                                   "lmu.service.description": "stale"})
+    svc = _FakeService(
+        "pg",
+        desired=1,
+        tasks=[("n1", "running")],
+        stack="s",
+        raw_labels={"status.description": "current", "lmu.service.description": "stale"},
+    )
     client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-a")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
@@ -254,9 +281,13 @@ def test_an_empty_configured_label_is_still_the_answer(monkeypatch):
     """Setting the key to "" is a deliberate "no description here". Treating it
     as absent would resurrect the legacy text the service was migrated away
     from — the opposite of what the migration was for."""
-    svc = _FakeService("pg", desired=1, tasks=[("n1", "running")], stack="s",
-                       raw_labels={"status.description": "",
-                                   "lmu.service.description": "stale"})
+    svc = _FakeService(
+        "pg",
+        desired=1,
+        tasks=[("n1", "running")],
+        stack="s",
+        raw_labels={"status.description": "", "lmu.service.description": "stale"},
+    )
     client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-a")])
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
@@ -265,11 +296,13 @@ def test_an_empty_configured_label_is_still_the_answer(monkeypatch):
 
 # --- plain and Compose container collection ----------------------------------
 
+
 class _FakeContainer:
     """*state* is the raw Docker status; *health* the healthcheck verdict."""
 
-    def __init__(self, name, labels=None, state="running", exit_code=0,
-                 health=None, container_id=None):
+    def __init__(
+        self, name, labels=None, state="running", exit_code=0, health=None, container_id=None
+    ):
         self.name = name
         self.id = container_id or f"id-{name}"
         self.status = state
@@ -364,8 +397,9 @@ def test_swarm_tasks_are_not_listed_twice(monkeypatch):
         nodes=[_FakeNode("n1", "srv-01", leader=True, role="manager")],
         services=[_FakeService("kafka", desired=1, tasks=[("n1", "running")])],
         containers=[
-            _FakeContainer("kafka.1.abcdef",
-                           labels={docker_collector.SWARM_SERVICE_LABEL: "kafka"}),
+            _FakeContainer(
+                "kafka.1.abcdef", labels={docker_collector.SWARM_SERVICE_LABEL: "kafka"}
+            ),
             _compose("portal", "web"),
         ],
     )
@@ -594,6 +628,7 @@ def test_a_service_label_without_a_project_label_names_the_container_the_same_wa
 
 # --- container id to service name map -----------------------------------------
 
+
 def test_a_swarm_container_maps_its_id_to_its_service(monkeypatch):
     """The process rows need this map, and Docker already hands us the data.
 
@@ -601,10 +636,16 @@ def test_a_swarm_container_maps_its_id_to_its_service(monkeypatch):
     reported through services.list() -- but its id still has to resolve, or a
     process row can only ever show a bare hex string.
     """
-    client = _FakeClient("active", containers=[
-        _FakeContainer("app.1.xyz", container_id="aaaa111122223333",
-                       labels={docker_collector.SWARM_SERVICE_LABEL: "stack_app_backend"}),
-    ])
+    client = _FakeClient(
+        "active",
+        containers=[
+            _FakeContainer(
+                "app.1.xyz",
+                container_id="aaaa111122223333",
+                labels={docker_collector.SWARM_SERVICE_LABEL: "stack_app_backend"},
+            ),
+        ],
+    )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
 
     result = docker_collector.collect_docker()
@@ -647,9 +688,14 @@ def test_swarm_cronjob_labels_mark_a_service_as_a_job(monkeypatch):
     client = _FakeClient(
         "active",
         nodes=[_FakeNode("n1", "srv-01")],
-        services=[_FakeService("stack_nightly", desired=1, tasks=[],
-                               raw_labels={"swarm.cronjob.enable": "true",
-                                           "swarm.cronjob.schedule": "0 5 * * *"})],
+        services=[
+            _FakeService(
+                "stack_nightly",
+                desired=1,
+                tasks=[],
+                raw_labels={"swarm.cronjob.enable": "true", "swarm.cronjob.schedule": "0 5 * * *"},
+            )
+        ],
     )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
 
@@ -687,12 +733,18 @@ def test_the_newest_task_is_the_last_run(monkeypatch):
     client = _FakeClient(
         "active",
         nodes=[_FakeNode("n1", "srv-01"), _FakeNode("n2", "srv-02")],
-        services=[_FakeService(
-            "stack_nightly", desired=1, tasks=[],
-            raw_labels={"swarm.cronjob.enable": "true"},
-            history=[("n2", "failed", "2026-08-11T20:00:00.000000000Z"),
-                     ("n1", "complete", "2026-08-12T09:30:00.000000000Z")],
-        )],
+        services=[
+            _FakeService(
+                "stack_nightly",
+                desired=1,
+                tasks=[],
+                raw_labels={"swarm.cronjob.enable": "true"},
+                history=[
+                    ("n2", "failed", "2026-08-11T20:00:00.000000000Z"),
+                    ("n1", "complete", "2026-08-12T09:30:00.000000000Z"),
+                ],
+            )
+        ],
     )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     monkeypatch.setattr(docker_collector, "_now", lambda: _AT_2130Z)
@@ -711,8 +763,7 @@ def test_a_docker_task_timestamp_is_read_as_utc():
     """
     parsed = docker_collector._parse_timestamp("2026-08-12T07:28:29.81745826Z")
 
-    assert parsed == datetime(2026, 8, 12, 7, 28, 29, 817458,
-                              tzinfo=timezone.utc).timestamp()
+    assert parsed == datetime(2026, 8, 12, 7, 28, 29, 817458, tzinfo=timezone.utc).timestamp()
 
 
 def test_a_timestamp_without_a_zone_is_still_read_as_utc():

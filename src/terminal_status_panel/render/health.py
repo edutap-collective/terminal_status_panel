@@ -136,7 +136,7 @@ def _clusters_body(health: HealthInfo) -> RenderableType:
 
 
 def _peer_method_label(health: HealthInfo) -> str:
-    """"wg"/"tcp" when every peer agrees on a method, "mixed" when they don't,
+    """ "wg"/"tcp" when every peer agrees on a method, "mixed" when they don't,
     "wg" as the default when there is nothing to report."""
     if not health.peers:
         return "wg"

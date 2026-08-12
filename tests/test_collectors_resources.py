@@ -10,20 +10,26 @@ from terminal_status_panel.model import ResourceUsage
 @pytest.fixture
 def base_mocks(monkeypatch):
     monkeypatch.setattr(
-        resources.psutil, "virtual_memory",
+        resources.psutil,
+        "virtual_memory",
         lambda: SimpleNamespace(
-            total=32_000_000_000, used=20_400_000_000, available=11_520_000_000, percent=64.0,
+            total=32_000_000_000,
+            used=20_400_000_000,
+            available=11_520_000_000,
+            percent=64.0,
         ),
     )
     monkeypatch.setattr(
-        resources.psutil, "swap_memory",
+        resources.psutil,
+        "swap_memory",
         lambda: SimpleNamespace(total=8_000_000_000, used=600_000_000, percent=8.0),
     )
     monkeypatch.setattr(resources.psutil, "disk_partitions", lambda all=False: [])
     monkeypatch.setattr(resources.psutil, "getloadavg", lambda: (1.0, 0.7, 0.4))
     monkeypatch.setattr(resources.psutil, "cpu_count", lambda: 4)
     monkeypatch.setattr(
-        resources.psutil, "cpu_percent",
+        resources.psutil,
+        "cpu_percent",
         lambda interval=None, percpu=False: [10.0, 20.0, 30.0, 40.0] if percpu else 25.0,
     )
 
@@ -48,7 +54,8 @@ def test_reported_mem_used_agrees_with_mem_percent(monkeypatch):
     (48.4 GB), so this fails loudly if the derivation regresses to `used`.
     """
     monkeypatch.setattr(
-        resources.psutil, "virtual_memory",
+        resources.psutil,
+        "virtual_memory",
         lambda: SimpleNamespace(
             total=64_000_000_000,
             available=15_600_000_000,
@@ -57,14 +64,16 @@ def test_reported_mem_used_agrees_with_mem_percent(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        resources.psutil, "swap_memory",
+        resources.psutil,
+        "swap_memory",
         lambda: SimpleNamespace(total=8_000_000_000, used=600_000_000, percent=8.0),
     )
     monkeypatch.setattr(resources.psutil, "disk_partitions", lambda all=False: [])
     monkeypatch.setattr(resources.psutil, "getloadavg", lambda: (1.0, 0.7, 0.4))
     monkeypatch.setattr(resources.psutil, "cpu_count", lambda: 4)
     monkeypatch.setattr(
-        resources.psutil, "cpu_percent",
+        resources.psutil,
+        "cpu_percent",
         lambda interval=None, percpu=False: [10.0, 20.0, 30.0, 40.0] if percpu else 25.0,
     )
 
@@ -92,7 +101,8 @@ def test_filesystem_filtering(base_mocks, monkeypatch):
     ]
     monkeypatch.setattr(resources.psutil, "disk_partitions", lambda all=False: parts)
     monkeypatch.setattr(
-        resources.psutil, "disk_usage",
+        resources.psutil,
+        "disk_usage",
         lambda p: SimpleNamespace(total=230_000_000_000, used=210_000_000_000, percent=91.0),
     )
     res = resources.collect_resources()
@@ -133,12 +143,8 @@ class _Usage:
 
 
 def _fake_disks(monkeypatch, partitions, usage_by_mount):
-    monkeypatch.setattr(
-        resources_collector.psutil, "disk_partitions", lambda all=False: partitions
-    )
-    monkeypatch.setattr(
-        resources_collector.psutil, "disk_usage", lambda mp: usage_by_mount[mp]
-    )
+    monkeypatch.setattr(resources_collector.psutil, "disk_partitions", lambda all=False: partitions)
+    monkeypatch.setattr(resources_collector.psutil, "disk_usage", lambda mp: usage_by_mount[mp])
 
 
 def test_darwin_root_adopts_the_data_volumes_figures(monkeypatch):
@@ -202,9 +208,7 @@ def test_ignored_prefixes_are_dropped(monkeypatch):
         },
     )
 
-    result = resources_collector._collect_filesystems(
-        ["/Library/Developer/CoreSimulator/"]
-    )
+    result = resources_collector._collect_filesystems(["/Library/Developer/CoreSimulator/"])
 
     assert [fs.mountpoint for fs in result] == ["/", "/Volumes/Data2"]
 

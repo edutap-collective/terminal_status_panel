@@ -45,8 +45,7 @@ def render_profile_file(panels: tuple[str, ...]) -> str:
 
 def render_managed_block(panels: tuple[str, ...]) -> str:
     """A marker-delimited block inserted into an existing rc file."""
-    inner = " ; ".join(
-        f"command -v {c} >/dev/null 2>&1 && {c}" for c in _commands(panels))
+    inner = " ; ".join(f"command -v {c} >/dev/null 2>&1 && {c}" for c in _commands(panels))
     return f"{_BEGIN}\ncase $- in *i*) {inner} ;; esac\n{_END}\n"
 
 
@@ -78,8 +77,9 @@ def resolve_target(scope: str, shell: str, home: Path | None = None) -> tuple[st
     return "block", (bash_profile if bash_profile.exists() else home / ".profile")
 
 
-def apply(kind: str, path: Path, panels: tuple[str, ...],
-          uninstall: bool = False, dry_run: bool = False) -> list[str]:
+def apply(
+    kind: str, path: Path, panels: tuple[str, ...], uninstall: bool = False, dry_run: bool = False
+) -> list[str]:
     """Perform the install/uninstall; return human-readable action messages."""
     messages: list[str] = []
 
@@ -123,14 +123,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="install-panel",
         description="Install the status panel into a login shell (recommended over "
-                    "update-motd.d, so it uses the full terminal width).",
+        "update-motd.d, so it uses the full terminal width).",
     )
-    parser.add_argument("--scope", choices=["global", "user"], default="user",
-                        help="system-wide (/etc/profile.d) or per-user (default: user)")
-    parser.add_argument("--panel", choices=list(PANELS), action="append", dest="panels",
-                        help="which command to run; repeatable (default: full)")
-    parser.add_argument("--shell", choices=["auto", "bash", "zsh"], default="auto",
-                        help="target shell profile (default: auto-detect)")
+    parser.add_argument(
+        "--scope",
+        choices=["global", "user"],
+        default="user",
+        help="system-wide (/etc/profile.d) or per-user (default: user)",
+    )
+    parser.add_argument(
+        "--panel",
+        choices=list(PANELS),
+        action="append",
+        dest="panels",
+        help="which command to run; repeatable (default: full)",
+    )
+    parser.add_argument(
+        "--shell",
+        choices=["auto", "bash", "zsh"],
+        default="auto",
+        help="target shell profile (default: auto-detect)",
+    )
     parser.add_argument("--uninstall", action="store_true", help="remove a previous install")
     parser.add_argument("--dry-run", action="store_true", help="show actions, write nothing")
     args = parser.parse_args(argv)
@@ -140,16 +153,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         messages = apply(kind, path, panels, args.uninstall, args.dry_run)
     except PermissionError:
-        print(f"error: permission denied writing {path}. "
-              f"Re-run with sudo for --scope global.", file=sys.stderr)
+        print(
+            f"error: permission denied writing {path}. Re-run with sudo for --scope global.",
+            file=sys.stderr,
+        )
         return 1
 
     prefix = "[dry-run] " if args.dry_run else ""
     for message in messages:
         print(prefix + message)
     if not args.uninstall and not args.dry_run:
-        print(f"Installed [{', '.join(panels)}] for {args.scope} login shells — "
-              f"open a new login session to see it.")
+        print(
+            f"Installed [{', '.join(panels)}] for {args.scope} login shells — "
+            f"open a new login session to see it."
+        )
     return 0
 
 

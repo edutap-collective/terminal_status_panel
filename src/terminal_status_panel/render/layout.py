@@ -53,8 +53,7 @@ def server_section(data: PanelData, cfg: Config) -> RenderableType:
     # process rows show container ids, which is what `status-server` alone can
     # honestly say.
     origins = data.swarm.container_services if data.swarm else None
-    return Group(top, Text(""),
-                 system_status(data.resources, cfg, data.processes, origins))
+    return Group(top, Text(""), system_status(data.resources, cfg, data.processes, origins))
 
 
 def docker_section(data: PanelData, cfg: Config) -> RenderableType:
@@ -81,8 +80,7 @@ _SECTION_BUILDERS = {
 }
 
 
-def build_layout(data: PanelData, cfg: Config,
-                 sections: tuple[str, ...] = SECTIONS) -> Group:
+def build_layout(data: PanelData, cfg: Config, sections: tuple[str, ...] = SECTIONS) -> Group:
     parts: list[RenderableType] = []
     for name in sections:
         builder = _SECTION_BUILDERS.get(name)
