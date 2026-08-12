@@ -171,10 +171,21 @@ def parse_labels(
 
 
 def _as_list(value: object) -> list[str]:
+    """A YAML absence, scalar or sequence, as a list of strings.
+
+    A scalar where a sequence belongs -- ``entryPoints: websecure`` rather
+    than a list -- is a configuration mistake, and reading it as a one-element
+    list is what the string case already does. Anything else non-iterable
+    (a number, a mapping) is treated the same way, because losing the entire
+    Traefik section to a TypeError would report far less than the mistake
+    itself costs.
+    """
     if value is None:
         return []
     if isinstance(value, str):
         return [value]
+    if not isinstance(value, (list, tuple, set)):
+        return [str(value)]
     return [str(item) for item in value]
 
 

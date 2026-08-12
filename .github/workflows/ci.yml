@@ -50,6 +50,7 @@ jobs:
       - run: uv sync --group dev
       - run: uv run --no-sync python -m ruff check src tests tools
       - run: uv run --no-sync python -m ruff format --check src tests tools
+      - run: uv run --no-sync python -m ty check src
 
   freebsd:
     runs-on: ubuntu-latest

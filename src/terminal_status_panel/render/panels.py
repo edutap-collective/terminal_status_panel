@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
@@ -742,7 +742,7 @@ def _node_cell(services, node_full: str) -> Text:
     return Text(f"{_WARN}{running}/{len(tasks)}", style="yellow")
 
 
-def _base_service_name(name: str, node_names) -> str:
+def _base_service_name(name: str, node_names: Sequence[str]) -> str:
     """Reduce a service name to the row it belongs in.
 
     A trailing '-<node hostname>' or '_<node hostname>' goes first, so

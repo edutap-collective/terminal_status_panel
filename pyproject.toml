@@ -40,6 +40,12 @@ dependencies = [
 test = [
     "pytest>=8",
     "pytest-cov",
+    # Test-only: the Traefik cross-check builds an SSLContext from a client
+    # certificate, and the only honest way to test that is with a real one.
+    # Generated per run rather than committed -- a fixture certificate expires,
+    # and a suite that goes red one morning for a reason unrelated to the
+    # change that triggered it teaches people to ignore it.
+    "cryptography>=44",
 ]
 typecheck = ["ty"]
 dev = [

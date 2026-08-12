@@ -1,4 +1,9 @@
+import inspect
+import ssl
+from datetime import UTC
+
 import httpx
+import pytest
 
 from terminal_status_panel.collectors import traefik as collector
 from terminal_status_panel.collectors._labels import (
@@ -718,3 +723,92 @@ def test_no_configs_at_all_is_not_reported_as_a_gap():
     configs must not read as a file provider that failed."""
     info = collector.collect_traefik(_FakeClient(services=[_FakeService("other")]))
     assert info.file_provider_error is None
+
+
+# --------------------------------------------------------------------------- #
+# The production request path
+#
+# Every test above passes the `client` seam, which bypasses the branch that
+# builds the real request. That branch was therefore never executed by the
+# suite -- and it was broken: httpx removed `cert` from its top-level API in
+# 0.28, so the call raised TypeError and the mTLS cross-check failed silently.
+# --------------------------------------------------------------------------- #
+
+
+def test_the_production_path_passes_arguments_httpx_accepts(monkeypatch, tmp_path):
+    """The regression test for a call httpx would reject.
+
+    Binding against the real signature is the point: a plain mock accepts any
+    keyword, so it would have recorded `cert=...` happily and proved nothing.
+    """
+    monkeypatch.setattr(collector, "_ssl_context", lambda api: ssl.create_default_context())
+    signature = inspect.signature(httpx.get)
+    seen = {}
+
+    def recording_get(url, **kwargs):
+        signature.bind(url, **kwargs)  # TypeError if httpx would not accept these
+        seen.update(kwargs)
+        # `request=` is required: raise_for_status refuses to work without it.
+        return httpx.Response(200, json={"routers": {}}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(collector.httpx, "get", recording_get)
+    cfg = Config(traefik=TraefikApiConfig(url="https://example.invalid/api", cert="/unused.pem"))
+
+    result = collector.fetch_accepted(cfg)
+
+    assert result == set()
+    assert "cert" not in seen  # httpx has no such parameter any more
+
+
+def _self_signed(tmp_path, *, split_key: bool):
+    """A throwaway certificate and key, generated rather than committed."""
+    from datetime import datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "panel-test")])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    cert_file = tmp_path / "client.pem"
+    if split_key:
+        cert_file.write_bytes(cert_pem)
+        key_file = tmp_path / "client.key"
+        key_file.write_bytes(key_pem)
+        return str(cert_file), str(key_file)
+    cert_file.write_bytes(cert_pem + key_pem)  # bundled, as the config allows
+    return str(cert_file), None
+
+
+@pytest.mark.parametrize("split_key", [True, False], ids=["separate-key", "bundled-key"])
+def test_the_client_certificate_is_actually_loadable(tmp_path, split_key):
+    """Both shapes the configuration allows must produce a usable context.
+
+    Asserting that the call *succeeds* is the whole test: `load_cert_chain`
+    raises on a key that does not match its certificate, on a missing file and
+    on a malformed one, so a context coming back at all is the evidence.
+    """
+    cert, key = _self_signed(tmp_path, split_key=split_key)
+    api = TraefikApiConfig(url="https://example.invalid/api", cert=cert, key=key)
+
+    context = collector._ssl_context(api)
+
+    assert isinstance(context, ssl.SSLContext)

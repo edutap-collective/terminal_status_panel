@@ -15,6 +15,7 @@ venv: ## Create .venv and install the package with its dev group
 lint: venv ## Run ruff checks and the type checker
 	$(PYTHON) -m ruff check src tests tools
 	$(PYTHON) -m ruff format --check src tests tools
+	$(PYTHON) -m ty check src
 
 reformat: venv ## Autoformat and autofix
 	$(PYTHON) -m ruff format src tests tools

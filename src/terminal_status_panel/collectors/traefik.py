@@ -12,6 +12,7 @@ parse still appears here as configured. The optional API path answers that.
 from __future__ import annotations
 
 import base64
+import ssl
 from contextlib import contextmanager
 
 import httpx
@@ -120,7 +121,7 @@ def _note_file_provider_error(info: TraefikInfo, message: str) -> None:
         info.file_provider_error = message
 
 
-def _combined_listing_error(service_error: str, container_error: str) -> str:
+def _combined_listing_error(service_error: str | None, container_error: str | None) -> str:
     """One line for the state where nothing at all could be read.
 
     Reached only when both the Swarm services and the container listing
@@ -157,8 +158,8 @@ def _socket_timeout(client, timeout: float):
     # which is also what keeps this working for a stand-in that is not a real
     # docker-py client.
     previous = getattr(api, "timeout", _MISSING) if api is not None else _MISSING
-    restore = previous is not _MISSING
-    if restore:
+    restore = api is not None and previous is not _MISSING
+    if api is not None and restore:
         try:
             api.timeout = timeout
         except Exception:
@@ -166,7 +167,7 @@ def _socket_timeout(client, timeout: float):
     try:
         yield
     finally:
-        if restore:
+        if api is not None and restore:
             try:
                 api.timeout = previous
             except Exception:  # noqa: S110
@@ -266,18 +267,20 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             info.file_provider_error = f"{type(exc).__name__}: {exc}"
             configs = []
 
-    if mounted is None and configs:
+    if mounted is None:
         # Without the Traefik service there is no way to tell a live config
         # generation from a superseded one, and guessing by name would put
         # routers on screen that Traefik has not read since two deploys ago.
         # An unreadable file provider is the honest report: the warning names
         # the reason, and the routers are visibly missing rather than wrong.
-        _note_file_provider_error(
-            info,
-            "traefik service not found, so which config generations are"
-            " mounted cannot be determined",
-        )
+        if configs:
+            _note_file_provider_error(
+                info,
+                "traefik service not found, so which config generations are"
+                " mounted cannot be determined",
+            )
         configs = []
+        mounted = set()
 
     for config in configs:
         name = getattr(config, "name", "") or ""
@@ -343,6 +346,19 @@ def _is_readable_rawdata(payload) -> bool:
     return isinstance(payload, dict) and isinstance(payload.get("routers"), dict)
 
 
+def _ssl_context(api) -> ssl.SSLContext:
+    """The configured client certificate, as a context httpx can use.
+
+    httpx dropped ``cert=`` from its top-level API in 0.28, so the material is
+    loaded into an ``SSLContext`` instead. ``load_cert_chain`` takes the key
+    separately or reads it from the certificate file when it is bundled there,
+    which mirrors what the configuration allows.
+    """
+    context = ssl.create_default_context(cafile=api.ca) if api.ca else ssl.create_default_context()
+    context.load_cert_chain(api.cert, api.key)
+    return context
+
+
 def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | None:
     """Ask Traefik what it accepted, or None when that could not be learned.
 
@@ -363,12 +379,7 @@ def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | Non
         if client is not None:
             response = client.get(api.url, timeout=5.0)
         else:
-            response = httpx.get(
-                api.url,
-                cert=(api.cert, api.key) if api.key else api.cert,
-                verify=api.ca or True,
-                timeout=5.0,
-            )
+            response = httpx.get(api.url, verify=_ssl_context(api), timeout=5.0)
         response.raise_for_status()
         payload = response.json()
         if not _is_readable_rawdata(payload):
