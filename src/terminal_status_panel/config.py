@@ -69,6 +69,13 @@ DEFAULT_INFRASTRUCTURE_STACKS = [
     "mysql",
     "elasticsearch",
     "bugsink",
+    # The controller that drives scheduled jobs by scaling their services up
+    # (https://github.com/crazy-max/swarm-cronjob). Infrastructure rather than
+    # an application: it carries no data and serves no user. Both separators
+    # are listed because the keys are matched as substrings -- a Swarm stack
+    # is usually "swarm-cronjob", a Compose project "swarm_cronjob".
+    "swarm-cronjob",
+    "swarm_cronjob",
 ]
 
 # Admin web UIs for infrastructure services. Matched case-insensitively against

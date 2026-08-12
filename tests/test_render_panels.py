@@ -1596,3 +1596,41 @@ def test_a_job_without_a_schedule_keeps_its_description():
     services = [_job_service(schedule=None, description="migration")]
 
     assert panels._group_desc(services) == "migration"
+
+
+def test_the_swarm_cronjob_controller_counts_as_infrastructure():
+    """The thing that *drives* the jobs is infrastructure, not an application.
+
+    It carries no data and serves no user; it scales other services up on a
+    schedule. Filed under Services it would sit among the very jobs it
+    triggers, where a reader asking "why did nothing run last night" would not
+    think to look.
+    """
+    controller = _origin_status("app", stack="swarm-cronjob")
+
+    infra, service, _ = panels._classify_origin([controller], Config(), ["node-01"])
+
+    assert [name for name, _ in infra] == ["swarm-cronjob"]
+    assert service == []
+
+
+def test_the_controller_is_recognised_with_either_separator():
+    """As a Swarm stack the name carries a hyphen; as a Compose project it is
+    commonly an underscore. Both name the same controller."""
+    for stack in ("swarm-cronjob", "swarm_cronjob"):
+        entry = _origin_status("app", stack=stack)
+
+        infra, service, _ = panels._classify_origin([entry], Config(), ["node-01"])
+
+        assert [name for name, _ in infra] == [stack], stack
+        assert service == [], stack
+
+
+def test_an_application_stack_is_not_infrastructure():
+    """The guard for the test above: this is what a non-match looks like."""
+    infra, service, _ = panels._classify_origin(
+        [_origin_status("app", stack="billing")], Config(), ["node-01"]
+    )
+
+    assert infra == []
+    assert [name for name, _ in service] == ["billing"]
