@@ -36,7 +36,7 @@ out in five tiers:
   not. Each row also
   carries a **Working** cell right after the service name: an icon plus the
   row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
-  Four rules keep that cell from over-claiming:
+  Five rules keep that cell from over-claiming:
 
   - a service scaled to zero replicas renders `· 0/0`, not `💀` — that is a
     decision, not an outage;
@@ -63,6 +63,21 @@ out in five tiers:
     but some still starting renders `⚠️ 0/n`. This differs from the node cell,
     which only shows `⚠️ 0/N` when *all* tasks on that node are starting; a
     node cell with a mix of starting and failed tasks still shows `💀 0/N`.
+  - a service that runs to completion — a **scheduled job** — reports the
+    outcome of its last run instead of a replica count, because between runs
+    it has none and `💀 0/1` would state the opposite of the truth. A job is
+    recognised either by the [swarm-cronjob](https://github.com/crazy-max/swarm-cronjob)
+    labels (`swarm.cronjob.enable=true`) or by Swarm's own job modes
+    (`ReplicatedJob`/`GlobalJob`, Docker 20.10+). Its cell reads `⏰ ok 12h`
+    when the last run completed, `💀 ✗ 20h` when it failed, `· never` when
+    there is no run to measure, and an ordinary `✅ 1/1` while a run is in
+    progress. The outcome is taken from the *newest* task, not the most severe
+    one: a job that failed yesterday and succeeded this morning is healthy.
+    Where the job carries a cron expression, it leads the **Description**
+    column (`0 5 * * * · nightly export`) — without it, "ok 12h" cannot be
+    told apart from a job that quietly stopped being triggered. Note that the
+    panel does **not** judge whether a job is overdue; that would require
+    evaluating the cron expression against the clock.
 
   A global-mode service (Traefik here) reports no replica count, so the
   denominator is the number of tasks Swarm actually scheduled — the same one
@@ -589,6 +604,7 @@ measure.
 | ✅ | measured healthy |
 | ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
 | 💀 | measured broken |
+| ⏰ | a scheduled job, resting between successful runs |
 | `·` | not observable / not attempted — see below for where it appears |
 | `…` | the check ran out of the shared time budget |
 | `✗` | the check itself failed (a command errored, a connection was refused) |

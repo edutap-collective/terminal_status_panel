@@ -103,6 +103,28 @@ class ServiceTask:
 
 
 @dataclass
+class JobRun:
+    """The most recent task of a job: what it did, and how long ago.
+
+    An *age* rather than a timestamp, for the same reason ``SystemInfo`` keeps
+    ``uptime_seconds``: the measurement happens in the collector, and a renderer
+    that subtracted its own clock could disagree with the one that measured.
+    """
+
+    state: str  # complete / failed / rejected / running / ...
+    age_seconds: float | None = None
+    node: str | None = None  # hostname the run happened on
+
+    @property
+    def ok(self) -> bool:
+        return self.state == "complete"
+
+    @property
+    def failed(self) -> bool:
+        return self.state in ("failed", "rejected", "orphaned")
+
+
+@dataclass
 class ServiceStatus:
     name: str
     running_replicas: int
@@ -112,6 +134,11 @@ class ServiceStatus:
     description: str | None = None  # from a curated service label
     tasks: list[ServiceTask] = field(default_factory=list)  # per-node placement
     unassigned: int = 0  # desired-running tasks with no node
+    #: A service that is meant to run to completion rather than stay up. For
+    #: those, "no task running" is the normal resting state, not an outage.
+    job: bool = False
+    schedule: str | None = None  # cron expression, when the job carries one
+    last_run: JobRun | None = None  # None when the job has never run
 
 
 @dataclass

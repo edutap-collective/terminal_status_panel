@@ -1,15 +1,22 @@
+from datetime import datetime, timezone
+
+import pytest
+
 from terminal_status_panel.collectors import docker as docker_collector
 from terminal_status_panel.collectors._labels import COMPOSE_SERVICE_LABEL
 from terminal_status_panel.model import SwarmInfo
 from terminal_status_panel.render import icons
 from terminal_status_panel.render.verdict import service_verdict
 
+#: A fixed "now" for job-age assertions, so the arithmetic is readable.
+_AT_2130Z = datetime(2026, 8, 12, 21, 30, tzinfo=timezone.utc).timestamp()
+
 
 class _FakeService:
     """*tasks* is a list of (node_id | None, state) for desired-state=running."""
 
     def __init__(self, name, desired, tasks, stack=None, description=None,
-                 raw_labels=None):
+                 raw_labels=None, mode=None, history=None):
         self.name = name
         labels = {}
         if stack is not None:
@@ -18,14 +25,26 @@ class _FakeService:
             labels[docker_collector.LEGACY_DESCRIPTION_LABEL] = description
         labels.update(raw_labels or {})
         self.attrs = {
-            "Spec": {"Mode": {"Replicated": {"Replicas": desired}}, "Labels": labels}
+            "Spec": {"Mode": mode or {"Replicated": {"Replicas": desired}},
+                     "Labels": labels}
         }
         self._tasks = tasks
+        #: (node_id, state, timestamp) for tasks Swarm has already shut down --
+        #: what a finished job leaves behind. Only an unfiltered listing sees them.
+        self._history = history or []
 
     def tasks(self, filters=None):
         result = []
         for node_id, state in self._tasks:
             task = {"Status": {"State": state}}
+            if node_id is not None:
+                task["NodeID"] = node_id
+            result.append(task)
+        if filters and filters.get("desired-state") == "running":
+            return result
+        for node_id, state, timestamp in self._history:
+            task = {"Status": {"State": state, "Timestamp": timestamp},
+                    "DesiredState": "shutdown"}
             if node_id is not None:
                 task["NodeID"] = node_id
             result.append(task)
@@ -617,3 +636,93 @@ def test_an_unreachable_daemon_maps_nothing(monkeypatch):
 
     monkeypatch.setattr(docker_collector.docker, "from_env", boom)
     assert docker_collector.collect_docker().container_services == {}
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled jobs
+# --------------------------------------------------------------------------- #
+
+
+def test_swarm_cronjob_labels_mark_a_service_as_a_job(monkeypatch):
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01")],
+        services=[_FakeService("stack_nightly", desired=1, tasks=[],
+                               raw_labels={"swarm.cronjob.enable": "true",
+                                           "swarm.cronjob.schedule": "0 5 * * *"})],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (service,) = docker_collector.collect_docker().services
+
+    assert service.job is True
+    assert service.schedule == "0 5 * * *"
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [{"ReplicatedJob": {"TotalCompletions": 1}}, {"GlobalJob": {}}],
+    ids=["replicated-job", "global-job"],
+)
+def test_a_native_swarm_job_is_recognised_without_labels(monkeypatch, mode):
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01")],
+        services=[_FakeService("stack_migrate", desired=None, tasks=[], mode=mode)],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (service,) = docker_collector.collect_docker().services
+
+    assert service.job is True
+    assert service.schedule is None  # a native job carries no cron expression
+
+
+def test_the_newest_task_is_the_last_run(monkeypatch):
+    """The *newest* task, not "some failed task exists".
+
+    A job that failed yesterday and succeeded this morning is healthy; ranking
+    by severity instead of by time would keep yesterday on the panel forever.
+    """
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01"), _FakeNode("n2", "srv-02")],
+        services=[_FakeService(
+            "stack_nightly", desired=1, tasks=[],
+            raw_labels={"swarm.cronjob.enable": "true"},
+            history=[("n2", "failed", "2026-08-11T20:00:00.000000000Z"),
+                     ("n1", "complete", "2026-08-12T09:30:00.000000000Z")],
+        )],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    monkeypatch.setattr(docker_collector, "_now", lambda: _AT_2130Z)
+
+    (service,) = docker_collector.collect_docker().services
+
+    assert service.last_run.state == "complete"
+    assert service.last_run.node == "srv-01"
+    assert service.last_run.age_seconds == 12 * 3600
+
+
+def test_a_docker_task_timestamp_is_read_as_utc():
+    """The shape Docker actually sends: RFC 3339, nanoseconds, trailing Z.
+
+    Measured against a live Swarm task on 2026-08-12.
+    """
+    parsed = docker_collector._parse_timestamp("2026-08-12T07:28:29.81745826Z")
+
+    assert parsed == datetime(2026, 8, 12, 7, 28, 29, 817458,
+                              tzinfo=timezone.utc).timestamp()
+
+
+def test_a_timestamp_without_a_zone_is_still_read_as_utc():
+    """Docker reports UTC. Falling back to the local zone would shift the age
+    by the machine's offset -- silently, and only for hosts not on UTC."""
+    parsed = docker_collector._parse_timestamp("2026-08-12T07:28:29")
+
+    assert parsed == datetime(2026, 8, 12, 7, 28, 29, tzinfo=timezone.utc).timestamp()
+
+
+@pytest.mark.parametrize("value", [None, "", "yesterday", 17, {}])
+def test_an_unreadable_timestamp_is_no_timestamp(value):
+    assert docker_collector._parse_timestamp(value) is None

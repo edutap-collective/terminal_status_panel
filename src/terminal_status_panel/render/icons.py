@@ -10,5 +10,6 @@ OK = "✅"        # measured healthy
 WARN = "⚠️"      # degraded, but serving
 DEAD = "💀"      # measured broken
 UNKNOWN = "·"    # not observable
+JOB = "⏰"       # a scheduled job, resting between runs — measured healthy
 TRUNCATED = "…"  # ran out of budget
 FAILED = "✗"     # the check itself failed

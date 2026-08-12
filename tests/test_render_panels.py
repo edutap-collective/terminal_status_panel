@@ -1232,3 +1232,33 @@ def test_process_lists_stack_when_they_do_not_fit():
     # Both headings still present, each introducing its own table.
     assert "TOP CPU" in out
     assert "TOP RAM" in out
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled jobs
+# --------------------------------------------------------------------------- #
+
+
+def _job_service(schedule="0 5 * * *", description=None):
+    return ServiceStatus(
+        name="nightly", running_replicas=0, desired_replicas=1,
+        job=True, schedule=schedule, description=description,
+    )
+
+
+def test_a_job_shows_its_schedule_next_to_its_description():
+    """Without the schedule the row is unreadable: 'ok 12h' invites the
+    question 'and when was it supposed to run?'"""
+    services = [_job_service(description="STWM daily update")]
+
+    assert panels._group_desc(services) == "0 5 * * * · STWM daily update"
+
+
+def test_a_job_without_a_description_shows_the_schedule_alone():
+    assert panels._group_desc([_job_service()]) == "0 5 * * *"
+
+
+def test_a_job_without_a_schedule_keeps_its_description():
+    services = [_job_service(schedule=None, description="migration")]
+
+    assert panels._group_desc(services) == "migration"
