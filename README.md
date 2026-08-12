@@ -1208,31 +1208,49 @@ pull request across Python 3.11–3.13.
 
 ## Publishing to PyPI
 
-Releases are automated. Pushing a version tag `vX.Y.Z` triggers
-`.github/workflows/release.yml`, which builds the sdist + wheel and publishes to
-PyPI via **Trusted Publishing (OIDC)** — no API token is stored in the repo.
+Releases are automated by `.github/workflows/release.yml`, which publishes via
+**Trusted Publishing (OIDC)** — no API token is stored in the repository. It
+builds once, with [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations),
+and publishes that same artefact to one of two indexes:
+
+| Trigger | Goes to | Environment |
+|---|---|---|
+| every push to `main` | [test.pypi.org](https://test.pypi.org) | `release-test-pypi` |
+| publishing a GitHub Release | [pypi.org](https://pypi.org) | `release-pypi` |
+
+Test PyPI on every commit is deliberate: it exercises the publishing path
+continuously, so release day is not the first time it runs.
+
+The workflow calls the repository's CI rather than restating its checks — a
+release gate that duplicates them drifts from them, and it drifts silently. A
+tag is additionally checked against the version in `pyproject.toml`, so a
+mistyped tag or a forgotten bump fails before upload rather than on PyPI,
+where the wrong number cannot be taken back.
 
 Release steps:
 
 ```bash
 # 1. bump the version in pyproject.toml (must match the tag)
-# 2. commit, then tag and push
-git commit -am "release: v0.1.0"
-git tag v0.1.0
+# 2. commit, tag and push
+git commit -am "release: v0.6.0"
+git tag v0.6.0
 git push && git push --tags
+# 3. publish a GitHub Release for that tag -- this is what uploads to PyPI
 ```
 
-One-time setup (before the first release):
+One-time setup, per index:
 
-1. On <https://pypi.org> → *Your projects* → *Publishing*, add a **pending
-   trusted publisher** with:
-   - **PyPI project name:** `terminal-status-panel`
+1. On the index (<https://pypi.org> or <https://test.pypi.org>) → *Your
+   projects* → *Publishing*, add a **pending trusted publisher**:
+   - **Project name:** `terminal-status-panel`
    - **Owner:** `edutap-collective`
    - **Repository name:** `terminal_status_panel`
    - **Workflow name:** `release.yml`
-   - **Environment name:** `pypi`
-2. In the GitHub repo → *Settings → Environments*, create an environment named
-   `pypi` (optionally add required reviewers to gate publishes).
+   - **Environment name:** `release-pypi` for PyPI, `release-test-pypi` for Test PyPI
+2. In the GitHub repository → *Settings → Environments*, create the matching
+   environment. Required reviewers on `release-pypi` gate every upload behind
+   an approval; `release-test-pypi` is better left ungated, since it fires on
+   every push to `main`.
 
 ## License
 

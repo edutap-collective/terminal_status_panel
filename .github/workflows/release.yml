@@ -1,50 +1,110 @@
-name: Release
-
-# Build and publish to PyPI when a version tag (vX.Y.Z) is pushed.
-# Publishing uses PyPI Trusted Publishing (OIDC) — no API token needed.
-# One-time PyPI setup is documented in the README ("Publishing to PyPI").
+---
+name: Build & upload PyPI package
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+# Without ``github.event_name`` in the group, the ``push`` event fired by
+# tagging a release and the ``release`` event fired by publishing it land in
+# the same group. ``cancel-in-progress: true`` then kills whichever arrived
+# second — typically the ``release`` run that uploads to pypi.org, leaving the
+# tag unpublished.
+concurrency:
+  group: release-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  # The repository's own CI, called rather than copied. A release gate that
+  # restates the checks drifts from them, and it drifts silently.
+  tests:
+    uses: "./.github/workflows/ci.yml"
+
+  # A tag must name the version the package actually declares. Without this a
+  # mistyped tag, or a forgotten version bump, is only discovered on PyPI --
+  # where the wrong number cannot be taken back.
+  check-version:
+    name: Tag matches project version
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Check tag matches project version
+      - name: Compare tag against pyproject.toml
         run: |
           VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           TAG="${GITHUB_REF_NAME#v}"
           echo "tag=$TAG version=$VERSION"
-          test "$VERSION" = "$TAG" || { echo "::error::tag $TAG does not match project version $VERSION"; exit 1; }
-      - name: Build sdist and wheel
-        run: |
-          python -m pip install --upgrade build
-          python -m build
-      - name: Check metadata
-        run: |
-          python -m pip install --upgrade twine
-          twine check dist/*
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/
+          test "$VERSION" = "$TAG" || {
+            echo "::error::tag $TAG does not match project version $VERSION"
+            exit 1
+          }
 
-  publish:
-    needs: build
+  build-package:
+    name: Build & verify package
+    needs:
+      - tests
+      - check-version
+    # check-version only runs for tags, and a skipped job would otherwise skip
+    # everything downstream. So: build whenever the tests passed and the version
+    # check did not *fail* -- success or skipped both qualify.
+    if: |
+      always()
+      && needs.tests.result == 'success'
+      && needs.check-version.result != 'failure'
     runs-on: ubuntu-latest
-    environment: pypi          # configure this environment in the repo settings
     permissions:
-      id-token: write          # required for Trusted Publishing (OIDC)
+      attestations: write
+      id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: dist
-          path: dist/
-      - name: Publish to PyPI
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: hynek/build-and-inspect-python-package@v3.0.1
+        with:
+          attest-build-provenance-github: 'true'
+
+  # Every commit on main goes to Test PyPI, so the publishing path is exercised
+  # continuously rather than for the first time on release day.
+  release-test-pypi:
+    name: Publish in-dev package to test.pypi.org
+    environment: release-test-pypi
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs:
+      - build-package
+    permissions:
+      id-token: write
+    steps:
+      - name: Download packages built by build-and-inspect-python-package
+        uses: actions/download-artifact@v4
+        with:
+          name: Packages
+          path: dist
+      - name: Upload package to Test PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  release-pypi:
+    name: Publish released package to pypi.org
+    environment: release-pypi
+    if: github.event.action == 'published'
+    runs-on: ubuntu-latest
+    needs:
+      - build-package
+    permissions:
+      id-token: write
+    steps:
+      - name: Download packages built by build-and-inspect-python-package
+        uses: actions/download-artifact@v4
+        with:
+          name: Packages
+          path: dist
+      - name: Upload package to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
