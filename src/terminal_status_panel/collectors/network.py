@@ -133,8 +133,10 @@ def parse_wg_dump(dump: str, now: float, hosts: dict[str, set[str]]) -> list[Pee
 
 
 def _wg_dump(timeout: float) -> str:
+    # S607: resolved through PATH deliberately -- wg sits in /usr/bin on
+    # Debian and /usr/local/bin on FreeBSD.
     completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-        ["sudo", "-n", "wg", "show", "all", "dump"],
+        ["sudo", "-n", "wg", "show", "all", "dump"],  # noqa: S607
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -166,7 +168,7 @@ def collect_peers(peer_names: list[str], timeout: float) -> list[PeerReachabilit
         peers = parse_wg_dump(dump, now=time.time(), hosts=read_hosts_file())
         if peers:
             return peers
-    except Exception:
+    except Exception:  # noqa: S110
         pass  # no sudo, no wg, no peers: fall through to the weaker answer
     try:
         return _tcp_probe(peer_names, timeout)

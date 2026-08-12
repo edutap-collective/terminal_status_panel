@@ -85,8 +85,11 @@ def _replica_icon(running: int, desired: int, starting: int = 0) -> str:
 
 
 def _fmt_age(seconds: float | None) -> str:
-    """How long ago, in one unit. Coarse on purpose: the cell is three glyphs
-    wide, and "ran 12 hours ago" answers the question that "12h 04m" does."""
+    """How long ago, in one unit.
+
+    Coarse on purpose: the cell is three glyphs wide, and "ran 12 hours ago"
+    answers the question that "12h 04m" does.
+    """
     if seconds is None:
         return "?"
     total = int(seconds)
@@ -152,7 +155,7 @@ def _cluster_icon(cluster: ClusterService) -> str:
 
 
 def _combined_icon(replica: str, cluster: str) -> str:
-    """Reconcile two independent measurements of the same row.
+    r"""Reconcile two independent measurements of the same row.
 
     The cluster verdict is the more specific statement and normally wins — it
     is what makes ``⚠️ 5/5`` and ``· 5/5`` possible at all. But ``💀``/``⚠️``

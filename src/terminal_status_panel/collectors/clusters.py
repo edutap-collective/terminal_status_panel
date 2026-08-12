@@ -61,6 +61,7 @@ class ContainerIndex:
     """
 
     def __init__(self, client) -> None:
+        """Wrap *client*, whose listings this cache serves to every probe."""
         self._client = client
         self._cache: dict[str, tuple[Any, Exception | None]] = {}
         self._locks: dict[str, threading.Lock] = {
@@ -506,8 +507,11 @@ def _gluster(arguments: list[str], timeout: float) -> str:
     exception so the caller reports it as a real error.
     """
     try:
+        # S607: resolved through PATH deliberately. gluster lives in
+        # /usr/sbin on Debian and /usr/local/sbin on FreeBSD, and the panel
+        # runs on both.
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["sudo", "-n", "gluster", *arguments, "--xml"],
+            ["sudo", "-n", "gluster", *arguments, "--xml"],  # noqa: S607
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -528,7 +532,9 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
     """Parse ``gluster peer status --xml`` and ``gluster volume status --xml``."""
     members: list[ClusterMember] = []
 
-    peers = ElementTree.fromstring(peer_xml)
+    # S314: not untrusted input -- this is the host's own `gluster --xml`
+    # output, produced by the command above. Nothing remote reaches it.
+    peers = ElementTree.fromstring(peer_xml)  # noqa: S314
     connected = 0
     total_peers = 0
     for peer in peers.iter("peer"):
@@ -545,7 +551,7 @@ def parse_gluster(peer_xml: str, volume_xml: str) -> ClusterService:
             )
         )
 
-    volume = ElementTree.fromstring(volume_xml)
+    volume = ElementTree.fromstring(volume_xml)  # noqa: S314 - see above
     # `gluster volume status --xml` with no volume name given (as we call it)
     # returns *all* volumes on the host as sibling <volume> elements. We only
     # report the first one — iterating <node> over the whole document would
@@ -703,7 +709,10 @@ def _load_full_attributes(container) -> None:
         return
     try:
         reload_attributes()
-    except Exception:
+    except Exception:  # noqa: S110
+        # Best-effort refresh of an optional cache. Failing to reload leaves
+        # the previous values in place, which is the same answer this probe
+        # would have given a moment earlier.
         pass
 
 

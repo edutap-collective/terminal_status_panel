@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 
 @dataclass
 class SystemInfo:
+    """Host identity and uptime, as the panel's header line reports it."""
+
     hostname: str | None = None
     os_name: str | None = None
     os_version: str | None = None
@@ -22,6 +24,8 @@ class SystemInfo:
 
 @dataclass
 class FilesystemUsage:
+    """One mounted filesystem, as a DISK bar shows it."""
+
     mountpoint: str
     total: int
     used: int
@@ -30,6 +34,8 @@ class FilesystemUsage:
 
 @dataclass
 class ResourceUsage:
+    """Memory, swap, CPU and filesystem figures for the RESOURCES block."""
+
     mem_total: int | None = None
     mem_used: int | None = None
     mem_percent: float | None = None
@@ -67,6 +73,8 @@ class ProcessInfo:
 
 @dataclass
 class ProcessSnapshot:
+    """The TOP CPU and TOP RAM lists, with the window they were measured over."""
+
     top_cpu: list[ProcessInfo] = field(default_factory=list)
     top_memory: list[ProcessInfo] = field(default_factory=list)
     #: The window the CPU figures were measured over, in seconds. A percentage
@@ -76,6 +84,8 @@ class ProcessSnapshot:
 
 @dataclass
 class UpdateInfo:
+    """Pending package updates, where the platform can report them at all."""
+
     supported: bool = False
     available: int | None = None
     security: int | None = None
@@ -84,6 +94,8 @@ class UpdateInfo:
 
 @dataclass
 class ServiceTask:
+    """One task of a service, and the node Swarm placed it on."""
+
     node: str | None  # hostname running the task, or None when unassigned
     state: str  # actual task state: running / preparing / failed / ...
 
@@ -96,10 +108,12 @@ class ServiceTask:
 
     @property
     def running(self) -> bool:
+        """True while this task is the one actually serving."""
         return self.state == "running"
 
     @property
     def starting(self) -> bool:
+        """True while the task is on its way up and nothing is measured yet."""
         return self.state in self._STARTING
 
 
@@ -118,15 +132,19 @@ class JobRun:
 
     @property
     def ok(self) -> bool:
+        """True when the run finished the work it was started for."""
         return self.state == "complete"
 
     @property
     def failed(self) -> bool:
+        """True when the run ended in a state Swarm counts as a failure."""
         return self.state in ("failed", "rejected", "orphaned")
 
 
 @dataclass
 class ServiceStatus:
+    """One DOCKER INFOS row: a service, its replicas and its placement."""
+
     name: str
     running_replicas: int
     desired_replicas: int | None
@@ -144,6 +162,8 @@ class ServiceStatus:
 
 @dataclass
 class SwarmNode:
+    """One node of the Swarm, as its managers describe it."""
+
     name: str
     reachable: bool = False
     role: str | None = None  # manager / worker
@@ -165,6 +185,8 @@ class SwarmNode:
 
 @dataclass
 class SwarmInfo:
+    """What the Docker daemon reports: the Swarm, its nodes, its services."""
+
     reachable: bool = False
     enabled: bool = False
     node_role: str | None = None
@@ -215,6 +237,8 @@ class ClusterService:
 
 @dataclass
 class PeerReachability:
+    """Whether one configured peer answered, and how it was asked."""
+
     name: str
     method: str  # wireguard | tcp
     ok: bool = False
@@ -244,6 +268,8 @@ class PeerReachability:
 
 @dataclass
 class DnsCheck:
+    """One name-resolution check and its verdict."""
+
     label: str
     ok: bool | None = None  # None = warning (inconsistent, not broken)
     detail: str = ""
@@ -251,6 +277,8 @@ class DnsCheck:
 
 @dataclass
 class HealthInfo:
+    """The CLUSTER HEALTH section: clustered services, peers and DNS checks."""
+
     clusters: list[ClusterService] = field(default_factory=list)
     peers: list[PeerReachability] = field(default_factory=list)
     dns: list[DnsCheck] = field(default_factory=list)
@@ -282,6 +310,8 @@ class TraefikEntrypoint:
 
 @dataclass
 class TraefikMiddleware:
+    """One middleware attached to a router."""
+
     name: str
     kind: str | None = None  # stripprefix, headers, …
     detail: str | None = None  # the first configured key, for display
@@ -303,6 +333,8 @@ class TraefikServiceRef:
 
 @dataclass
 class TraefikRouter:
+    """One Traefik router: what it matches, and where it forwards."""
+
     name: str
     entrypoints: list[str] = field(default_factory=list)
     rule: str | None = None
@@ -318,6 +350,8 @@ class TraefikRouter:
 
 @dataclass
 class TraefikInfo:
+    """The Traefik wiring as configured: entrypoints, routers, services."""
+
     reachable: bool = False
     entrypoints: list[TraefikEntrypoint] = field(default_factory=list)
     routers: list[TraefikRouter] = field(default_factory=list)
@@ -347,6 +381,8 @@ class TraefikInfo:
 
 @dataclass
 class PanelData:
+    """Everything the collectors gathered, ready for the renderers."""
+
     system: SystemInfo | None = None
     resources: ResourceUsage | None = None
     swarm: SwarmInfo | None = None

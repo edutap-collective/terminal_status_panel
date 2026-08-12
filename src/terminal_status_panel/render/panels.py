@@ -123,6 +123,7 @@ def _now() -> str:
 
 
 def system_overview(info: SystemInfo | None) -> Group:
+    """The SYSTEM OVERVIEW block: host, OS, kernel, uptime, addresses."""
     table = _kv_table()
     if info is None:
         table.add_row("Status", "not available")
@@ -160,6 +161,7 @@ def system_overview(info: SystemInfo | None) -> Group:
 
 
 def updates_panel(updates: UpdateInfo | None) -> Group:
+    """The UPDATES block, or a note that this platform cannot report them."""
     if updates is None or not updates.supported:
         body = Text("n/a (not a Debian/Ubuntu system)", style="dim")
         return section("UPDATES", body)
@@ -517,6 +519,11 @@ def system_status(
     processes: ProcessSnapshot | None = None,
     origins: dict[str, str] | None = None,
 ) -> Group:
+    """The RESOURCES block: load, memory, filesystems and the process lists.
+
+    *origins* maps a container id to the service name DOCKER INFOS shows for
+    it, so a process row and a service row name the same thing the same way.
+    """
     if res is None:
         return section("SYSTEM STATUS", Text("not available", style="dim"))
     left = Group(_subhead("SYSTEM LOAD"), _load_body(res, cfg))
@@ -541,18 +548,21 @@ def system_status(
 
 # Standalone wrappers (kept for direct use/tests).
 def load_panel(res: ResourceUsage | None, cfg: Config) -> Group:
+    """The SYSTEM LOAD block."""
     if res is None:
         return section("SYSTEM LOAD", Text("not available", style="dim"))
     return section("SYSTEM LOAD", _load_body(res, cfg))
 
 
 def memory_panel(res: ResourceUsage | None, cfg: Config) -> Group:
+    """The MEMORY & SWAP block."""
     if res is None:
         return section("MEMORY & SWAP", Text("not available", style="dim"))
     return section("MEMORY & SWAP", _memory_body(res, cfg))
 
 
 def filesystem_panel(res: ResourceUsage | None) -> Group:
+    """The FILESYSTEM USAGE block."""
     if res is None:
         return section("FILESYSTEM USAGE", Text("not available", style="dim"))
     return section("FILESYSTEM USAGE", _filesystem_body(res))
@@ -594,8 +604,11 @@ def _nodes_inline(nodes, mark_leader: bool = False, peers=None) -> Text:
 
 
 def _short_node_names(nodes) -> list[tuple[str, str]]:
-    """Return (full, short) node names in alphabetical order, stripping a shared
-    hostname prefix up to the last '-' (e.g. 'host01-node-a' -> 'node-a')."""
+    """Return (full, short) node names in alphabetical order.
+
+    A shared hostname prefix up to the last '-' is stripped, so
+    'host01-node-a' becomes 'node-a'.
+    """
     ordered = sorted(nodes, key=lambda n: n.name)
     names = [n.name for n in ordered]
     prefix = ""
@@ -609,7 +622,8 @@ def _short_node_names(nodes) -> list[tuple[str, str]]:
 def _node_capacity(nodes) -> Text | None:
     """A ' (1 drain, 1 down)' note, or None when every node is operational.
 
-    Unreachable nodes count as 'down' only — their availability is moot."""
+    Unreachable nodes count as 'down' only — their availability is moot.
+    """
     withdrawn: dict[str, int] = {}
     down = 0
     for node in nodes:
@@ -729,10 +743,13 @@ def _node_cell(services, node_full: str) -> Text:
 
 
 def _base_service_name(name: str, node_names) -> str:
-    """Strip a trailing '-<node hostname>' / '_<node hostname>' so per-node
-    replicas collapse (kafka_kafka-node-a -> kafka_kafka), then a
+    """Reduce a service name to the row it belongs in.
+
+    A trailing '-<node hostname>' or '_<node hostname>' goes first, so
+    per-node replicas collapse (kafka_kafka-node-a -> kafka_kafka), then a
     trailing '_<digits>' so ordinal instances collapse
-    (mystack_connector_1 -> mystack_connector)."""
+    (mystack_connector_1 -> mystack_connector).
+    """
     for nn in sorted(node_names, key=len, reverse=True):
         if nn and name.endswith(nn) and len(name) > len(nn) + 1:
             base = name[: -len(nn)].rstrip("-_")
@@ -777,7 +794,8 @@ def _split_infra_uis(services, ui_keys, node_names) -> tuple[list, list]:
 
     A service matches when one of *ui_keys* occurs in its stack name or in its
     node-suffix-stripped service name, so a UI is found whether it runs as a
-    standalone container, as its own stack, or inside a larger stack."""
+    standalone container, as its own stack, or inside a larger stack.
+    """
     uis, rest = [], []
     for svc in services:
         base = _base_service_name(svc.name, node_names)
@@ -791,7 +809,8 @@ def _ui_subrows(ui_services, node_names, ui_keys) -> list[tuple[str, list, str]]
 
     A service that only came along because its *stack* name matched — a sidecar
     such as ``portainer_agent`` — keeps its origin as ``stack/service``, so a
-    detached row stays attributable."""
+    detached row stays attributable.
+    """
     rows = []
     for base, group in _base_groups(ui_services, node_names).items():
         stack = next((s.stack for s in group if s.stack), "")
@@ -963,6 +982,12 @@ def _stack_columns(
 def services_section(
     swarm: SwarmInfo | None, cfg: Config, health: HealthInfo | None = None
 ) -> Group:
+    """The DOCKER INFOS block: Swarm stacks, containers and their verdicts.
+
+    *health* is optional: without it the Working cells fall back to Docker's
+    own replica measurement rather than claiming a cluster verdict nobody
+    took.
+    """
     if swarm is None or not swarm.reachable:
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 

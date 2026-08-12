@@ -24,6 +24,8 @@ DEFAULT_CONFIG_PATH = "/etc/terminal-status-panel/config.toml"
 
 @dataclass
 class Thresholds:
+    """Where a measurement stops being ok and starts being worth showing."""
+
     memory_warning: float = 75.0
     memory_critical: float = 90.0
     swap_warning: float = field(default_factory=platform_defaults.swap_warning)
@@ -35,12 +37,16 @@ class Thresholds:
 
 @dataclass
 class DnsExpectation:
+    """A name the operator expects to resolve, and to what."""
+
     name: str
     addresses: list[str] = field(default_factory=list)
 
 
 @dataclass
 class HealthConfig:
+    """What the CLUSTER HEALTH section may probe, and how long it may take."""
+
     budget: float = 5.0
     timeouts: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_HEALTH_TIMEOUTS))
     enabled: list[str] = field(default_factory=lambda: list(DEFAULT_HEALTH_KINDS))
@@ -135,6 +141,8 @@ class TraefikApiConfig:
 
 @dataclass
 class Config:
+    """Everything the panel reads from its config file, with defaults."""
+
     width: int = 80
     docker_timeout: float = 1.5
     critical_services: list[str] = field(default_factory=list)
@@ -231,8 +239,10 @@ def _health_config(data: dict) -> HealthConfig:
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:
-    """Load config from *path* (or the default location). Never raises on a
-    missing or unreadable file — falls back to defaults."""
+    """Load config from *path*, or from the default location.
+
+    Never raises on a missing or unreadable file — falls back to defaults.
+    """
     target = os.fspath(path) if path is not None else DEFAULT_CONFIG_PATH
     try:
         with open(target, "rb") as fh:

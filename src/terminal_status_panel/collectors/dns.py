@@ -98,7 +98,9 @@ def collect_dns(
         for address in own_addresses:
             try:
                 names.extend(str(entry).rstrip(".") for entry in resolver.resolve_address(address))
-            except Exception:
+            except Exception:  # noqa: S112
+                # An address with no PTR record is ordinary; it simply
+                # contributes no name to the comparison.
                 continue
         consistent = fqdn.rstrip(".") in names
         checks.append(

@@ -176,9 +176,12 @@ def _collect_process_rows(cfg: Config) -> ProcessSnapshot | None:
 
 
 def resolve_width(arg_width: int | None, cfg: Config) -> int:
-    """Pick the render width: explicit flag wins; otherwise use the real
-    terminal width when attached to one, else the configured fixed width
-    (as used for MOTD generation, where no TTY is present)."""
+    """Pick the render width.
+
+    An explicit flag wins; otherwise the real terminal width when attached to
+    one, else the configured fixed width (as used for MOTD generation, where
+    no TTY is present).
+    """
     if arg_width is not None:
         return arg_width
     if sys.stdout.isatty():
@@ -200,6 +203,11 @@ def resolve_top_processes(arg_processes: int | None, cfg: Config) -> int:
 
 
 def build_console(width: int, no_color: bool) -> Console:
+    """A console pinned to *width*, forced to render as a terminal.
+
+    ``force_terminal`` because the panel is often written to a pipe -- an MOTD
+    file, a captured login -- where rich would otherwise drop every colour.
+    """
     return Console(
         force_terminal=True,
         width=width,
@@ -258,8 +266,9 @@ def main(
         console = build_console(width, args.no_color)
         data = collect_all(cfg, selected)
         console.print(build_layout(data, cfg, selected))
-    except Exception:
-        # A status panel must never break the login shell.
+    except Exception:  # noqa: S110
+        # A status panel must never break the login shell. There is nowhere to
+        # log to either: stderr at login is noise in front of the prompt.
         pass
     return 0
 

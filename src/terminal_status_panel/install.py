@@ -60,8 +60,11 @@ def _detect_shell() -> str:
 
 
 def resolve_target(scope: str, shell: str, home: Path | None = None) -> tuple[str, Path]:
-    """Return (kind, path). kind is 'file' (dedicated, overwritten) or 'block'
-    (a managed block inside an existing rc file)."""
+    """Return (kind, path) for where the snippet belongs.
+
+    ``kind`` is 'file' (a dedicated file, overwritten) or 'block' (a managed
+    block inside an existing rc file).
+    """
     home = home or Path.home()
     if shell == "auto":
         shell = _detect_shell() if scope == "user" else "bash"
@@ -120,6 +123,7 @@ def apply(
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Entry point of the ``install-panel`` command."""
     parser = argparse.ArgumentParser(
         prog="install-panel",
         description="Install the status panel into a login shell (recommended over "
