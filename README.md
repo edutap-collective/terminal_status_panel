@@ -1216,7 +1216,7 @@ pull request across Python 3.11–3.13.
 
 ## Publishing to PyPI
 
-Releases are automated by `.github/workflows/release.yaml`, which publishes via
+Releases are automated by `.github/workflows/release.yml`, which publishes via
 **Trusted Publishing (OIDC)** — no API token is stored in the repository. It
 builds once, with [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations),
 and publishes that same artefact to one of two indexes:
@@ -1253,12 +1253,13 @@ One-time setup, per index:
    - **Project name:** `terminal-status-panel`
    - **Owner:** `edutap-collective`
    - **Repository name:** `terminal_status_panel`
-   - **Workflow name:** `release.yaml` — exactly as the file is named. A
+   - **Workflow name:** `release.yml` — exactly as the file is named. A
      publisher whose workflow name does not match matches nothing at all, and
-     the upload is rejected as coming from an untrusted publisher. (`ci.yml`
-     keeps its `.yml`; only the release workflow follows the sibling
-     packages' spelling, because that is what the publishers are registered
-     against.)
+     the upload is rejected as `invalid-publisher`. Both indexes must name the
+     same file, since there is only one: pypi.org has named `release.yml`
+     since v0.4.0 and is the one that must not be disturbed, so Test PyPI
+     follows it. This is a deliberate departure from the sibling packages,
+     which call the file `release.yaml`.
    - **Environment name:** `pypi` for PyPI, `release-test-pypi` for Test PyPI
 2. In the GitHub repository → *Settings → Environments*, create the matching
    environment. Required reviewers on `pypi` gate every upload behind an
