@@ -67,8 +67,10 @@ def os_logo_by_key(key: str) -> Text:
 
 
 def logo_for_key(key: str) -> Text:
-    """The logo actually shown for *key*: its own artwork, or Tux for a Linux
-    distribution whose mark could not be licensed.
+    """The logo actually shown for *key*.
+
+    Its own artwork, or Tux for a Linux distribution whose mark could not be
+    licensed.
 
     Several distribution marks are deliberately not bundled (see
     ``assets/logos/SOURCES.md``). Letting those keys render nothing would drop

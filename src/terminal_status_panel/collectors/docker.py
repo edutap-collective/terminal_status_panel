@@ -12,7 +12,7 @@ so a missing or hung Docker socket can never block login.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import docker
 
@@ -123,7 +123,7 @@ def _parse_timestamp(value) -> float | None:
     if stamp.tzinfo is None:
         # Docker reports UTC. Letting a zone-less stamp default to local time
         # would shift every age by the host's offset, silently and only off UTC.
-        stamp = stamp.replace(tzinfo=timezone.utc)
+        stamp = stamp.replace(tzinfo=UTC)
     return stamp.timestamp()
 
 
@@ -171,7 +171,8 @@ def _service_tasks(service, id_to_name: dict[str, str]) -> tuple[list[ServiceTas
 
     Mirrors the operations script: filter to desired-state ``running``, split
     into node-assigned tasks (reporting their *actual* state) and orphaned
-    tasks with no node (e.g. pinned to a node that is down)."""
+    tasks with no node (e.g. pinned to a node that is down).
+    """
     try:
         all_tasks = service.tasks(filters={"desired-state": "running"})
     except Exception:

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -9,7 +9,7 @@ from terminal_status_panel.render import icons
 from terminal_status_panel.render.verdict import service_verdict
 
 #: A fixed "now" for job-age assertions, so the arithmetic is readable.
-_AT_2130Z = datetime(2026, 8, 12, 21, 30, tzinfo=timezone.utc).timestamp()
+_AT_2130Z = datetime(2026, 8, 12, 21, 30, tzinfo=UTC).timestamp()
 
 
 class _FakeService:
@@ -763,7 +763,7 @@ def test_a_docker_task_timestamp_is_read_as_utc():
     """
     parsed = docker_collector._parse_timestamp("2026-08-12T07:28:29.81745826Z")
 
-    assert parsed == datetime(2026, 8, 12, 7, 28, 29, 817458, tzinfo=timezone.utc).timestamp()
+    assert parsed == datetime(2026, 8, 12, 7, 28, 29, 817458, tzinfo=UTC).timestamp()
 
 
 def test_a_timestamp_without_a_zone_is_still_read_as_utc():
@@ -771,7 +771,7 @@ def test_a_timestamp_without_a_zone_is_still_read_as_utc():
     by the machine's offset -- silently, and only for hosts not on UTC."""
     parsed = docker_collector._parse_timestamp("2026-08-12T07:28:29")
 
-    assert parsed == datetime(2026, 8, 12, 7, 28, 29, tzinfo=timezone.utc).timestamp()
+    assert parsed == datetime(2026, 8, 12, 7, 28, 29, tzinfo=UTC).timestamp()
 
 
 @pytest.mark.parametrize("value", [None, "", "yesterday", 17, {}])

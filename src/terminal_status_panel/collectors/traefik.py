@@ -169,7 +169,9 @@ def _socket_timeout(client, timeout: float):
         if restore:
             try:
                 api.timeout = previous
-            except Exception:
+            except Exception:  # noqa: S110
+                # Restoring a timeout on a client that is already unusable
+                # changes nothing worth reporting.
                 pass
 
 

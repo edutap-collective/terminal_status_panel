@@ -30,7 +30,7 @@ def _subhead(title: str) -> Text:
 def _service_state(
     router: TraefikRouter, info: TraefikInfo, swarm: SwarmInfo | None
 ) -> tuple[str, Text]:
-    """This router's service, as a verdict glyph and as a rendered line.
+    """The router's service, as a verdict glyph and as a rendered line.
 
     The glyph is empty when the line makes no claim at all — Traefik's own
     endpoints. The summary form needs the severity without the line, and
@@ -181,7 +181,7 @@ def _entrypoint_block(
     fold: bool = True,
     links: dict[str, str] | None = None,
 ) -> list[Text]:
-    """This entrypoint's branch, as the flat list of lines it occupies.
+    """The entrypoint's branch, as the flat list of lines it occupies.
 
     Lines rather than a ``Group`` because the packer has to know how tall and
     how wide this branch is before anything is drawn, and a ``Group`` only

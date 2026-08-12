@@ -57,8 +57,11 @@ def server_section(data: PanelData, cfg: Config) -> RenderableType:
 
 
 def docker_section(data: PanelData, cfg: Config) -> RenderableType:
-    """The DOCKER INFOS block. The health data, when the section ran, supplies
-    the cluster verdicts the replica counts cannot give."""
+    """The DOCKER INFOS block.
+
+    The health data, when the section ran, supplies the cluster verdicts the
+    replica counts cannot give.
+    """
     return services_section(data.swarm, cfg, data.health)
 
 
@@ -81,6 +84,11 @@ _SECTION_BUILDERS = {
 
 
 def build_layout(data: PanelData, cfg: Config, sections: tuple[str, ...] = SECTIONS) -> Group:
+    """The whole panel, as the requested *sections* in the order given.
+
+    A section whose builder is unknown is skipped rather than raising: the
+    panel renders what it can.
+    """
     parts: list[RenderableType] = []
     for name in sections:
         builder = _SECTION_BUILDERS.get(name)

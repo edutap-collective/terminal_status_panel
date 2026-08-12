@@ -30,8 +30,9 @@ def _port_of(address: str) -> int | None:
 
 
 def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
-    """Entrypoints from the Traefik service's command arguments, in the order
-    the arguments declare them.
+    """Entrypoints from the Traefik service's command arguments.
+
+    In the order the arguments declare them.
 
     Declaration order is the deployment's own grouping and reads better than
     the port number: the Ansible role lists the four entrypoints every cluster

@@ -110,6 +110,7 @@ class PackedColumns:
         gap: int = 4,
         alternative: Iterable[Sequence[Text]] | None = None,
     ) -> None:
+        """Hold both candidate layouts until the console reveals its width."""
         self.blocks = list(blocks)
         self.gap = gap
         self.alternative = None if alternative is None else list(alternative)
@@ -133,6 +134,7 @@ class PackedColumns:
         return grid
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        """Pack both candidates against the real width and yield the shorter."""
         primary = self._grid(self.blocks, options.max_width)
         if primary is None:
             return

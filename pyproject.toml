@@ -95,9 +95,28 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
+# The rule set the sibling packages use.
+select = ["E", "F", "W", "B", "I", "UP", "D", "S"]
+# D203/D213 contradict the other pydocstyle rules ruff applies, so they are
+# excluded for that reason rather than by preference.
+#
+# D401 (imperative mood) is a deliberate departure from the sibling packages.
+# This codebase documents by describing the thing rather than the call -- "The
+# panel's status vocabulary", "True when the task runs" -- and the rule fires
+# 49 times without a single "Returns the ..." among them. For a property in
+# particular, "Return true when the task runs" is the worse sentence. Enforcing
+# it would mean rewriting 49 good docstrings into weaker ones.
+ignore = ["D203", "D213", "D401"]
 
 [tool.ruff.lint.per-file-ignores]
+# `tests/**` rather than `tests/*`: a single star does not cross a directory
+# separator. Tests carry no docstring requirement, and `assert` is what a test
+# is made of -- S101 fires 1416 times across this suite and says nothing.
+# S108 fires on "/tmp/" in test_platform_defaults, where it is a mountpoint
+# *value* fed to the ignore-list logic, not a file anything opens.
+"tests/**" = ["D", "S101", "S108"]
+# One-off developer scripts, not API.
+"tools/**" = ["D"]
 # Fixture data quoted verbatim from the systems it describes: a cluster status
 # payload and a set of Traefik router labels. The formatter cannot break a
 # string literal, and rewrapping the fixture by hand would mean the test no
