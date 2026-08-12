@@ -1,0 +1,8 @@
+# Revisions that changed formatting only. Tell git to look past them:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# (GitHub and GitLab honour this file automatically.)
+
+# style: reformat with ruff format
+ac73d0cbac422e8b45f394972b78e01f1f504971
