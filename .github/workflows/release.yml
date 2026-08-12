@@ -88,6 +88,12 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          # This job runs on every push to main, but the version only changes
+          # at a release -- so every push between two releases re-uploads a
+          # version that is already there, and an index refuses that with
+          # "400 File already exists". Without this the job would be red
+          # permanently, and a job that is always red tells nobody anything.
+          skip-existing: true
 
   release-pypi:
     name: Publish released package to pypi.org
