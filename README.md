@@ -1227,7 +1227,10 @@ and publishes that same artefact to one of two indexes:
 | publishing a GitHub Release | [pypi.org](https://pypi.org) | `pypi` |
 
 Test PyPI on every commit is deliberate: it exercises the publishing path
-continuously, so release day is not the first time it runs.
+continuously, so release day is not the first time it runs. Those uploads use
+`skip-existing`, because the version only changes at a release: between two
+releases every push offers a file the index already has, and it would
+otherwise refuse each one with `400 File already exists`.
 
 The workflow calls the repository's CI rather than restating its checks — a
 release gate that duplicates them drifts from them, and it drifts silently. A
