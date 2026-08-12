@@ -32,20 +32,22 @@ dependencies = [
     "httpx",  # the optional cross-check against Traefik's own /api/rawdata
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pdbp",
-	"pytest",
-	"ruff",
-	"pillow",  # only to regenerate bundled logos via tools/generate_logos.py
-]
+# Development tooling lives in dependency groups (PEP 735), not in extras.
+# An extra is part of the published metadata and anyone installing the package
+# can select it; a group is local to this checkout and never reaches PyPI.
+# Nothing here is something a consumer of the panel would ever want.
+[dependency-groups]
 test = [
-    "pytest",
+    "pytest>=8",
     "pytest-cov",
 ]
-typecheck  = [
-    "mypy",
-    "pytest-stub",
+typecheck = ["ty"]
+dev = [
+    {include-group = "test"},
+    {include-group = "typecheck"},
+    "pdbp",
+    "ruff>=0.16,<0.17",
+    "pillow",  # only to regenerate bundled logos via tools/generate_logos.py
 ]
 
 [project.scripts]
@@ -82,23 +84,23 @@ testpaths = [
     "tests"
 ]
 
-[tool.isort]
-profile = "plone"
-src_paths = ["src", "tests"]
-
-[tool.check-manifest]
-ignore = [
-    ".editorconfig",
-    ".pre-commit-config.yaml",
-    "tox.ini",
-    ".flake8",
-    "tests/data/generated_passes/*",
-]
-
 [tool.ruff]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.format]
+# Written out rather than inherited: adopting a formatter is a decision about
+# every file in the repository, so it should be readable as one.
+quote-style = "double"
+indent-style = "space"
+
 [tool.ruff.lint]
 select = ["E", "F", "I"]
-per-file-ignores = {"tests/test_collectors_clusters.py" = ["E501"]}
+
+[tool.ruff.lint.per-file-ignores]
+# Fixture data quoted verbatim from the systems it describes: a cluster status
+# payload and a set of Traefik router labels. The formatter cannot break a
+# string literal, and rewrapping the fixture by hand would mean the test no
+# longer shows what the real input looks like.
+"tests/test_collectors_clusters.py" = ["E501"]
+"tests/test_collectors_traefik_parse.py" = ["E501"]
