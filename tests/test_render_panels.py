@@ -1634,3 +1634,183 @@ def test_an_application_stack_is_not_infrastructure():
 
     assert infra == []
     assert [name for name, _ in service] == ["billing"]
+
+
+# --- the image column --------------------------------------------------------
+
+_N1, _N2, _N3 = "swarm01-mgr-01", "swarm01-wrk-01", "swarm01-wrk-02"
+
+
+def _image_swarm(*services) -> SwarmInfo:
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=3,
+        nodes=[
+            SwarmNode(_N1, reachable=True, role="manager", leader=True),
+            SwarmNode(_N2, reachable=True, role="worker"),
+            SwarmNode(_N3, reachable=True, role="worker"),
+        ],
+        services=list(services),
+    )
+
+
+def test_the_image_column_shows_repository_and_tag():
+    """The registry and the namespace repeat on every row of a cluster that
+    builds its own images -- they cost width and separate nothing."""
+    swarm = _image_swarm(
+        ServiceStatus(
+            "shop_api",
+            1,
+            1,
+            stack="shop",
+            description="Shop API",
+            tasks=[ServiceTask(_N1, "running")],
+            image="gitlab.example.org:5005/group/project/api:2026-08-14_1206",
+        )
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    assert "Image" in out
+    assert "api:2026-08-14_1206" in out
+    assert "gitlab.example.org" not in out
+
+
+def test_a_registry_port_is_not_mistaken_for_a_tag():
+    """`registry.example.org:5000/app` carries a colon that belongs to the host,
+    not to a tag. Splitting on the last colon of the whole reference would
+    render the row as `5000/app`."""
+    swarm = _image_swarm(
+        ServiceStatus(
+            "shop_api",
+            1,
+            1,
+            stack="shop",
+            tasks=[ServiceTask(_N1, "running")],
+            image="registry.example.org:5000/app",
+        )
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    assert "5000" not in out
+
+
+def test_replicas_on_the_same_image_report_it_once():
+    swarm = _image_swarm(
+        ServiceStatus(
+            f"kafka_kafka-{_N1}",
+            1,
+            1,
+            stack="kafka",
+            tasks=[ServiceTask(_N1, "running")],
+            image="apache/kafka:4.0.0",
+        ),
+        ServiceStatus(
+            f"kafka_kafka-{_N2}",
+            1,
+            1,
+            stack="kafka",
+            tasks=[ServiceTask(_N2, "running")],
+            image="apache/kafka:4.0.0",
+        ),
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    assert out.count("kafka:4.0.0") == 1
+
+
+def test_a_tag_that_differs_between_replicas_is_marked():
+    """A rolling update that stalled leaves one node behind. The row still has
+    to name an image, so it names the one most replicas run -- and the marker
+    says the others do not."""
+    swarm = _image_swarm(
+        ServiceStatus(
+            f"kafka_kafka-{_N1}",
+            1,
+            1,
+            stack="kafka",
+            tasks=[ServiceTask(_N1, "running")],
+            image="apache/kafka:4.0.0",
+        ),
+        ServiceStatus(
+            f"kafka_kafka-{_N2}",
+            1,
+            1,
+            stack="kafka",
+            tasks=[ServiceTask(_N2, "running")],
+            image="apache/kafka:4.0.0",
+        ),
+        ServiceStatus(
+            f"kafka_kafka-{_N3}",
+            1,
+            1,
+            stack="kafka",
+            tasks=[ServiceTask(_N3, "running")],
+            image="apache/kafka:3.9.0",
+        ),
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    assert f"kafka:{icons.WARN} 4.0.0" in out
+
+
+def test_differing_repositories_mark_the_whole_reference():
+    swarm = _image_swarm(
+        ServiceStatus(
+            f"web_proxy-{_N1}",
+            1,
+            1,
+            stack="web",
+            tasks=[ServiceTask(_N1, "running")],
+            image="traefik:v3.3",
+        ),
+        ServiceStatus(
+            f"web_proxy-{_N2}",
+            1,
+            1,
+            stack="web",
+            tasks=[ServiceTask(_N2, "running")],
+            image="nginx:1.27",
+        ),
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    assert f"{icons.WARN} traefik:v3.3" in out or f"{icons.WARN} nginx:1.27" in out
+
+
+def test_a_service_without_an_image_leaves_the_cell_empty():
+    swarm = _image_swarm(
+        ServiceStatus(
+            "shop_api",
+            1,
+            1,
+            stack="shop",
+            description="Shop API",
+            tasks=[ServiceTask(_N1, "running")],
+        )
+    )
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    assert "Image" in out and "Shop API" in out
+
+
+def test_the_image_column_can_be_switched_off():
+    """The column costs width, and on a narrow terminal with several node
+    columns that is the width the description needs."""
+    swarm = _image_swarm(
+        ServiceStatus(
+            "shop_api",
+            1,
+            1,
+            stack="shop",
+            description="Shop API",
+            tasks=[ServiceTask(_N1, "running")],
+            image="registry.example.org/api:2026-08-14_1206",
+        )
+    )
+    out = _text(panels.services_section(swarm, Config(show_image=False)), width=170)
+
+    assert "Image" not in out
+    assert "2026-08-14_1206" not in out
+    assert "Shop API" in out

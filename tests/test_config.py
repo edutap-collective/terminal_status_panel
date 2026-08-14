@@ -351,3 +351,10 @@ def test_a_base_carrying_a_query_or_fragment_is_dropped(tmp_path):
         'ok = "https://login.example.de"\n'
     )
     assert load_config(path).traefik.links == {"ok": "https://login.example.de"}
+
+
+def test_the_image_column_is_on_unless_switched_off(tmp_path):
+    assert load_config(tmp_path / "does-not-exist.toml").show_image is True
+
+    path = _write(tmp_path, "\n".join(["[docker]", "show_image = false"]))
+    assert load_config(path).show_image is False

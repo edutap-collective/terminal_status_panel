@@ -294,6 +294,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `width` | `80` | Fallback render width when no TTY is available (see width resolution above). |
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
 | `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
+| `docker.show_image` | `true` | Whether the DOCKER INFOS rows carry an **Image** column right of the description (see [The image column](#the-image-column)). It is the column that answers "which version is deployed here", and the one that costs the description its width on a narrow terminal — `false` removes it. |
 | `resources.ignore_mountpoints` | platform-dependent | Mountpoint prefixes hidden from the filesystem table. Defaults to `["/System/Volumes/", "/Library/Developer/CoreSimulator/"]` on macOS and to `[]` elsewhere. An explicitly empty list hides nothing rather than falling back to the default. |
 | `resources.process_sample` | `0.3` | Seconds to sample process CPU usage over for the TOP CPU row (see [Top processes](#top-processes)). `0` or less disables the CPU ranking; TOP RAM is unaffected. |
 | `resources.top_processes` | `5` | Rows per process table in the TOP CPU / TOP RAM row (see [Top processes](#top-processes)). `--processes N` on the command line wins over this. A value that cannot be read as a whole number falls back to `5`; a negative value means `0`. `0` removes the whole row, and with it the `process_sample` sampling wait — a different switch from `process_sample`, which only removes the CPU ranking and leaves TOP RAM in place. |
@@ -325,6 +326,7 @@ width = 200
 [docker]
 timeout = 1.5
 description_label = "status.description"
+show_image = true
 infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry"]
 infra_ui_services = ["kafbat-ui", "cloudbeaver", "mongo-express", "rustfs-console"]
 
@@ -1184,6 +1186,46 @@ both, the configured key wins — otherwise a service could be pinned to an olde
 text it had been migrated away from. The rule is presence, not content: a
 service that sets the configured key to an empty string is saying "no
 description here", and the legacy key is not consulted.
+
+## The image column
+
+Right of **Description**, each row names the image its replicas run — the
+repository and the tag, as `kafka:4.0.0`. Nothing has to be labelled for this:
+the reference comes from the service's task template
+(`Spec.TaskTemplate.ContainerSpec.Image`) or, for a plain or Compose container,
+from the `Config.Image` it was started with.
+
+Three things are dropped on the way to the cell, and each for a reason:
+
+- **The digest.** Swarm rewrites every reference to `tag@sha256:…` when the
+  service is created. Those 71 characters are the same for every replica of the
+  same tag and separate nothing a reader is looking for.
+- **The registry and the namespace.** On a cluster that builds its own images
+  they repeat on every single row — `registry.example.org:5005/group/project/`
+  ahead of each name — and what differs is exactly what is left. The colon is
+  searched for in the **last path segment** only, so a registry port is not
+  read as a tag.
+- **Nothing else.** A reference without a tag is shown as the bare repository
+  rather than as `:latest`. Docker would resolve it that way, but the panel
+  reports what the service says, and the service did not say it.
+
+Where one row stands for several services — the per-node replicas of a stack —
+they can disagree, and a stalled rolling update is exactly when they do. The
+cell then names the image the **most running replicas** carry and marks it:
+`kafka:⚠️ 4.0.0` when only the tag differs, `⚠️ traefik:v3.3` when the
+repositories do. Ranked by running replicas rather than by service count,
+because a tag nothing runs any more is what the marker points away from — and
+never by "newest", because the panel cannot order tags. `v3.10` sorts below
+`v3.3` as a string, and claiming an order that does not exist is worse than
+naming a majority that does.
+
+A Compose group is read the same way at collection time: where a changed tag
+left the old container behind, stopped but still listed, the row reports the
+image of the container that is actually serving — the one its own replica count
+is about.
+
+The column costs width, which on a narrow terminal is the width the description
+needs. Turn it off with `show_image = false` in the `[docker]` section.
 
 ## OS logos
 

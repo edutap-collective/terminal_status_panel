@@ -25,6 +25,7 @@ class _FakeService:
         raw_labels=None,
         mode=None,
         history=None,
+        image=None,
     ):
         self.name = name
         labels = {}
@@ -36,6 +37,8 @@ class _FakeService:
         self.attrs = {
             "Spec": {"Mode": mode or {"Replicated": {"Replicas": desired}}, "Labels": labels}
         }
+        if image is not None:
+            self.attrs["Spec"]["TaskTemplate"] = {"ContainerSpec": {"Image": image}}
         self._tasks = tasks
         #: (node_id, state, timestamp) for tasks Swarm has already shut down --
         #: what a finished job leaves behind. Only an unfiltered listing sees them.
@@ -301,7 +304,14 @@ class _FakeContainer:
     """*state* is the raw Docker status; *health* the healthcheck verdict."""
 
     def __init__(
-        self, name, labels=None, state="running", exit_code=0, health=None, container_id=None
+        self,
+        name,
+        labels=None,
+        state="running",
+        exit_code=0,
+        health=None,
+        container_id=None,
+        image=None,
     ):
         self.name = name
         self.id = container_id or f"id-{name}"
@@ -313,6 +323,8 @@ class _FakeContainer:
             "State": container_state,
             "Config": {"Labels": dict(labels or {})},
         }
+        if image is not None:
+            self.attrs["Config"]["Image"] = image
 
 
 def _compose(project, service, **kwargs):
@@ -777,3 +789,92 @@ def test_a_timestamp_without_a_zone_is_still_read_as_utc():
 @pytest.mark.parametrize("value", [None, "", "yesterday", 17, {}])
 def test_an_unreadable_timestamp_is_no_timestamp(value):
     assert docker_collector._parse_timestamp(value) is None
+
+
+# --- the image a service actually runs ---------------------------------------
+
+
+def test_a_swarm_service_reports_the_image_of_its_task_template(monkeypatch):
+    svc = _FakeService(
+        "app",
+        desired=1,
+        tasks=[("n1", "running")],
+        image="gitlab.example.org:5005/group/project/app:2026-08-14_1206",
+    )
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-01")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (service,) = docker_collector.collect_docker().services
+
+    assert service.image == "gitlab.example.org:5005/group/project/app:2026-08-14_1206"
+
+
+def test_the_pinned_digest_is_dropped_from_the_image(monkeypatch):
+    """Swarm rewrites every image reference to `tag@sha256:...` once the service
+    is created. The digest is 71 characters that never differ between two
+    services running the same tag, so it is dropped where the fact is read."""
+    svc = _FakeService(
+        "app",
+        desired=1,
+        tasks=[("n1", "running")],
+        image="registry.example.org/app:v3.3@sha256:" + "a" * 64,
+    )
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-01")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (service,) = docker_collector.collect_docker().services
+
+    assert service.image == "registry.example.org/app:v3.3"
+
+
+def test_a_service_without_a_task_template_has_no_image(monkeypatch):
+    svc = _FakeService("app", desired=1, tasks=[("n1", "running")])
+    client = _FakeClient("active", services=[svc], nodes=[_FakeNode("n1", "srv-01")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (service,) = docker_collector.collect_docker().services
+
+    assert service.image is None
+
+
+def test_a_container_reports_the_image_it_was_configured_with(monkeypatch):
+    """`Config.Image` is the reference the container was started from -- the
+    name a reader recognises. `attrs["Image"]` is the resolved image ID, a
+    bare sha256 that identifies the same thing unreadably."""
+    client = _FakeClient(
+        "inactive",
+        containers=[_FakeContainer("redis", image="redis:7.4-alpine")],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (container,) = docker_collector.collect_docker().containers
+
+    assert container.image == "redis:7.4-alpine"
+
+
+def test_a_container_without_a_configured_image_has_no_image(monkeypatch):
+    client = _FakeClient("inactive", containers=[_FakeContainer("redis")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (container,) = docker_collector.collect_docker().containers
+
+    assert container.image is None
+
+
+def test_a_compose_group_reports_the_image_that_is_actually_serving(monkeypatch):
+    """A changed tag leaves the old container behind, stopped but still listed
+    -- that is what makes a Compose shortfall visible. Reading the group's
+    image off the first member would then name the image that is no longer
+    running, on the very row whose replicas say the new one is."""
+    client = _FakeClient(
+        "inactive",
+        containers=[
+            _compose("shop", "api", state="exited", exit_code=1, image="api:1.0", container_id="a"),
+            _compose("shop", "api", image="api:2.0", container_id="b"),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+
+    (group,) = docker_collector.collect_docker().containers
+
+    assert group.image == "api:2.0"
