@@ -83,6 +83,38 @@ def _labels(service) -> dict:
     return labels
 
 
+def _without_digest(reference: str | None) -> str | None:
+    """An image reference with its pinned digest removed.
+
+    Swarm rewrites every reference to ``tag@sha256:...`` when the service is
+    created, and Compose does the same once an image has been pulled. Those 71
+    characters are identical for every service running the same tag, so they
+    buy nothing a panel row could show and cost more width than the whole rest
+    of the reference.
+    """
+    if not reference:
+        return None
+    return reference.split("@", 1)[0] or None
+
+
+def _service_image(service) -> str | None:
+    """The image the service's task template runs, or None."""
+    spec = (getattr(service, "attrs", {}) or {}).get("Spec", {})
+    container = (spec.get("TaskTemplate") or {}).get("ContainerSpec") or {}
+    return _without_digest(container.get("Image"))
+
+
+def _container_image(container) -> str | None:
+    """The image the container was started from, or None.
+
+    ``Config.Image`` is the reference as it was written -- the name a reader
+    recognises. ``attrs["Image"]`` names the same image as a resolved sha256
+    ID, which identifies it exactly and says nothing to anyone reading a panel.
+    """
+    attrs = getattr(container, "attrs", {}) or {}
+    return _without_digest((attrs.get("Config") or {}).get("Image"))
+
+
 def _job_schedule(labels: dict) -> str | None:
     return labels.get(f"{SWARM_CRONJOB_PREFIX}.schedule")
 
@@ -224,6 +256,7 @@ def _swarm_services(
                 job=job,
                 schedule=_job_schedule(labels),
                 last_run=_last_run(svc, id_to_name) if job else None,
+                image=_service_image(svc),
             )
         )
     return services
@@ -301,6 +334,20 @@ def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[
     return groups, origins
 
 
+def _group_image(members) -> str | None:
+    """The image of the member that is serving, or of the first one.
+
+    A Compose service whose tag changed keeps its old container around, stopped
+    -- that is what a shortfall is made of. The row says how many replicas run,
+    so its image must be the one they run; naming the leftover would contradict
+    the same row's own count.
+    """
+    for container, _ in members:
+        if _raw_state(container) in _LIVE_STATES:
+            return _container_image(container)
+    return _container_image(members[0][0])
+
+
 def _container_services(
     client, critical: set[str], description_label: str, node_name: str | None
 ) -> tuple[list[ServiceStatus], dict[str, str]]:
@@ -332,6 +379,7 @@ def _container_services(
                 # there are no node columns, so a task with no node changes
                 # nothing else.
                 tasks=[ServiceTask(node=node_name, state=state) for state in states],
+                image=_group_image(members),
             )
         )
     services.sort(key=lambda svc: (svc.stack or "", svc.name))

@@ -154,6 +154,10 @@ class Config:
     docker_timeout: float = 1.5
     critical_services: list[str] = field(default_factory=list)
     description_label: str = DEFAULT_DESCRIPTION_LABEL
+    #: Whether the DOCKER INFOS rows carry the image they run. It is the one
+    #: column that answers "which version is deployed here", and the one that
+    #: costs the description its width on a narrow terminal -- hence a switch.
+    show_image: bool = True
     infrastructure_stacks: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRASTRUCTURE_STACKS)
     )
@@ -331,6 +335,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         docker_timeout=float(docker.get("timeout", 1.5)),
         critical_services=_list_setting(services.get("critical"), []),
         description_label=str(docker.get("description_label", DEFAULT_DESCRIPTION_LABEL)),
+        show_image=bool(docker.get("show_image", True)),
         infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),
         ignore_mountpoints=_list_setting(ignore, platform_defaults.ignore_mountpoints()),

@@ -158,6 +158,12 @@ class ServiceStatus:
     job: bool = False
     schedule: str | None = None  # cron expression, when the job carries one
     last_run: JobRun | None = None  # None when the job has never run
+    #: The image reference this service runs, digest removed but otherwise
+    #: whole: ``registry.example.org:5005/group/app:2026-08-14_1206``. Kept
+    #: unshortened on purpose -- which part of it is worth the width is a
+    #: rendering question, and a model that stored the shortened form could not
+    #: answer the fuller one later.
+    image: str | None = None
 
 
 @dataclass

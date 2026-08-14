@@ -789,6 +789,50 @@ def _group_desc(services) -> str:
     return f"{schedule} · {desc}" if desc else schedule
 
 
+def _split_image(reference: str) -> tuple[str, str]:
+    """An image reference as (repository, tag), registry and namespace dropped.
+
+    The colon is searched for in the last path segment only. A private registry
+    carries its port in the reference -- ``registry.example.org:5000/app`` --
+    and splitting the whole string on its last colon would read that port as a
+    tag and the rest as the repository.
+    """
+    last = reference.rpartition("/")[2]
+    repo, sep, tag = last.partition(":")
+    return repo, tag if sep else ""
+
+
+def _image_cell(services) -> Text:
+    """The image the row's replicas run, marked when they do not all agree.
+
+    One row can stand for several services -- the per-node replicas of a Swarm
+    stack -- and a rolling update that stalled leaves them on different tags.
+    The cell still has to name one image, so it names the one most running
+    replicas carry; the marker says the row is not of one mind about it.
+
+    Ranked by *running* replicas rather than by service count: a tag nothing
+    runs any more is exactly what the marker is meant to point away from.
+    """
+    weights: dict[tuple[str, str], tuple[int, int]] = {}
+    for svc in services:
+        if not svc.image:
+            continue
+        key = _split_image(svc.image)
+        replicas, seen = weights.get(key, (0, 0))
+        weights[key] = (replicas + max(svc.running_replicas, 0), seen + 1)
+    if not weights:
+        return Text("")
+    # Alphabetical as the last tie-break, so a row cannot change what it says
+    # between two logins without anything having changed on the cluster.
+    repo, tag = min(weights, key=lambda key: (-weights[key][0], -weights[key][1], key))
+    if len(weights) == 1:
+        return Text(f"{repo}:{tag}" if tag else repo, style="dim")
+    if len({name for name, _ in weights}) == 1 and tag:
+        # One image, several versions: the marker belongs where they differ.
+        return Text(f"{repo}:{_WARN} {tag}", style="yellow")
+    return Text(f"{_WARN} {repo}:{tag}" if tag else f"{_WARN} {repo}", style="yellow")
+
+
 def _split_infra_uis(services, ui_keys, node_names) -> tuple[list, list]:
     """Split *services* into (admin UIs, everything else).
 
@@ -823,7 +867,11 @@ def _ui_subrows(ui_services, node_names, ui_keys) -> list[tuple[str, list, str]]
 
 
 def _stack_matrix(
-    title, entries, nodes, verdict: Callable[[list[ServiceStatus]], Text]
+    title,
+    entries,
+    nodes,
+    verdict: Callable[[list[ServiceStatus]], Text],
+    show_image: bool = True,
 ) -> RenderableType:
     short = _short_node_names(nodes)
     table = Table.grid(padding=(0, 1))
@@ -832,19 +880,29 @@ def _stack_matrix(
     for _ in short:
         table.add_column(justify="center")  # per-node status
     table.add_column(style="dim")  # description
+    if show_image:
+        table.add_column()  # image
 
     header = [_subhead(title), Text("Working", style="cyan")]
     header += [Text(s, style="cyan") for _, s in short]
     header.append(Text("Description", style="cyan"))
+    if show_image:
+        header.append(Text("Image", style="cyan"))
     table.add_row(*header)
 
+    #: Cells to the right of a row's first one -- what a header or placeholder
+    #: row has to fill so the columns below it still line up.
+    trailing = len(short) + (3 if show_image else 2)
+
     if not entries:
-        table.add_row(Text("—", style="dim"), *[""] * (len(short) + 2))
+        table.add_row(Text("—", style="dim"), *[""] * trailing)
 
     def _row(label, services, desc):
         cells = [label, verdict(services)]
         cells += [_node_cell(services, full) for full, _ in short]
         cells.append(Text(desc or ""))
+        if show_image:
+            cells.append(_image_cell(services))
         table.add_row(*cells)
 
     # The pseudo stack heads the block; real stacks stay alphabetical.
@@ -859,7 +917,7 @@ def _stack_matrix(
             # Several distinct services: stack header, then one row each. The
             # header's verdict cell stays empty — the sub-rows below carry
             # their own, and an aggregate here would only repeat that.
-            table.add_row(Text(stack_name, style="bold cyan"), *[""] * (len(short) + 2))
+            table.add_row(Text(stack_name, style="bold cyan"), *[""] * trailing)
             for label, services, desc in subrows:
                 _row(Text(f"  {label}"), services, desc)
     return table
@@ -920,7 +978,7 @@ def _classify_origin(services, cfg, node_names):
     return infra, service, stackless
 
 
-def _origin_block(title, infra, service, nodes, verdict) -> list[RenderableType]:
+def _origin_block(title, infra, service, nodes, verdict, show_image=True) -> list[RenderableType]:
     """The two tables of one origin, or nothing at all when it is empty.
 
     Omitting an empty block is what keeps the more explicit layout readable: a
@@ -932,9 +990,9 @@ def _origin_block(title, infra, service, nodes, verdict) -> list[RenderableType]
         return []
     return [
         _subhead(title),
-        _stack_matrix("Infrastructure", infra, nodes, verdict),
+        _stack_matrix("Infrastructure", infra, nodes, verdict, show_image),
         Text(""),
-        _stack_matrix("Service", service, nodes, verdict),
+        _stack_matrix("Service", service, nodes, verdict, show_image),
         Text(""),
     ]
 
@@ -966,13 +1024,17 @@ def _stack_columns(
     )
 
     parts: list[RenderableType] = []
-    parts += _origin_block("SWARM STACKS", swarm_infra, swarm_service, swarm.nodes, verdict)
-    parts += _origin_block("COMPOSE PROJECTS", compose_infra, compose_service, swarm.nodes, verdict)
+    parts += _origin_block(
+        "SWARM STACKS", swarm_infra, swarm_service, swarm.nodes, verdict, cfg.show_image
+    )
+    parts += _origin_block(
+        "COMPOSE PROJECTS", compose_infra, compose_service, swarm.nodes, verdict, cfg.show_image
+    )
 
     stackless = swarm_rest + compose_rest
     if stackless:
         parts += [
-            _stack_matrix("Standalone containers", stackless, swarm.nodes, verdict),
+            _stack_matrix("Standalone containers", stackless, swarm.nodes, verdict, cfg.show_image),
         ]
     if not parts:
         return Text("no services or containers", style="dim")
