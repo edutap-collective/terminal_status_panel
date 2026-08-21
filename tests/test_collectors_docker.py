@@ -388,7 +388,18 @@ class _FakeContainer:
         started_at=None,
         oom_killed=False,
         error="",
+        memory=None,
+        inactive_file=0,
+        mem_limit=0,
+        mem_reservation=0,
+        stats_raises=False,
+        cgroup_v1=False,
     ):
+        self._memory = memory
+        self._inactive_file = inactive_file
+        self._stats_raises = stats_raises
+        self._cgroup_v1 = cgroup_v1
+        self.stats_kwargs = None
         self.name = name
         self.id = container_id or f"id-{name}"
         self.status = state
@@ -406,9 +417,23 @@ class _FakeContainer:
             "State": container_state,
             "Config": {"Labels": dict(labels or {})},
             "RestartCount": restart_count,
+            "HostConfig": {"Memory": mem_limit, "MemoryReservation": mem_reservation},
         }
         if image is not None:
             self.attrs["Config"]["Image"] = image
+
+    def stats(self, **kwargs):
+        self.stats_kwargs = kwargs
+        if self._stats_raises:
+            raise Exception("stats unavailable")
+        key = "total_inactive_file" if self._cgroup_v1 else "inactive_file"
+        return {
+            "memory_stats": {
+                "usage": self._memory,
+                "limit": 54 * 2**30,
+                "stats": {key: self._inactive_file},
+            }
+        }
 
 
 def _compose(project, service, **kwargs):
@@ -1539,3 +1564,118 @@ def test_the_group_label_key_is_configurable(monkeypatch):
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker(group_label="example.group")
     assert result.services[0].group == "frontend"
+
+
+# --- memory per service, on this node --------------------------------------
+
+_MB = 2**20
+
+
+def _mem(monkeypatch, *containers, services=None):
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01")],
+        containers=list(containers),
+        services=list(services or []),
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    return {s.name: s for s in list(result.services) + list(result.containers)}
+
+
+def test_the_page_cache_is_subtracted(monkeypatch):
+    """Raw `usage` overstated a real container by 144%. The number a reader
+    expects -- and `docker stats` prints -- is usage minus inactive_file."""
+    by_name = _mem(
+        monkeypatch,
+        _compose("mystack", "db", memory=79 * _MB, inactive_file=46 * _MB),
+    )
+    assert by_name["db"].memory_bytes == 33 * _MB
+
+
+def test_cgroup_v1_is_handled_like_v2(monkeypatch):
+    by_name = _mem(
+        monkeypatch,
+        _compose("mystack", "db", memory=79 * _MB, inactive_file=46 * _MB, cgroup_v1=True),
+    )
+    assert by_name["db"].memory_bytes == 33 * _MB
+
+
+def test_stats_is_always_asked_for_one_shot(monkeypatch):
+    """Without it the daemon blocks about a second per container (measured:
+    1009.7 ms for one), and the login path is gone."""
+    container = _compose("mystack", "db", memory=10 * _MB)
+    _mem(monkeypatch, container)
+    assert container.stats_kwargs == {"stream": False, "one_shot": True}
+
+
+def test_no_limit_is_reported_as_such_not_as_the_host_ram(monkeypatch):
+    """`memory_stats.limit` carries the host's RAM when nothing was set. The
+    reliable test is HostConfig.Memory == 0."""
+    by_name = _mem(monkeypatch, _compose("mystack", "db", memory=10 * _MB, mem_limit=0))
+    assert by_name["db"].memory_limit is None
+
+
+def test_a_set_limit_is_reported(monkeypatch):
+    by_name = _mem(
+        monkeypatch, _compose("mystack", "db", memory=10 * _MB, mem_limit=256 * _MB)
+    )
+    assert by_name["db"].memory_limit == 256 * _MB
+
+
+def test_a_reservation_is_kept_apart_from_a_limit(monkeypatch):
+    by_name = _mem(
+        monkeypatch,
+        _compose("mystack", "db", memory=10 * _MB, mem_limit=0, mem_reservation=128 * _MB),
+    )
+    svc = by_name["db"]
+    assert svc.memory_limit is None
+    assert svc.memory_reservation == 128 * _MB
+
+
+def test_a_dead_container_is_not_measured(monkeypatch):
+    """It holds no memory, and asking would spend a call to learn zero."""
+    container = _compose("mystack", "db", state="exited", exit_code=1, memory=10 * _MB)
+    by_name = _mem(monkeypatch, container)
+    assert container.stats_kwargs is None
+    assert by_name["db"].memory_bytes is None
+
+
+def test_a_failing_stats_call_costs_only_its_own_figure(monkeypatch):
+    by_name = _mem(monkeypatch, _compose("mystack", "db", stats_raises=True))
+    svc = by_name["db"]
+    assert svc.memory_bytes is None
+    assert svc.running_replicas == 1  # the rest of the row survives
+
+
+def test_several_local_tasks_sum_usage_and_reference(monkeypatch):
+    """A summed usage against one instance's limit would be a false alarm."""
+    swarm_label = {docker_collector.SWARM_SERVICE_LABEL: "mystack_worker"}
+    containers = [
+        _FakeContainer(
+            f"mystack_worker.{i}.x",
+            labels=swarm_label,
+            memory=100 * _MB,
+            mem_limit=256 * _MB,
+        )
+        for i in (1, 2)
+    ]
+    by_name = _mem(
+        monkeypatch,
+        *containers,
+        services=[_FakeService("mystack_worker", desired=2, tasks=[("n1", "running")] * 2)],
+    )
+    svc = by_name["mystack_worker"]
+    assert svc.memory_bytes == 200 * _MB
+    assert svc.memory_limit == 512 * _MB
+    assert svc.local_tasks == 2
+
+
+def test_a_service_with_no_local_task_has_no_figure(monkeypatch):
+    by_name = _mem(
+        monkeypatch,
+        services=[_FakeService("mystack_remote", desired=1, tasks=[("n2", "running")])],
+    )
+    svc = by_name["mystack_remote"]
+    assert svc.memory_bytes is None
+    assert svc.local_tasks == 0

@@ -731,6 +731,51 @@ def _trouble_block(entries) -> RenderableType | None:
     return Group(_subhead(f"TROUBLE  (last {hours} h)"), _trouble_table(entries))
 
 
+#: Marks a figure measured against a reservation rather than a limit. The two
+#: must not look alike: exceeding a limit gets the service killed, exceeding a
+#: reservation quietly makes the cluster's capacity arithmetic wrong.
+_RESERVED = "⚑"
+
+
+def _memory_cell(services) -> Text:
+    """One row's memory on this node, against whatever reference exists.
+
+    Three cases, and they are deliberately distinguishable at a glance:
+
+    * a limit renders ``412.0 MB / 1.0 GB`` -- how close to being killed;
+    * a reservation renders ``890.0 MB ⚑ 512.0 MB`` -- over what the cluster
+      planned for, which kills nothing and breaks placement arithmetic;
+    * neither renders ``6.0 GB no limit`` -- a finding in itself, because an
+      unbounded service takes the node with it when it leaks.
+
+    ``elsewhere`` where the service runs, but not here: `/containers/{id}/stats`
+    reaches only the local daemon. Not a dash, which would claim the figure was
+    unobtainable, and not a blank, which beside a filled cell reads as
+    "consumes nothing".
+
+    A service running *nowhere* gets a dash instead. "Elsewhere" would send a
+    reader looking for it on another node, when in truth it is down -- and the
+    Working cell two columns to the left already says so. The distinction is
+    not hypothetical: a stopped Compose container has no local task either, and
+    it is emphatically not somewhere else.
+    """
+    local = [s for s in services if s.local_tasks]
+    if not local:
+        running = any(s.running_replicas for s in services)
+        return Text("elsewhere" if running else "—", style="dim")
+    used = sum(s.memory_bytes or 0 for s in local)
+    limit = sum(s.memory_limit or 0 for s in local)
+    reservation = sum(s.memory_reservation or 0 for s in local)
+    cell = Text(format_bytes(used))
+    if limit:
+        cell.append(f" / {format_bytes(limit)}", style="dim")
+    elif reservation:
+        cell.append(f" {_RESERVED} {format_bytes(reservation)}", style="dim")
+    else:
+        cell.append(" no limit", style="yellow")
+    return cell
+
+
 def _node_health(node) -> Text:
     """✅ ready and active · ⚠️ drained/paused or unreachable · 💀 down."""
     if not node.reachable:
@@ -1157,13 +1202,14 @@ def _stack_matrix(
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")  # stack / service name
     table.add_column(justify="left")  # Working
+    table.add_column(justify="left")  # RAM on this node
     for _ in short:
         table.add_column(justify="center")  # per-node status
     table.add_column(style="dim")  # description
     if show_image:
         table.add_column()  # image
 
-    header = [_subhead(title), Text("Working", style="cyan")]
+    header = [_subhead(title), Text("Working", style="cyan"), Text("RAM (this node)", style="cyan")]
     header += [Text(s, style="cyan") for _, s in short]
     header.append(Text("Description", style="cyan"))
     if show_image:
@@ -1172,13 +1218,13 @@ def _stack_matrix(
 
     #: Cells to the right of a row's first one -- what a header or placeholder
     #: row has to fill so the columns below it still line up.
-    trailing = len(short) + (3 if show_image else 2)
+    trailing = len(short) + (4 if show_image else 3)
 
     if not entries:
         table.add_row(Text("—", style="dim"), *[""] * trailing)
 
     def _row(label, services, desc):
-        cells = [label, _with_pin(verdict(services), services)]
+        cells = [label, _with_pin(verdict(services), services), _memory_cell(services)]
         cells += [_node_cell(services, full) for full, _ in short]
         cells.append(Text(desc or ""))
         if show_image:

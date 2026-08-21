@@ -2251,3 +2251,116 @@ def test_a_lone_service_is_never_pinned():
     """A 1/1 row claims no mobility, so there is none to correct."""
     out = _pin_out([_svc("mystack_solo", pinned=True, stack="mystack")])
     assert "📌" not in out
+
+
+# --- the RAM column --------------------------------------------------------
+
+_MiB = 2**20
+
+
+def _mem_svc(name, stack="mystack", **kw):
+    return ServiceStatus(
+        name, 1, 1, stack=stack, tasks=[ServiceTask("srv-01", "running")], **kw
+    )
+
+
+def _mem_out(services, width=200):
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=2,
+        nodes=[_mgr("srv-01", leader=True), _wrk("srv-02")],
+        services=list(services),
+    )
+    return _text(panels.services_section(swarm, Config()), width=width)
+
+
+def test_a_limit_is_rendered_as_a_ratio():
+    out = _mem_out(
+        [
+            _mem_svc("web", memory_bytes=412 * _MiB, memory_limit=1024 * _MiB, local_tasks=1),
+            _mem_svc("other"),
+        ]
+    )
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "412.0 MB" in line and "1.0 GB" in line
+
+
+def test_a_reservation_without_a_limit_is_marked_as_different():
+    """33% of a limit and 33% of a reservation are different statements."""
+    out = _mem_out(
+        [
+            _mem_svc("web", memory_bytes=890 * _MiB, memory_reservation=512 * _MiB, local_tasks=1),
+            _mem_svc("other"),
+        ]
+    )
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "⚑" in line and "512.0 MB" in line
+    assert "/" not in line.split("890.0 MB")[1].split("512.0 MB")[0]
+
+
+def test_no_limit_at_all_is_a_finding_in_its_own_right():
+    out = _mem_out(
+        [_mem_svc("web", memory_bytes=6 * 1024 * _MiB, local_tasks=1), _mem_svc("other")]
+    )
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "no limit" in line
+
+
+def test_a_service_running_nowhere_here_says_so():
+    out = _mem_out([_mem_svc("web", local_tasks=0), _mem_svc("other")])
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "elsewhere" in line
+    assert "—" not in line.split("elsewhere")[0][-4:]
+
+
+def test_the_ram_column_sits_directly_after_working():
+    out = _mem_out([_mem_svc("web", memory_bytes=1 * _MiB, local_tasks=1), _mem_svc("other")])
+    header = next(line for line in out.splitlines() if "Working" in line)
+    assert header.index("Working") < header.index("RAM")
+    assert header.index("RAM") < header.index("Description")
+
+
+def test_the_ram_header_names_the_node_it_covers():
+    out = _mem_out([_mem_svc("web", memory_bytes=1 * _MiB, local_tasks=1), _mem_svc("other")])
+    header = next(line for line in out.splitlines() if "RAM" in line)
+    assert "this node" in header
+
+
+def test_the_ram_column_is_independent_of_the_process_row_switch():
+    """It is a table column, not part of the process block, and shares none of
+    its switches."""
+    cfg = Config()
+    cfg.top_processes = 0
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
+        nodes=[_mgr("srv-01", leader=True)],
+        services=[_mem_svc("web", memory_bytes=1 * _MiB, local_tasks=1), _mem_svc("other")],
+    )
+    out = _text(panels.services_section(swarm, cfg), width=200)
+    assert "RAM" in out
+
+
+def test_the_ram_column_survives_a_narrow_terminal():
+    out = _mem_out(
+        [
+            _mem_svc("web", memory_bytes=412 * _MiB, memory_limit=1024 * _MiB, local_tasks=1),
+            _mem_svc("other"),
+        ],
+        width=80,
+    )
+    assert "web" in out
+
+
+def test_a_service_running_nowhere_is_not_called_elsewhere():
+    """A stopped local container is not somewhere else -- it is down, and the
+    Working cell already says so."""
+    stopped = ServiceStatus("web", 0, 1, stack="mystack", tasks=[ServiceTask("srv-01", "exited")])
+    out = _mem_out([stopped, _mem_svc("other")])
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "elsewhere" not in line
+    assert "—" in line

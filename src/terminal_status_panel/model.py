@@ -178,6 +178,24 @@ class ServiceStatus:
     #: as the first, the second borrows a resilience it does not have -- and
     #: that is exactly the property that decides what happens when a node dies.
     pinned: bool = False
+    #: Memory held by this service's tasks **on this node**, page cache
+    #: already subtracted -- the figure ``docker stats`` prints. ``None``
+    #: means nothing of it runs here, which is a different statement from
+    #: zero and must render differently.
+    memory_bytes: int | None = None
+    #: The cgroup limit, summed over the local tasks. ``None`` means no limit
+    #: was set -- deliberately not the host's RAM, which is what the Docker
+    #: API reports in that case and which would make every service look
+    #: comfortable at a fraction of a percent.
+    memory_limit: int | None = None
+    #: The reservation, likewise summed. Not a limit: exceeding it kills
+    #: nothing. It is the figure the orchestrator places against, so a service
+    #: living above it makes the cluster's capacity arithmetic wrong while
+    #: nothing anywhere turns red.
+    memory_reservation: int | None = None
+    #: How many of this service's tasks run on this node. It is what the
+    #: summed figures above were summed over.
+    local_tasks: int = 0
 
 
 #: How far back a fall still counts. Twelve hours spans a night, so what broke
