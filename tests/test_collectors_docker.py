@@ -26,7 +26,12 @@ class _FakeService:
         mode=None,
         history=None,
         image=None,
+        task_timestamp=None,
+        placement_error=None,
     ):
+        self.task_timestamp = task_timestamp
+        self.placement_error = placement_error
+        self.unfiltered_calls = 0
         self.name = name
         labels = {}
         if stack is not None:
@@ -47,14 +52,26 @@ class _FakeService:
     def tasks(self, filters=None):
         result = []
         for node_id, state in self._tasks:
-            task = {"Status": {"State": state}}
+            status = {"State": state}
+            if self.task_timestamp is not None:
+                status["Timestamp"] = self.task_timestamp
+            if node_id is None and self.placement_error is not None:
+                status["Err"] = self.placement_error
+            task = {"Status": status}
             if node_id is not None:
                 task["NodeID"] = node_id
             result.append(task)
         if filters and filters.get("desired-state") == "running":
             return result
-        for node_id, state, timestamp in self._history:
-            task = {"Status": {"State": state, "Timestamp": timestamp}, "DesiredState": "shutdown"}
+        self.unfiltered_calls += 1
+        for entry in self._history:
+            node_id, state, timestamp = entry[:3]
+            status = {"State": state, "Timestamp": timestamp}
+            if len(entry) > 3 and entry[3] is not None:
+                status["ContainerStatus"] = {"ExitCode": entry[3]}
+            if len(entry) > 4 and entry[4]:
+                status["Err"] = entry[4]
+            task = {"Status": status, "DesiredState": "shutdown"}
             if node_id is not None:
                 task["NodeID"] = node_id
             result.append(task)
@@ -91,7 +108,20 @@ class _FakeNode:
 
 
 class _FakeClient:
-    def __init__(self, swarm_state, services=None, containers=None, nodes=None, df=None):
+    def __init__(
+        self,
+        swarm_state,
+        services=None,
+        containers=None,
+        nodes=None,
+        df=None,
+        retention=5,
+    ):
+        self._swarm_attrs = (
+            None
+            if retention is None
+            else {"Spec": {"Orchestration": {"TaskHistoryRetentionLimit": retention}}}
+        )
         self._info = {
             "Swarm": {"LocalNodeState": swarm_state, "ControlAvailable": True, "Nodes": 3},
             "Name": "srv-01",
@@ -104,6 +134,16 @@ class _FakeClient:
 
     def info(self):
         return self._info
+
+    @property
+    def swarm(self):
+        if self._swarm_attrs is None:
+            raise Exception("swarm not readable")
+
+        class _Swarm:
+            attrs = self._swarm_attrs
+
+        return _Swarm()
 
     def df(self):
         if self._df is None:
@@ -1183,3 +1223,228 @@ def test_trouble_entries_carry_the_local_node(monkeypatch):
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     entries = docker_collector.collect_docker().trouble
     assert [e.node for e in entries] == ["srv-01"]
+
+
+# --- trouble: swarm task history -------------------------------------------
+
+
+def _swarm_trouble(monkeypatch, *services, retention=5):
+    monkeypatch.setattr(docker_collector, "_now", lambda: _FIXED_NOW)
+    client = _FakeClient(
+        "active", nodes=[_FakeNode("n1", "srv-01")], services=list(services), retention=retention
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    return docker_collector.collect_docker().trouble, client
+
+
+def test_a_healthy_long_running_service_is_never_inspected(monkeypatch):
+    """The pre-selection is the whole cost argument: in steady state the extra
+    call must not happen at all."""
+    svc = _FakeService("web", desired=1, tasks=[("n1", "running")], task_timestamp=_OLD)
+    entries, client = _swarm_trouble(monkeypatch, svc)
+    assert entries == []
+    assert svc.unfiltered_calls == 0
+
+
+def test_a_service_short_of_its_replicas_is_inspected(monkeypatch):
+    svc = _FakeService(
+        "web",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _RECENT, 1, "")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert [e.name for e in entries] == ["web"]
+    assert svc.unfiltered_calls == 1
+
+
+def test_a_service_whose_task_is_young_is_inspected(monkeypatch):
+    """Full replicas, but it came up minutes ago -- the case worth catching."""
+    svc = _FakeService(
+        "web",
+        desired=1,
+        tasks=[("n1", "running")],
+        task_timestamp=_RECENT,
+        history=[("n1", "failed", _RECENT, 137, "")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert [e.name for e in entries] == ["web"]
+    assert entries[0].severity == "recovered"
+
+
+def test_a_cronjob_is_never_inspected(monkeypatch):
+    svc = _FakeService(
+        "backup",
+        desired=0,
+        tasks=[],
+        raw_labels={"swarm.cronjob.enable": "true", "swarm.cronjob.schedule": "*/15 * * * *"},
+        history=[("n1", "failed", _RECENT, 1, "")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert entries == []
+
+
+def test_a_swarm_job_mode_service_is_never_inspected(monkeypatch):
+    svc = _FakeService(
+        "seed",
+        desired=1,
+        tasks=[],
+        mode={"ReplicatedJob": {"MaxConcurrent": 1}},
+        history=[("n1", "failed", _RECENT, 1, "")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert entries == []
+
+
+def test_a_rolling_update_is_not_a_crash(monkeypatch):
+    """Three cleanly ended tasks are a deploy. Counting them would report every
+    ordinary image bump as a crash."""
+    svc = _FakeService(
+        "web",
+        desired=1,
+        tasks=[("n1", "running")],
+        task_timestamp=_RECENT,
+        history=[
+            ("n1", "shutdown", _RECENT),
+            ("n1", "shutdown", _RECENT),
+            ("n1", "complete", _RECENT),
+        ],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert entries == []
+
+
+def test_a_finished_task_keeps_its_exit_code_and_error(monkeypatch):
+    """What a local container overwrites, the swarm preserves."""
+    svc = _FakeService(
+        "web",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _RECENT, 137, "task: non-zero exit (137)")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert entries[0].fails == 1
+    assert "137" in entries[0].cause
+
+
+def test_only_recent_failures_count(monkeypatch):
+    svc = _FakeService(
+        "web",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _OLD, 1, ""), ("n1", "failed", _RECENT, 1, "")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert entries[0].fails == 1
+
+
+def test_a_count_at_the_retention_limit_is_marked_as_a_floor(monkeypatch):
+    """Swarm keeps only so much history; a twelve-fold crash looks fivefold."""
+    svc = _FakeService(
+        "web",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _RECENT, 1, "") for _ in range(5)],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc, retention=5)
+    assert entries[0].fails == 5
+    assert entries[0].fails_capped is True
+
+
+def test_a_count_below_the_limit_is_not_a_floor(monkeypatch):
+    svc = _FakeService(
+        "web",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _RECENT, 1, "") for _ in range(3)],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc, retention=5)
+    assert entries[0].fails_capped is False
+
+
+def test_an_unreadable_retention_limit_does_not_block_the_block(monkeypatch):
+    svc = _FakeService(
+        "web",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _RECENT, 1, "") for _ in range(5)],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc, retention=None)
+    assert entries[0].fails == 5
+    assert entries[0].fails_capped is False
+
+
+def test_a_service_that_was_never_placed_reports_the_reason(monkeypatch):
+    """No failures at all, but the sentence people open SSH for."""
+    svc = _FakeService(
+        "builder",
+        desired=1,
+        tasks=[(None, "pending")],
+        placement_error="no suitable node (insufficient memory on 3 nodes)",
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert [e.name for e in entries] == ["builder"]
+    assert entries[0].fails is None
+    assert entries[0].uptime_seconds is None
+    assert "no suitable node" in entries[0].cause
+    assert entries[0].severity == "dead"
+
+
+def test_swarm_trouble_carries_the_node_of_the_failed_task(monkeypatch):
+    svc = _FakeService(
+        "web",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _RECENT, 1, "")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, svc)
+    assert entries[0].node == "srv-01"
+
+
+def test_a_healthy_fleet_costs_no_extra_calls_at_all(monkeypatch):
+    """The scale version of the cost argument: one sick service among ten
+    healthy ones must produce exactly one history call, not eleven."""
+    healthy = [
+        _FakeService(f"web-{i}", desired=1, tasks=[("n1", "running")], task_timestamp=_OLD)
+        for i in range(10)
+    ]
+    sick = _FakeService(
+        "broken",
+        desired=2,
+        tasks=[("n1", "running")],
+        task_timestamp=_OLD,
+        history=[("n1", "failed", _RECENT, 1, "")],
+    )
+    entries, _ = _swarm_trouble(monkeypatch, *healthy, sick)
+    assert [e.name for e in entries] == ["broken"]
+    assert sum(s.unfiltered_calls for s in healthy) == 0
+    assert sick.unfiltered_calls == 1
+
+
+def test_the_retention_limit_is_read_once_not_per_service(monkeypatch):
+    """It is a property of the swarm, and asking per service would multiply a
+    constant by the size of the fleet."""
+    monkeypatch.setattr(docker_collector, "_now", lambda: _FIXED_NOW)
+    services = [
+        _FakeService(f"web-{i}", desired=1, tasks=[("n1", "running")], task_timestamp=_OLD)
+        for i in range(10)
+    ]
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], services=services)
+    reads = []
+    original = type(client).swarm.fget
+
+    def counting(self):
+        reads.append(1)
+        return original(self)
+
+    monkeypatch.setattr(type(client), "swarm", property(counting))
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    docker_collector.collect_docker()
+    assert len(reads) == 1

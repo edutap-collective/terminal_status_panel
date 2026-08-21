@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import docker
 
@@ -218,8 +219,27 @@ def _desired_count(service) -> int | None:
         return None  # e.g. global-mode services
 
 
-def _service_tasks(service, id_to_name: dict[str, str]) -> tuple[list[ServiceTask], int]:
-    """Return (per-node tasks, unassigned count) for tasks that should run.
+class _TaskFacts(NamedTuple):
+    """What one filtered task listing yields, beyond the placement itself.
+
+    The last two fields exist so the trouble pre-selection and the
+    "never placed" case are answered from the listing the collector makes
+    anyway, rather than from a second call per service.
+    """
+
+    tasks: list[ServiceTask]
+    unassigned: int
+    #: When the youngest running task last changed state -- close enough to
+    #: "since when is this up". None where nothing is running.
+    newest_running_at: float | None
+    #: Why an unplaced task is unplaced, verbatim from Swarm: "no suitable
+    #: node (insufficient memory on 3 nodes)". This is the sentence people
+    #: open an SSH session to read.
+    placement_error: str | None
+
+
+def _service_tasks(service, id_to_name: dict[str, str]) -> _TaskFacts:
+    """Facts about the tasks that *should* be running.
 
     Mirrors the operations script: filter to desired-state ``running``, split
     into node-assigned tasks (reporting their *actual* state) and orphaned
@@ -228,36 +248,177 @@ def _service_tasks(service, id_to_name: dict[str, str]) -> tuple[list[ServiceTas
     try:
         all_tasks = service.tasks(filters={"desired-state": "running"})
     except Exception:
-        return [], 0
+        return _TaskFacts([], 0, None, None)
     tasks: list[ServiceTask] = []
     unassigned = 0
+    newest_running_at: float | None = None
+    placement_error: str | None = None
     for t in all_tasks:
         node_id = t.get("NodeID")
-        state = t.get("Status", {}).get("State", "unknown")
+        status = t.get("Status", {})
+        state = status.get("State", "unknown")
         if node_id:
             tasks.append(ServiceTask(node=id_to_name.get(node_id, node_id), state=state))
+            if state == "running":
+                at = _parse_timestamp(status.get("Timestamp"))
+                if at is not None and (newest_running_at is None or at > newest_running_at):
+                    newest_running_at = at
         else:
             unassigned += 1
+            if placement_error is None:
+                placement_error = (status.get("Err") or "").strip() or None
     tasks.sort(key=lambda task: task.node or "")
-    return tasks, unassigned
+    return _TaskFacts(tasks, unassigned, newest_running_at, placement_error)
+
+
+#: Task states Swarm uses for an attempt that went wrong. The same set
+#: ``JobRun.failed`` names, and deliberately excluding ``shutdown`` and
+#: ``complete``: a rolling update ends its old tasks cleanly, and counting
+#: those would report every ordinary image bump as a crash.
+_FAILED_TASK_STATES = frozenset({"failed", "rejected", "orphaned"})
+
+
+def _retention_limit(client) -> int | None:
+    """How many historic tasks Swarm keeps per slot, or None if unreadable.
+
+    It bounds every count taken from the history: at the Docker default of 5,
+    a service that fell twelve times is indistinguishable from one that fell
+    five. Knowing the bound is what lets the renderer say ``≥`` instead of
+    quietly understating the worst case. Unreadable is not fatal -- the count
+    is then reported as it stands, which is what was actually seen.
+    """
+    try:
+        orchestration = client.swarm.attrs["Spec"]["Orchestration"]
+        limit = int(orchestration["TaskHistoryRetentionLimit"])
+    except Exception:
+        return None
+    return limit if limit > 0 else None
+
+
+def _task_cause(status: dict) -> str | None:
+    """Why one finished task ended, from what Swarm kept about it."""
+    exit_code = ((status.get("ContainerStatus") or {}).get("ExitCode")) or 0
+    error = (status.get("Err") or "").strip()
+    if exit_code:
+        return f'exit {exit_code} · "{error}"' if error else f"exit {exit_code}"
+    return error or None
+
+
+def _failed_history(service, id_to_name: dict[str, str]) -> tuple[int, str | None, str | None]:
+    """(failures in the window, newest cause, newest node) from the task history.
+
+    The one expensive call in this module, which is why only pre-selected
+    services reach it. It is also the only place a *cause* survives: Swarm
+    keeps each attempt as its own task, where a local container overwrites its
+    exit code the moment it comes back up.
+    """
+    try:
+        tasks = service.tasks()
+    except Exception:
+        return 0, None, None
+    fails = 0
+    newest_at: float | None = None
+    cause: str | None = None
+    node: str | None = None
+    for task in tasks:
+        status = task.get("Status") or {}
+        if status.get("State") not in _FAILED_TASK_STATES:
+            continue
+        at = _parse_timestamp(status.get("Timestamp"))
+        if at is None or _now() - at > _TROUBLE_WINDOW_SECONDS:
+            continue
+        fails += 1
+        if newest_at is None or at > newest_at:
+            newest_at = at
+            cause = _task_cause(status)
+            node_id = task.get("NodeID")
+            node = id_to_name.get(node_id, node_id) if node_id else None
+    return fails, cause, node
+
+
+def _service_trouble(
+    service,
+    name: str,
+    id_to_name: dict[str, str],
+    facts: _TaskFacts,
+    running: int,
+    desired: int | None,
+    retention: int | None,
+) -> TroubleEntry | None:
+    """A trouble entry for one Swarm service, or None when it is fine.
+
+    The pre-selection is the cost argument of this whole feature. A service
+    that meets its replica count and has been up longer than the window is
+    dismissed without the history call, so in steady state -- which is nearly
+    always -- the extra traffic is zero. In an incident the few services that
+    qualify each pay one call, and in exchange the panel says what an SSH
+    session would have said.
+    """
+    short = desired is not None and running < desired
+    recent = (
+        facts.newest_running_at is not None
+        and _now() - facts.newest_running_at <= _TROUBLE_WINDOW_SECONDS
+    )
+    if not short and not recent:
+        return None
+
+    fails, cause, node = _failed_history(service, id_to_name)
+    if not fails:
+        # Nothing fell, so the only thing worth reporting is a service that
+        # never got anywhere -- and then Swarm's own sentence is the report.
+        if facts.placement_error:
+            return TroubleEntry(name=name, cause=facts.placement_error, severity="dead")
+        return None
+
+    up = running > 0
+    return TroubleEntry(
+        name=name,
+        node=node or (facts.tasks[0].node if facts.tasks else None),
+        fails=fails,
+        fails_capped=retention is not None and fails >= retention,
+        uptime_seconds=(
+            max(0.0, _now() - facts.newest_running_at)
+            if up and facts.newest_running_at is not None
+            else None
+        ),
+        cause=cause,
+        severity="recovered" if up else "dead",
+    )
 
 
 def _swarm_services(
     client, critical: set[str], description_label: str, id_to_name: dict[str, str]
-) -> list[ServiceStatus]:
+) -> tuple[list[ServiceStatus], list[TroubleEntry]]:
     services = []
+    trouble: list[TroubleEntry] = []
+    retention = _retention_limit(client)
     for svc in client.services.list():
         labels = _labels(svc)
-        tasks, unassigned = _service_tasks(svc, id_to_name)
+        facts = _service_tasks(svc, id_to_name)
+        tasks, unassigned = facts.tasks, facts.unassigned
         # The second task listing costs an API call, so only job rows pay for
         # it -- for a long-running service the current replicas are the answer
         # and its task history says nothing the panel shows.
         job = _is_job(svc, labels)
+        running = sum(1 for t in tasks if t.running)
+        desired = _desired_count(svc)
+        if not job:
+            # Jobs are excluded before the pre-selection even runs. One that
+            # is meant to start, finish and vanish would qualify on every
+            # scheduled run, and a quarter-hourly job would report dozens of
+            # "failures" for doing precisely its work. Their own rendering
+            # already carries the outcome, beside the schedule that makes it
+            # readable.
+            entry = _service_trouble(
+                svc, svc.name, id_to_name, facts, running, desired, retention
+            )
+            if entry is not None:
+                trouble.append(entry)
         services.append(
             ServiceStatus(
                 name=svc.name,
-                running_replicas=sum(1 for t in tasks if t.running),
-                desired_replicas=_desired_count(svc),
+                running_replicas=running,
+                desired_replicas=desired,
                 critical=svc.name in critical,
                 stack=labels.get(STACK_LABEL),
                 # The configured key wins; the legacy key is the fallback, so a
@@ -279,7 +440,7 @@ def _swarm_services(
                 image=_service_image(svc),
             )
         )
-    return services
+    return services, trouble
 
 
 def _raw_state(container) -> str:
@@ -561,12 +722,16 @@ def collect_docker(
             containers, origins, trouble = _container_services(
                 client, critical_set, description_label, local_node
             )
+            swarm_services, swarm_trouble = _swarm_services(
+                client, critical_set, description_label, id_to_name
+            )
+            trouble = trouble + swarm_trouble
             return SwarmInfo(
                 reachable=True,
                 enabled=True,
                 node_role=role,
                 node_count=swarm.get("Nodes") or (len(nodes) or None),
-                services=_swarm_services(client, critical_set, description_label, id_to_name),
+                services=swarm_services,
                 containers=containers,
                 nodes=nodes,
                 container_services=origins,
