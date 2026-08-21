@@ -117,6 +117,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
             timeout=cfg.docker_timeout,
             critical=cfg.critical_services,
             description_label=cfg.description_label,
+            df_timeout=cfg.docker_df_timeout,
         )
         if docker_section or traefik
         else None

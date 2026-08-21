@@ -88,7 +88,7 @@ def test_docker_section_receives_the_health_data(monkeypatch):
     """The Kafka verdict lives in the health section; the matrix must see it."""
     seen = {}
 
-    def fake(swarm, cfg, health=None):
+    def fake(swarm, cfg, health=None, resources=None):
         seen["health"] = health
         return Text("")
 
@@ -96,6 +96,24 @@ def test_docker_section_receives_the_health_data(monkeypatch):
     health = HealthInfo(clusters_probed=True)
     layout.docker_section(PanelData(swarm=SwarmInfo(reachable=True), health=health), Config())
     assert seen["health"] is health
+
+
+def test_docker_section_receives_the_resource_data(monkeypatch):
+    """The disk line needs the filesystems to tell pressure from housekeeping."""
+    from terminal_status_panel.model import ResourceUsage
+
+    seen = {}
+
+    def fake(swarm, cfg, health=None, resources=None):
+        seen["resources"] = resources
+        return Text("")
+
+    monkeypatch.setattr(layout, "services_section", fake)
+    resources = ResourceUsage()
+    layout.docker_section(
+        PanelData(swarm=SwarmInfo(reachable=True), resources=resources), Config()
+    )
+    assert seen["resources"] is resources
 
 
 def _traefik_data():

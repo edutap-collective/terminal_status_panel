@@ -573,6 +573,65 @@ def filesystem_panel(res: ResourceUsage | None) -> Group:
 # --------------------------------------------------------------------------- #
 
 
+#: Above this, the filesystem holding Docker's data is under real pressure and
+#: reclaimable bytes are worth acting on. Below it the same figures are just
+#: housekeeping, and a warning that glows while a disk is a fifth full becomes
+#: wallpaper -- unread on the day it finally means something.
+_DISK_PRESSURE_PERCENT = 80.0
+
+
+def _disk_style(disk, resources) -> str | None:
+    """"yellow" when Docker's data sits on a filesystem under pressure.
+
+    The colour follows the *disk*, not the size of the reclaimable heap: 28 GB
+    of recoverable images matter on a full volume and matter not at all on an
+    empty one.
+
+    The mount is found by longest match rather than by assuming "/", because a
+    node that gives Docker its own volume is exactly the node where the two
+    filesystems disagree. Without filesystem data no colour is chosen at all --
+    an unmeasured disk is not evidence of comfort, but claiming pressure would
+    be a finding nobody took.
+    """
+    if disk is None or resources is None or not disk.root_dir:
+        return None
+    best = None
+    for fs in resources.filesystems:
+        base = fs.mountpoint.rstrip("/")
+        if disk.root_dir == fs.mountpoint or disk.root_dir.startswith(f"{base}/"):
+            if best is None or len(fs.mountpoint) > len(best.mountpoint):
+                best = fs
+    if best is None or best.percent is None:
+        return None
+    return "yellow" if best.percent > _DISK_PRESSURE_PERCENT else None
+
+
+def _disk_line(disk, resources=None) -> Text:
+    """The one-line Docker footprint, or a stated absence.
+
+    Absence renders rather than disappears. A missing line reads as "nothing to
+    report", and that is the single reading here that would be untrue.
+    """
+    if disk is None:
+        return Text("n/a (timeout)", style="dim")
+    style = _disk_style(disk, resources)
+    line = Text()
+    if disk.node:
+        line.append(disk.node, style="bold")
+        line.append("  ·  ")
+    line.append(f"{format_bytes(disk.used)} used")
+    line.append(f"  ·  ↺ {format_bytes(disk.reclaimable)} reclaimable", style=style or "")
+    line.append(
+        f"  ·  images {format_bytes(disk.images)}"
+        f"  ·  cache {format_bytes(disk.build_cache)}"
+        f"  ·  volumes {format_bytes(disk.volumes)}",
+        style="dim",
+    )
+    if disk.volumes_total:
+        line.append(f"  ·  {disk.volumes_unused}/{disk.volumes_total} unused", style=style or "dim")
+    return line
+
+
 def _node_health(node) -> Text:
     """✅ ready and active · ⚠️ drained/paused or unreachable · 💀 down."""
     if not node.reachable:
@@ -757,7 +816,7 @@ def _node_tunnel_note(node: SwarmNode, peers: list[PeerReachability] | None) -> 
     return Text(f" (wg: {reason})", style="red")
 
 
-def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
+def _swarm_body(swarm: SwarmInfo, peers=None, resources=None) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
     n_stacks = len({s.stack for s in swarm.services if s.stack})
@@ -798,6 +857,7 @@ def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
     quorum = _manager_quorum(swarm.nodes)
     if quorum is not None:
         table.add_row("", quorum)
+    table.add_row("Disk", _disk_line(swarm.disk, resources))
     return table
 
 
@@ -1127,24 +1187,48 @@ def _stack_columns(
     return Group(*parts)
 
 
+def _disk_row(disk, resources) -> Table:
+    """The disk line on its own grid, for the layout that has no SWARM block."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan")
+    grid.add_column()
+    grid.add_row("Disk", _disk_line(disk, resources))
+    return grid
+
+
 def services_section(
-    swarm: SwarmInfo | None, cfg: Config, health: HealthInfo | None = None
+    swarm: SwarmInfo | None,
+    cfg: Config,
+    health: HealthInfo | None = None,
+    resources: ResourceUsage | None = None,
 ) -> Group:
     """The DOCKER INFOS block: Swarm stacks, containers and their verdicts.
 
     *health* is optional: without it the Working cells fall back to Docker's
     own replica measurement rather than claiming a cluster verdict nobody
     took.
+
+    *resources* is optional in the same spirit, and used for one thing only:
+    deciding whether Docker's disk footprint sits on a filesystem under
+    pressure. Without it the figures still render, just uncoloured -- which is
+    what `status-docker` on its own can honestly say.
     """
     if swarm is None or not swarm.reachable:
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
     if not swarm.enabled:
-        return section("DOCKER INFOS", _stack_columns(swarm, cfg, health))
+        # No SWARM block to hang it under, so the line leads the section. The
+        # width pressure that argues for brevity comes from a cluster panel
+        # with dozens of services; a host without a swarm has the room, and an
+        # accumulated Docker is likelier there, not less.
+        return section(
+            "DOCKER INFOS",
+            Group(_disk_row(swarm.disk, resources), Text(""), _stack_columns(swarm, cfg, health)),
+        )
 
     body = Group(
         _subhead("SWARM"),
-        _swarm_body(swarm, health.peers if health else None),
+        _swarm_body(swarm, health.peers if health else None, resources),
         Text(""),
         _stack_columns(swarm, cfg, health),
     )

@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 import docker
 
 from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
-from ..model import JobRun, ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
+from ..model import DockerDiskUsage, JobRun, ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
 from ._labels import (
     COMPOSE_PROJECT_LABEL,
     SWARM_SERVICE_LABEL,
@@ -398,10 +398,64 @@ def _container_services(
     return services, origins
 
 
+#: Categories `/system/df` reports, as (response key, attribute name). A daemon
+#: that reports none of them is too old for this reading, and the collector
+#: then returns None rather than a row of zeroes -- "Docker occupies nothing"
+#: is a claim, and it would be a false one.
+_DF_CATEGORIES = (
+    ("ImageUsage", "images"),
+    ("ContainerUsage", "containers"),
+    ("VolumeUsage", "volumes"),
+    ("BuildCacheUsage", "build_cache"),
+)
+
+
+def _disk_usage(node: str | None, root_dir: str | None, timeout: float) -> DockerDiskUsage | None:
+    """Docker's own disk footprint, or None when it could not be read.
+
+    Deliberately builds its **own** client. `/system/df` was measured at 510 ms
+    against a daemon holding 47 images and 185 volumes, and the cost scales
+    with the number of objects -- so on a busy node it can exceed the socket
+    timeout the rest of this module runs on. That matters more than it looks:
+    `collect_docker` catches every exception and degrades to
+    SwarmInfo(reachable=False), so a slow reading taken on the shared client
+    would erase the entire DOCKER INFOS section -- swarm, stacks, nodes and
+    containers alike -- to report a disk figure. With its own client and its
+    own guard, a failure here costs one line.
+    """
+    try:
+        client = docker.from_env(timeout=timeout)
+        raw = client.df()
+        if not isinstance(raw, dict):
+            return None
+        usage = DockerDiskUsage(node=node, root_dir=root_dir)
+        seen = False
+        for key, attribute in _DF_CATEGORIES:
+            category = raw.get(key)
+            if not isinstance(category, dict):
+                continue
+            seen = True
+            size = int(category.get("TotalSize") or 0)
+            setattr(usage, attribute, size)
+            usage.used += size
+            usage.reclaimable += int(category.get("Reclaimable") or 0)
+        if not seen:
+            return None
+        volumes = raw.get("Volumes") or []
+        usage.volumes_total = len(volumes)
+        usage.volumes_unused = sum(
+            1 for v in volumes if (v.get("UsageData") or {}).get("RefCount", -1) == 0
+        )
+        return usage
+    except Exception:
+        return None
+
+
 def collect_docker(
     timeout: float = 1.5,
     critical: list[str] | None = None,
     description_label: str = DEFAULT_DESCRIPTION_LABEL,
+    df_timeout: float = 4.0,
 ) -> SwarmInfo:
     """Return Swarm and container health; never raises."""
     critical_set = set(critical or [])
@@ -427,6 +481,9 @@ def collect_docker(
                 containers=containers,
                 nodes=nodes,
                 container_services=origins,
+                disk=_disk_usage(
+                    local_node or info.get("Name"), info.get("DockerRootDir"), df_timeout
+                ),
                 # Carried unconditionally, though it is only ever rendered
                 # where `nodes` came back empty: a worker may not list the
                 # swarm, and then this is the only version anyone can state.
@@ -438,6 +495,11 @@ def collect_docker(
             enabled=False,
             containers=containers,
             container_services=origins,
+            disk=_disk_usage(
+                info.get("Name") if isinstance(info, dict) else None,
+                info.get("DockerRootDir") if isinstance(info, dict) else None,
+                df_timeout,
+            ),
         )
     except Exception:
         return SwarmInfo(reachable=False)

@@ -152,6 +152,13 @@ class Config:
 
     width: int = 80
     docker_timeout: float = 1.5
+    #: Its own deadline for `/system/df`, and larger than `docker_timeout` on
+    #: purpose. The reading was measured at 510 ms against a daemon holding 47
+    #: images and 185 volumes, and it grows with the number of objects -- so on
+    #: a busy node it can outlast the timeout every other Docker call runs on.
+    #: It is spent on a separate client, so overrunning it costs one line
+    #: rather than the whole DOCKER INFOS section.
+    docker_df_timeout: float = 4.0
     critical_services: list[str] = field(default_factory=list)
     description_label: str = DEFAULT_DESCRIPTION_LABEL
     #: Whether the DOCKER INFOS rows carry the image they run. It is the one
@@ -333,6 +340,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     return Config(
         width=int(data.get("width", 80)),
         docker_timeout=float(docker.get("timeout", 1.5)),
+        docker_df_timeout=float(docker.get("df_timeout", 4.0)),
         critical_services=_list_setting(services.get("critical"), []),
         description_label=str(docker.get("description_label", DEFAULT_DESCRIPTION_LABEL)),
         show_image=bool(docker.get("show_image", True)),

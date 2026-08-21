@@ -1943,3 +1943,91 @@ def test_the_quorum_line_counts_managers_not_nodes():
     out = _text(panels.services_section(swarm, Config()), width=200)
     assert "2/3 managers reachable" in out
     assert "4/5" not in out
+
+
+# --- docker disk usage -----------------------------------------------------
+
+
+def _disk(node="srv-01", root_dir="/var/lib/docker", **kw):
+    from terminal_status_panel.model import DockerDiskUsage
+
+    defaults = dict(
+        node=node,
+        root_dir=root_dir,
+        used=43 * 2**30,
+        reclaimable=28 * 2**30,
+        images=20 * 2**30,
+        build_cache=12 * 2**30,
+        volumes=2 * 2**30,
+        containers=2**28,
+        volumes_unused=178,
+        volumes_total=185,
+    )
+    defaults.update(kw)
+    return DockerDiskUsage(**defaults)
+
+
+def _disk_swarm(disk):
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
+        nodes=[_mgr("srv-01", leader=True)],
+        disk=disk,
+    )
+
+
+def test_the_disk_line_names_the_node_it_describes():
+    out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
+    line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    assert "srv-01" in line
+
+
+def test_the_disk_line_leads_with_what_can_be_reclaimed():
+    out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
+    line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    assert line.index("reclaimable") < line.index("images")
+    assert "178/185 unused" in line
+
+
+def test_a_missing_disk_reading_says_so_rather_than_vanishing():
+    """A line that disappears reads as 'nothing to report', which would be false."""
+    out = _text(panels.services_section(_disk_swarm(None), Config()), width=200)
+    line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    assert "n/a (timeout)" in line
+
+
+def test_the_disk_line_renders_without_a_swarm():
+    swarm = SwarmInfo(reachable=True, enabled=False, disk=_disk())
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert any(line.strip().startswith("Disk") for line in out.splitlines())
+
+
+def _fs(mountpoint, percent):
+    from terminal_status_panel.model import FilesystemUsage
+
+    return FilesystemUsage(mountpoint=mountpoint, total=100, used=int(percent), percent=percent)
+
+
+def test_disk_colour_follows_real_pressure_not_the_reclaimable_size():
+    from terminal_status_panel.model import ResourceUsage
+
+    roomy = ResourceUsage(filesystems=[_fs("/", 22.0)])
+    assert panels._disk_style(_disk(), roomy) is None
+
+    tight = ResourceUsage(filesystems=[_fs("/", 91.0)])
+    assert panels._disk_style(_disk(), tight) == "yellow"
+
+
+def test_disk_colour_picks_the_mount_that_actually_holds_the_root_dir():
+    """The longest matching mountpoint wins, not the first or the shortest."""
+    from terminal_status_panel.model import ResourceUsage
+
+    res = ResourceUsage(filesystems=[_fs("/", 95.0), _fs("/var/lib/docker", 30.0)])
+    assert panels._disk_style(_disk(root_dir="/var/lib/docker"), res) is None
+
+
+def test_disk_colour_stays_absent_when_nothing_was_measured():
+    """No filesystem data is not evidence of comfort, but it is not a finding either."""
+    assert panels._disk_style(_disk(), None) is None

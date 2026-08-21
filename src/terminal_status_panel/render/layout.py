@@ -60,9 +60,12 @@ def docker_section(data: PanelData, cfg: Config) -> RenderableType:
     """The DOCKER INFOS block.
 
     The health data, when the section ran, supplies the cluster verdicts the
-    replica counts cannot give.
+    replica counts cannot give. The resource data, likewise when it ran, is
+    what lets the disk line tell real pressure from mere housekeeping -- the
+    same arrangement as the origin map in `server_section`, and it degrades
+    the same way: without it the figures render uncoloured.
     """
-    return services_section(data.swarm, cfg, data.health)
+    return services_section(data.swarm, cfg, data.health, data.resources)
 
 
 def health_block(data: PanelData, cfg: Config) -> RenderableType:

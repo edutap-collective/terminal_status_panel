@@ -91,16 +91,24 @@ class _FakeNode:
 
 
 class _FakeClient:
-    def __init__(self, swarm_state, services=None, containers=None, nodes=None):
+    def __init__(self, swarm_state, services=None, containers=None, nodes=None, df=None):
         self._info = {
-            "Swarm": {"LocalNodeState": swarm_state, "ControlAvailable": True, "Nodes": 3}
+            "Swarm": {"LocalNodeState": swarm_state, "ControlAvailable": True, "Nodes": 3},
+            "Name": "srv-01",
+            "DockerRootDir": "/var/lib/docker",
         }
+        self._df = df
         self._services = services or []
         self._containers = containers or []
         self._nodes = nodes or []
 
     def info(self):
         return self._info
+
+    def df(self):
+        if self._df is None:
+            raise Exception("df not available")
+        return self._df
 
     class _Coll:
         def __init__(self, items):
@@ -952,3 +960,72 @@ def test_the_local_engine_version_is_kept_when_nodes_cannot_be_listed(monkeypatc
     result = docker_collector.collect_docker()
     assert result.nodes == []
     assert result.local_engine_version == "28.5.2"
+
+
+# --- docker disk usage -----------------------------------------------------
+
+
+def _df_payload():
+    """A /system/df response shaped like the daemon's, with one unused volume."""
+    return {
+        "LayersSize": 20 * 2**30,
+        "ImageUsage": {"TotalSize": 20 * 2**30, "Reclaimable": 13 * 2**30, "TotalCount": 47},
+        "ContainerUsage": {"TotalSize": 2**28, "Reclaimable": 2**28, "TotalCount": 10},
+        "VolumeUsage": {"TotalSize": 2 * 2**30, "Reclaimable": 2 * 2**30, "TotalCount": 5},
+        "BuildCacheUsage": {"TotalSize": 2**30, "Reclaimable": 2**30, "TotalCount": 3},
+        "Volumes": [
+            {"Name": "a", "UsageData": {"RefCount": 1, "Size": 2**20}},
+            {"Name": "b", "UsageData": {"RefCount": 0, "Size": 2**20}},
+            {"Name": "c", "UsageData": {"RefCount": 0, "Size": 2**20}},
+        ],
+    }
+
+
+def test_disk_usage_totals_and_unused_volumes(monkeypatch):
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=_df_payload())
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    disk = docker_collector.collect_docker().disk
+    assert disk is not None
+    assert disk.images == 20 * 2**30
+    assert disk.reclaimable == (13 + 2 + 1) * 2**30 + 2**28
+    assert disk.used == (20 + 2 + 1) * 2**30 + 2**28
+    assert (disk.volumes_unused, disk.volumes_total) == (2, 3)
+    assert disk.root_dir == "/var/lib/docker"
+
+
+def test_a_failing_df_loses_only_itself(monkeypatch):
+    """The blast radius is the point: everything else must survive."""
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01")],
+        services=[_FakeService("postgres", desired=1, tasks=[("n1", "running")])],
+        df=None,  # raises
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.disk is None
+    assert result.reachable is True and result.enabled is True
+    assert [s.name for s in result.services] == ["postgres"]
+    assert [n.name for n in result.nodes] == ["srv-01"]
+
+
+def test_disk_usage_is_collected_without_a_swarm(monkeypatch):
+    client = _FakeClient("inactive", df=_df_payload())
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.enabled is False
+    assert result.disk is not None
+    assert result.disk.node == "srv-01"
+
+
+def test_the_disk_client_gets_its_own_timeout(monkeypatch):
+    """A df() that overruns must not be bounded by the panel-wide socket timeout."""
+    seen = []
+
+    def _from_env(*a, **k):
+        seen.append(k.get("timeout"))
+        return _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=_df_payload())
+
+    monkeypatch.setattr(docker_collector.docker, "from_env", _from_env)
+    docker_collector.collect_docker(timeout=1.5, df_timeout=4.0)
+    assert 1.5 in seen and 4.0 in seen

@@ -167,6 +167,37 @@ class ServiceStatus:
 
 
 @dataclass
+class DockerDiskUsage:
+    """What Docker itself occupies on this node, from ``/system/df``.
+
+    Knowingly node-local: the endpoint knows only the daemon it is asked, so
+    on a manager these figures describe that manager and nothing else. The
+    node name travels with them so the rendered line cannot be misread as a
+    statement about the cluster.
+
+    ``reclaimable`` is the figure worth leading with. "Docker occupies 43 GB"
+    invites no action; "28 GB of it can be had back" does, and on a node whose
+    disk is filling it is usually the answer.
+    """
+
+    node: str | None = None
+    #: Where the daemon stores its data. Kept so the renderer can find the
+    #: filesystem these bytes actually sit on, rather than assuming "/".
+    root_dir: str | None = None
+    used: int = 0
+    reclaimable: int = 0
+    images: int = 0
+    build_cache: int = 0
+    volumes: int = 0
+    containers: int = 0
+    #: Volumes nothing references any more, and the total. A volume with no
+    #: container still holds its bytes, and nothing else on the panel would
+    #: ever mention it.
+    volumes_unused: int = 0
+    volumes_total: int = 0
+
+
+@dataclass
 class SwarmNode:
     """One node of the Swarm, as its managers describe it."""
 
@@ -231,6 +262,10 @@ class SwarmInfo:
     #: header reads as a statement about the swarm, and on a worker that would
     #: be exactly wrong.
     local_engine_version: str | None = None
+    #: Docker's own disk footprint on this node. ``None`` when the reading
+    #: could not be taken -- which the renderer states, rather than dropping
+    #: the line: a vanished line reads as "nothing to report".
+    disk: DockerDiskUsage | None = None
 
 
 @dataclass
