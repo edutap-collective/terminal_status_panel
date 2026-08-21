@@ -17,7 +17,15 @@ from datetime import UTC, datetime
 import docker
 
 from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
-from ..model import DockerDiskUsage, JobRun, ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
+from ..model import (
+    DockerDiskUsage,
+    JobRun,
+    ServiceStatus,
+    ServiceTask,
+    SwarmInfo,
+    SwarmNode,
+    TroubleEntry,
+)
 from ._labels import (
     COMPOSE_PROJECT_LABEL,
     SWARM_SERVICE_LABEL,
@@ -303,7 +311,76 @@ def _is_completed_job(container) -> bool:
     return state.get("Status") == "exited" and state.get("ExitCode") == 0
 
 
-def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[str, str]]:
+#: How far back a fall still counts. Twelve hours spans a night, so what broke
+#: at 03:00 is still on the panel at the login that follows.
+#:
+#: The window is not decoration, it is half the qualifying rule. `RestartCount`
+#: is cumulative over a container's whole life and is not reset by a manual
+#: start (measured, Docker 29.7.2), so on its own it would pin a stumble from
+#: three months ago to the panel for ever, and the block would never be empty
+#: again. The counter says "it has fallen"; the window says "recently".
+_TROUBLE_WINDOW_SECONDS = 12 * 3600
+
+
+def _container_cause(state: dict) -> str | None:
+    """Why the container fell, where Docker still knows.
+
+    ``None`` for a container that is running again. This is not an oversight
+    but the measured behaviour: once it comes back, ``ExitCode`` reads 0 and
+    ``OOMKilled`` false, and the reason is simply gone. The renderer shows a
+    dash there. Swarm, whose finished tasks each keep their own exit code,
+    answers this better -- see the task history.
+    """
+    if state.get("Status") == "running":
+        return None
+    exit_code = state.get("ExitCode")
+    if state.get("OOMKilled"):
+        return f"OOMKilled · exit {exit_code}"
+    if not exit_code:
+        return None
+    cause = f"exit {exit_code}"
+    # Presence, not truthiness: Docker leaves `Error` as an empty string far
+    # more often than it fills it -- it was empty even for a confirmed OOM
+    # kill -- and appending it blindly would produce a trailing `· ""`.
+    error = (state.get("Error") or "").strip()
+    return f'{cause} · "{error}"' if error else cause
+
+
+def _container_trouble(container, name: str) -> TroubleEntry | None:
+    """A trouble entry for one local container, or None when it is fine.
+
+    Two conditions, and both are needed -- see ``_TROUBLE_WINDOW_SECONDS``.
+    """
+    attrs = getattr(container, "attrs", {}) or {}
+    restarts = attrs.get("RestartCount") or 0
+    if restarts <= 0:
+        return None
+    state = attrs.get("State") or {}
+    started = _parse_timestamp(state.get("StartedAt"))
+    if started is None:
+        return None
+    age = _now() - started
+    if age > _TROUBLE_WINDOW_SECONDS:
+        return None
+    status = state.get("Status")
+    if status == "running":
+        severity, uptime = "recovered", max(0.0, age)
+    elif status == "restarting":
+        severity, uptime = "restarting", None
+    else:
+        severity, uptime = "dead", None
+    return TroubleEntry(
+        name=name,
+        fails=restarts,
+        uptime_seconds=uptime,
+        cause=_container_cause(state),
+        severity=severity,
+    )
+
+
+def _container_groups(
+    client,
+) -> tuple[dict[tuple[str | None, str], list], dict[str, str], list[TroubleEntry]]:
     """Groups of non-Swarm containers, and every container's id → service name.
 
     The map is built here rather than in a pass of its own because
@@ -315,6 +392,7 @@ def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[
     """
     groups: dict[tuple[str | None, str], list] = {}
     origins: dict[str, str] = {}
+    trouble: list[TroubleEntry] = []
     for container in client.containers.list(all=True):
         labels = container_labels(container)
         swarm_service = labels.get(SWARM_SERVICE_LABEL)
@@ -343,7 +421,14 @@ def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[
         key = (project, compose_identity(labels, container.name))
         origins[container.id] = f"{key[0]}_{key[1]}" if key[0] else key[1]
         groups.setdefault(key, []).append((container, labels))
-    return groups, origins
+        # Deliberately after every `continue` above, so the exclusions already
+        # decided there hold here too: a Swarm task is counted from the manager
+        # API instead, and a job that exited cleanly finished its work rather
+        # than falling over.
+        entry = _container_trouble(container, origins[container.id])
+        if entry is not None:
+            trouble.append(entry)
+    return groups, origins, trouble
 
 
 def _group_image(members) -> str | None:
@@ -362,9 +447,13 @@ def _group_image(members) -> str | None:
 
 def _container_services(
     client, critical: set[str], description_label: str, node_name: str | None
-) -> tuple[list[ServiceStatus], dict[str, str]]:
-    """Plain and Compose containers as ServiceStatus entries, and the id map."""
-    groups, origins = _container_groups(client)
+) -> tuple[list[ServiceStatus], dict[str, str], list[TroubleEntry]]:
+    """Plain and Compose containers as ServiceStatus entries, the id map, trouble."""
+    groups, origins, trouble = _container_groups(client)
+    for entry in trouble:
+        # Only known here: these are by definition the containers of this host,
+        # and this is the layer that knows which node that is.
+        entry.node = node_name
     services: list[ServiceStatus] = []
     for (stack, name), members in groups.items():
         states = [_reported_state(container) for container, _ in members]
@@ -395,7 +484,7 @@ def _container_services(
             )
         )
     services.sort(key=lambda svc: (svc.stack or "", svc.name))
-    return services, origins
+    return services, origins, trouble
 
 
 #: Categories `/system/df` reports, as (response key, attribute name). A daemon
@@ -469,7 +558,7 @@ def collect_docker(
             role = "manager" if swarm.get("ControlAvailable") else "worker"
             nodes, id_to_name = _node_map(client)
             local_node = id_to_name.get(swarm.get("NodeID") or "")
-            containers, origins = _container_services(
+            containers, origins, trouble = _container_services(
                 client, critical_set, description_label, local_node
             )
             return SwarmInfo(
@@ -484,12 +573,15 @@ def collect_docker(
                 disk=_disk_usage(
                     local_node or info.get("Name"), info.get("DockerRootDir"), df_timeout
                 ),
+                trouble=trouble,
                 # Carried unconditionally, though it is only ever rendered
                 # where `nodes` came back empty: a worker may not list the
                 # swarm, and then this is the only version anyone can state.
                 local_engine_version=info.get("ServerVersion") if isinstance(info, dict) else None,
             )
-        containers, origins = _container_services(client, critical_set, description_label, None)
+        containers, origins, trouble = _container_services(
+            client, critical_set, description_label, None
+        )
         return SwarmInfo(
             reachable=True,
             enabled=False,
@@ -500,6 +592,7 @@ def collect_docker(
                 info.get("DockerRootDir") if isinstance(info, dict) else None,
                 df_timeout,
             ),
+            trouble=trouble,
         )
     except Exception:
         return SwarmInfo(reachable=False)

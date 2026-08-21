@@ -334,16 +334,28 @@ class _FakeContainer:
         health=None,
         container_id=None,
         image=None,
+        restart_count=0,
+        started_at=None,
+        oom_killed=False,
+        error="",
     ):
         self.name = name
         self.id = container_id or f"id-{name}"
         self.status = state
-        container_state = {"Status": state, "ExitCode": exit_code}
+        container_state = {
+            "Status": state,
+            "ExitCode": exit_code,
+            "OOMKilled": oom_killed,
+            "Error": error,
+        }
+        if started_at is not None:
+            container_state["StartedAt"] = started_at
         if health is not None:
             container_state["Health"] = {"Status": health}
         self.attrs = {
             "State": container_state,
             "Config": {"Labels": dict(labels or {})},
+            "RestartCount": restart_count,
         }
         if image is not None:
             self.attrs["Config"]["Image"] = image
@@ -1029,3 +1041,145 @@ def test_the_disk_client_gets_its_own_timeout(monkeypatch):
     monkeypatch.setattr(docker_collector.docker, "from_env", _from_env)
     docker_collector.collect_docker(timeout=1.5, df_timeout=4.0)
     assert 1.5 in seen and 4.0 in seen
+
+
+# --- trouble: local containers ---------------------------------------------
+
+_RECENT = "2026-08-22T09:00:00.000000000Z"
+_OLD = "2026-08-20T09:00:00.000000000Z"
+#: 2026-08-22 09:05 UTC -- five minutes after _RECENT, two days after _OLD.
+_FIXED_NOW = 1787389500.0
+
+
+def _trouble(monkeypatch, *containers):
+    monkeypatch.setattr(docker_collector, "_now", lambda: _FIXED_NOW)
+    client = _FakeClient("inactive", containers=list(containers))
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    return docker_collector.collect_docker().trouble
+
+
+def test_an_old_restart_is_not_trouble(monkeypatch):
+    """RestartCount is cumulative and never reset, so on its own it would pin
+    a stumble from months ago to the panel for good."""
+    entries = _trouble(
+        monkeypatch,
+        _compose("mystack", "worker", restart_count=5, started_at=_OLD),
+    )
+    assert entries == []
+
+
+def test_a_recent_restart_is_trouble(monkeypatch):
+    entries = _trouble(
+        monkeypatch,
+        _compose("mystack", "worker", restart_count=5, started_at=_RECENT),
+    )
+    assert [e.name for e in entries] == ["mystack_worker"]
+    assert entries[0].fails == 5
+
+
+def test_a_container_that_never_restarted_is_not_trouble(monkeypatch):
+    entries = _trouble(
+        monkeypatch,
+        _compose("mystack", "worker", restart_count=0, started_at=_RECENT),
+    )
+    assert entries == []
+
+
+def test_an_oom_kill_is_named_as_one(monkeypatch):
+    entries = _trouble(
+        monkeypatch,
+        _compose(
+            "mystack",
+            "model",
+            state="exited",
+            exit_code=137,
+            oom_killed=True,
+            restart_count=3,
+            started_at=_RECENT,
+        ),
+    )
+    assert entries[0].cause == "OOMKilled · exit 137"
+    assert entries[0].severity == "dead"
+    assert entries[0].uptime_seconds is None
+
+
+def test_a_running_container_cannot_say_why_it_fell(monkeypatch):
+    """Measured against Docker 29.7.2: a container that failed and came back
+    reports ExitCode 0 and OOMKilled false. The cause is gone, and the panel
+    must say so rather than invent one."""
+    entries = _trouble(
+        monkeypatch,
+        _compose("mystack", "worker", state="running", restart_count=2, started_at=_RECENT),
+    )
+    assert entries[0].cause is None
+    assert entries[0].severity == "recovered"
+    assert entries[0].uptime_seconds == 300.0
+
+
+def test_an_empty_error_string_does_not_become_an_empty_cause(monkeypatch):
+    entries = _trouble(
+        monkeypatch,
+        _compose(
+            "mystack", "worker", state="exited", exit_code=1, error="", restart_count=1,
+            started_at=_RECENT,
+        ),
+    )
+    assert entries[0].cause == "exit 1"
+
+
+def test_an_error_string_is_appended_when_docker_gives_one(monkeypatch):
+    entries = _trouble(
+        monkeypatch,
+        _compose(
+            "mystack", "web", state="exited", exit_code=1,
+            error="bind: address already in use", restart_count=1, started_at=_RECENT,
+        ),
+    )
+    assert entries[0].cause == 'exit 1 · "bind: address already in use"'
+
+
+def test_a_restarting_container_ranks_between_dead_and_recovered(monkeypatch):
+    entries = _trouble(
+        monkeypatch,
+        _compose("mystack", "flapper", state="restarting", exit_code=1, restart_count=4,
+                 started_at=_RECENT),
+    )
+    assert entries[0].severity == "restarting"
+
+
+def test_a_cleanly_finished_job_container_is_not_trouble(monkeypatch):
+    """Exit 0 is work done, not a fall -- and it is skipped before it is even
+    grouped, so a restart count on it must not resurrect it."""
+    entries = _trouble(
+        monkeypatch,
+        _compose("mystack", "migrate", state="exited", exit_code=0, restart_count=2,
+                 started_at=_RECENT),
+    )
+    assert entries == []
+
+
+def test_a_swarm_container_is_left_to_the_task_history(monkeypatch):
+    """Its restarts are new tasks, counted from the manager API, not here."""
+    entries = _trouble(
+        monkeypatch,
+        _FakeContainer(
+            "mystack_worker.1.abc",
+            labels={"com.docker.swarm.service.name": "mystack_worker"},
+            restart_count=3,
+            started_at=_RECENT,
+        ),
+    )
+    assert entries == []
+
+
+def test_trouble_entries_carry_the_local_node(monkeypatch):
+    monkeypatch.setattr(docker_collector, "_now", lambda: _FIXED_NOW)
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01")],
+        containers=[_compose("mystack", "worker", restart_count=1, started_at=_RECENT)],
+    )
+    client._info["Swarm"]["NodeID"] = "n1"
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    entries = docker_collector.collect_docker().trouble
+    assert [e.node for e in entries] == ["srv-01"]

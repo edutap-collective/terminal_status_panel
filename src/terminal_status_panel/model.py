@@ -166,6 +166,52 @@ class ServiceStatus:
     image: str | None = None
 
 
+#: Severities a TroubleEntry can carry, worst first. The order is the render
+#: order: what is down outranks what is still thrashing, which outranks what
+#: has already caught itself. A service standing right now is the least urgent
+#: of the three and must not push a dead one off a capped list.
+TROUBLE_SEVERITIES: tuple[str, ...] = ("dead", "restarting", "recovered")
+
+
+@dataclass
+class TroubleEntry:
+    """One service that fell, or never got up, within the reporting window.
+
+    Built from two sources that can answer differently. A local container
+    inspect gives a restart count but loses the *cause* the moment the
+    container comes back -- measured against Docker 29.7.2, a container that
+    failed and recovered reports ``ExitCode 0`` and ``OOMKilled false``. Swarm
+    keeps each attempt as its own task, so there the cause survives but the
+    count is capped by the history Swarm retains. The renderer keeps that
+    difference visible instead of smoothing it over.
+    """
+
+    name: str
+    node: str | None = None
+    #: How often it fell. ``None`` means no counter applies -- a service that
+    #: was never placed anywhere has not fallen, it never started.
+    fails: int | None = None
+    #: Whether *fails* hit Swarm's task history limit and is a floor rather
+    #: than a count. Rendered as ``≥``: understating a twelve-fold crash as
+    #: fivefold would soften exactly the worst case.
+    fails_capped: bool = False
+    #: How long the current run has lasted. ``None`` when nothing is running.
+    uptime_seconds: float | None = None
+    #: Why it fell, where that is still knowable. ``None`` renders as a dash --
+    #: Docker overwrote it, and inventing a plausible reason would be worse
+    #: than admitting the gap.
+    cause: str | None = None
+    severity: str = "dead"
+
+    @property
+    def rank(self) -> int:
+        """Sort key: lower is worse."""
+        try:
+            return TROUBLE_SEVERITIES.index(self.severity)
+        except ValueError:
+            return len(TROUBLE_SEVERITIES)
+
+
 @dataclass
 class DockerDiskUsage:
     """What Docker itself occupies on this node, from ``/system/df``.
@@ -266,6 +312,10 @@ class SwarmInfo:
     #: could not be taken -- which the renderer states, rather than dropping
     #: the line: a vanished line reads as "nothing to report".
     disk: DockerDiskUsage | None = None
+    #: Services that fell, or never started, inside the reporting window.
+    #: Empty is the normal state, and the renderer omits the whole block then
+    #: rather than printing an empty heading.
+    trouble: list[TroubleEntry] = field(default_factory=list)
 
 
 @dataclass
