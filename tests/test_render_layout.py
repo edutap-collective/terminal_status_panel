@@ -110,9 +110,7 @@ def test_docker_section_receives_the_resource_data(monkeypatch):
 
     monkeypatch.setattr(layout, "services_section", fake)
     resources = ResourceUsage()
-    layout.docker_section(
-        PanelData(swarm=SwarmInfo(reachable=True), resources=resources), Config()
-    )
+    layout.docker_section(PanelData(swarm=SwarmInfo(reachable=True), resources=resources), Config())
     assert seen["resources"] is resources
 
 

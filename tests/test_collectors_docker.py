@@ -1195,7 +1195,12 @@ def test_an_empty_error_string_does_not_become_an_empty_cause(monkeypatch):
     entries = _trouble(
         monkeypatch,
         _compose(
-            "mystack", "worker", state="exited", exit_code=1, error="", restart_count=1,
+            "mystack",
+            "worker",
+            state="exited",
+            exit_code=1,
+            error="",
+            restart_count=1,
             started_at=_RECENT,
         ),
     )
@@ -1206,8 +1211,13 @@ def test_an_error_string_is_appended_when_docker_gives_one(monkeypatch):
     entries = _trouble(
         monkeypatch,
         _compose(
-            "mystack", "web", state="exited", exit_code=1,
-            error="bind: address already in use", restart_count=1, started_at=_RECENT,
+            "mystack",
+            "web",
+            state="exited",
+            exit_code=1,
+            error="bind: address already in use",
+            restart_count=1,
+            started_at=_RECENT,
         ),
     )
     assert entries[0].cause == 'exit 1 · "bind: address already in use"'
@@ -1216,8 +1226,14 @@ def test_an_error_string_is_appended_when_docker_gives_one(monkeypatch):
 def test_a_restarting_container_ranks_between_dead_and_recovered(monkeypatch):
     entries = _trouble(
         monkeypatch,
-        _compose("mystack", "flapper", state="restarting", exit_code=1, restart_count=4,
-                 started_at=_RECENT),
+        _compose(
+            "mystack",
+            "flapper",
+            state="restarting",
+            exit_code=1,
+            restart_count=4,
+            started_at=_RECENT,
+        ),
     )
     assert entries[0].severity == "restarting"
 
@@ -1227,8 +1243,9 @@ def test_a_cleanly_finished_job_container_is_not_trouble(monkeypatch):
     grouped, so a restart count on it must not resurrect it."""
     entries = _trouble(
         monkeypatch,
-        _compose("mystack", "migrate", state="exited", exit_code=0, restart_count=2,
-                 started_at=_RECENT),
+        _compose(
+            "mystack", "migrate", state="exited", exit_code=0, restart_count=2, started_at=_RECENT
+        ),
     )
     assert entries == []
 
@@ -1497,8 +1514,9 @@ def _services(monkeypatch, *services):
 def test_the_group_label_is_read_from_service_labels(monkeypatch):
     by_name = _services(
         monkeypatch,
-        _FakeService("web", desired=1, tasks=[("n1", "running")],
-                     raw_labels={"status.group": "frontend"}),
+        _FakeService(
+            "web", desired=1, tasks=[("n1", "running")], raw_labels={"status.group": "frontend"}
+        ),
     )
     assert by_name["web"].group == "frontend"
 
@@ -1506,17 +1524,19 @@ def test_the_group_label_is_read_from_service_labels(monkeypatch):
 def test_the_group_label_is_read_from_the_container_spec(monkeypatch):
     by_name = _services(
         monkeypatch,
-        _FakeService("web", desired=1, tasks=[("n1", "running")],
-                     container_labels={"status.group": "frontend"}),
+        _FakeService(
+            "web",
+            desired=1,
+            tasks=[("n1", "running")],
+            container_labels={"status.group": "frontend"},
+        ),
     )
     assert by_name["web"].group == "frontend"
 
 
 def test_an_absent_group_label_is_none_not_empty(monkeypatch):
     """None means 'not stated'; '' means 'stated as nothing'. They differ."""
-    by_name = _services(
-        monkeypatch, _FakeService("web", desired=1, tasks=[("n1", "running")])
-    )
+    by_name = _services(monkeypatch, _FakeService("web", desired=1, tasks=[("n1", "running")]))
     assert by_name["web"].group is None
 
 
@@ -1531,16 +1551,15 @@ def test_an_explicitly_empty_group_label_is_kept_as_empty(monkeypatch):
 def test_a_placement_constraint_marks_the_service_as_pinned(monkeypatch):
     by_name = _services(
         monkeypatch,
-        _FakeService("web", desired=1, tasks=[("n1", "running")],
-                     constraints=["node.hostname == srv-01"]),
+        _FakeService(
+            "web", desired=1, tasks=[("n1", "running")], constraints=["node.hostname == srv-01"]
+        ),
     )
     assert by_name["web"].pinned is True
 
 
 def test_a_service_without_constraints_is_not_pinned(monkeypatch):
-    by_name = _services(
-        monkeypatch, _FakeService("web", desired=1, tasks=[("n1", "running")])
-    )
+    by_name = _services(monkeypatch, _FakeService("web", desired=1, tasks=[("n1", "running")]))
     assert by_name["web"].pinned is False
 
 
@@ -1557,8 +1576,12 @@ def test_the_group_label_key_is_configurable(monkeypatch):
         "active",
         nodes=[_FakeNode("n1", "srv-01")],
         services=[
-            _FakeService("web", desired=1, tasks=[("n1", "running")],
-                         raw_labels={"example.group": "frontend"})
+            _FakeService(
+                "web",
+                desired=1,
+                tasks=[("n1", "running")],
+                raw_labels={"example.group": "frontend"},
+            )
         ],
     )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
@@ -1617,9 +1640,7 @@ def test_no_limit_is_reported_as_such_not_as_the_host_ram(monkeypatch):
 
 
 def test_a_set_limit_is_reported(monkeypatch):
-    by_name = _mem(
-        monkeypatch, _compose("mystack", "db", memory=10 * _MB, mem_limit=256 * _MB)
-    )
+    by_name = _mem(monkeypatch, _compose("mystack", "db", memory=10 * _MB, mem_limit=256 * _MB))
     assert by_name["db"].memory_limit == 256 * _MB
 
 

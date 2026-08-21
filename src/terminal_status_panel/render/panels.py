@@ -582,7 +582,7 @@ _DISK_PRESSURE_PERCENT = 80.0
 
 
 def _disk_style(disk, resources) -> str | None:
-    """"yellow" when Docker's data sits on a filesystem under pressure.
+    """Yellow where Docker's data sits on a filesystem under pressure.
 
     The colour follows the *disk*, not the size of the reclaimable heap: 28 GB
     of recoverable images matter on a full volume and matter not at all on an
@@ -1096,7 +1096,6 @@ def _with_pin(cell: Text, services) -> Text:
     if len(services) < 2 or not all(getattr(s, "pinned", False) for s in services):
         return cell
     return cell + Text(f" {_PINNED}")
-
 
 
 def _group_desc(services) -> str:

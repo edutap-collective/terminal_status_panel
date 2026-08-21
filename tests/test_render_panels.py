@@ -2079,8 +2079,10 @@ def test_entries_are_ordered_worst_first():
     out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
     keys = ("dead", "flapping", "recovered")
     order = [line for line in out.splitlines() if any(k in line for k in keys)]
-    positions = [next(i for i, line in enumerate(order) if name in line)
-                 for name in ("mystack_dead", "mystack_flapping", "mystack_recovered")]
+    positions = [
+        next(i for i, line in enumerate(order) if name in line)
+        for name in ("mystack_dead", "mystack_flapping", "mystack_recovered")
+    ]
     assert positions == sorted(positions)
 
 
@@ -2259,9 +2261,7 @@ _MiB = 2**20
 
 
 def _mem_svc(name, stack="mystack", **kw):
-    return ServiceStatus(
-        name, 1, 1, stack=stack, tasks=[ServiceTask("srv-01", "running")], **kw
-    )
+    return ServiceStatus(name, 1, 1, stack=stack, tasks=[ServiceTask("srv-01", "running")], **kw)
 
 
 def _mem_out(services, width=200):

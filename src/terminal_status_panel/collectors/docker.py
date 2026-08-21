@@ -428,9 +428,7 @@ def _swarm_services(
             # "failures" for doing precisely its work. Their own rendering
             # already carries the outcome, beside the schedule that makes it
             # readable.
-            entry = _service_trouble(
-                svc, svc.name, id_to_name, facts, running, desired, retention
-            )
+            entry = _service_trouble(svc, svc.name, id_to_name, facts, running, desired, retention)
             if entry is not None:
                 trouble.append(entry)
         services.append(
