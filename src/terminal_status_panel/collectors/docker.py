@@ -19,6 +19,7 @@ import docker
 
 from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
 from ..model import (
+    TROUBLE_WINDOW_SECONDS,
     DockerDiskUsage,
     JobRun,
     ServiceStatus,
@@ -472,15 +473,14 @@ def _is_completed_job(container) -> bool:
     return state.get("Status") == "exited" and state.get("ExitCode") == 0
 
 
-#: How far back a fall still counts. Twelve hours spans a night, so what broke
-#: at 03:00 is still on the panel at the login that follows.
-#:
 #: The window is not decoration, it is half the qualifying rule. `RestartCount`
 #: is cumulative over a container's whole life and is not reset by a manual
 #: start (measured, Docker 29.7.2), so on its own it would pin a stumble from
 #: three months ago to the panel for ever, and the block would never be empty
 #: again. The counter says "it has fallen"; the window says "recently".
-_TROUBLE_WINDOW_SECONDS = 12 * 3600
+#:
+#: Defined in model.py because the renderer names it in the heading.
+_TROUBLE_WINDOW_SECONDS = TROUBLE_WINDOW_SECONDS
 
 
 def _container_cause(state: dict) -> str | None:

@@ -22,6 +22,7 @@ from rich.text import Text
 from ..collectors.clusters import kind_for_service
 from ..config import Config, Thresholds
 from ..model import (
+    TROUBLE_WINDOW_SECONDS,
     ClusterService,
     HealthInfo,
     PeerReachability,
@@ -632,6 +633,99 @@ def _disk_line(disk, resources=None) -> Text:
     return line
 
 
+#: How many trouble rows the block ever renders. A node reboot brings every
+#: service on it in at once, and this panel has a hard height limit -- twenty
+#: rows here would push the stack tables, the point of the section, off the
+#: screen. What is dropped is always named: a silent cap would claim ten
+#: services are troubled where twenty are, and that is the reading a status
+#: panel may least afford.
+_TROUBLE_MAX_ROWS = 10
+
+
+def _fmt_short_age(seconds: float | None) -> str:
+    """An age that keeps its seconds while they still matter.
+
+    Neither existing formatter fits. ``_fmt_age`` is coarse by design and
+    renders 47 seconds as "0m", which reads as "standing still" -- the exact
+    opposite of what a service that came up forty-seven seconds ago is doing.
+    ``_fmt_uptime`` spells out days and hours for a machine that has been up
+    for weeks. Here the interesting range is the small one: a service back up
+    seconds ago is flapping, and that is the finding.
+    """
+    if seconds is None:
+        return "—"
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        return f"{total // 60}m"
+    if total < 86400:
+        return f"{total // 3600}h"
+    return f"{total // 86400}d"
+
+
+def _trouble_table(entries) -> Table:
+    """The rows themselves, worst first and capped."""
+    ordered = sorted(entries, key=lambda e: (e.rank, e.name))
+    shown = ordered[:_TROUBLE_MAX_ROWS]
+
+    table = Table.grid(padding=(0, 2))
+    table.add_column()  # symbol
+    table.add_column()  # name
+    table.add_column()  # node
+    table.add_column(justify="right")  # fails
+    table.add_column(justify="right")  # uptime
+    table.add_column()  # cause
+    table.add_row(
+        Text(""),
+        Text("SERVICE", style="dim"),
+        Text("NODE", style="dim"),
+        Text("FAILS", style="dim"),
+        Text("UP", style="dim"),
+        Text("CAUSE", style="dim"),
+    )
+    for entry in shown:
+        dead = entry.severity == "dead"
+        if entry.fails is None:
+            # No counter applies: it never started, so it never fell. A "0"
+            # here would be a measurement of something that did not happen.
+            fails = Text("—", style="dim")
+        else:
+            prefix = "≥" if entry.fails_capped else ""
+            fails = Text(f"↻ {prefix}{entry.fails}×")
+        table.add_row(
+            Text(_DEAD if dead else _WARN),
+            Text(entry.name, style="bold"),
+            Text(entry.node or "—", style="dim"),
+            fails,
+            Text(_fmt_short_age(entry.uptime_seconds), style="dim"),
+            Text(entry.cause or "—", style="red" if dead else "yellow"),
+        )
+    if len(ordered) > len(shown):
+        table.add_row(
+            Text(""),
+            Text(f"… and {len(ordered) - len(shown)} more", style="dim"),
+            Text(""),
+            Text(""),
+            Text(""),
+            Text(""),
+        )
+    return table
+
+
+def _trouble_block(entries) -> RenderableType | None:
+    """The TROUBLE block, or None when there is nothing to report.
+
+    Nothing is the normal state, and it renders as nothing at all -- not as an
+    empty heading. A block that is present every day stops being read on the
+    day it has something to say.
+    """
+    if not entries:
+        return None
+    hours = TROUBLE_WINDOW_SECONDS // 3600
+    return Group(_subhead(f"TROUBLE  (last {hours} h)"), _trouble_table(entries))
+
+
 def _node_health(node) -> Text:
     """✅ ready and active · ⚠️ drained/paused or unreachable · 💀 down."""
     if not node.reachable:
@@ -1221,15 +1315,25 @@ def services_section(
         # width pressure that argues for brevity comes from a cluster panel
         # with dozens of services; a host without a swarm has the room, and an
         # accumulated Docker is likelier there, not less.
-        return section(
-            "DOCKER INFOS",
-            Group(_disk_row(swarm.disk, resources), Text(""), _stack_columns(swarm, cfg, health)),
-        )
+        plain: list[RenderableType] = [_disk_row(swarm.disk, resources), Text("")]
+        trouble = _trouble_block(swarm.trouble)
+        if trouble is not None:
+            plain += [trouble, Text("")]
+        plain.append(_stack_columns(swarm, cfg, health))
+        return section("DOCKER INFOS", Group(*plain))
 
-    body = Group(
+    parts: list[RenderableType] = [
         _subhead("SWARM"),
         _swarm_body(swarm, health.peers if health else None, resources),
         Text(""),
-        _stack_columns(swarm, cfg, health),
-    )
-    return section("DOCKER INFOS", body)
+    ]
+    # Between the header and the stacks, and only when it has something to
+    # say. Appended below sixty stack rows it would be read by nobody who was
+    # not already scrolling; here it stands where the warning it explains was
+    # raised, and in the normal case it displaces nothing because it does not
+    # exist.
+    trouble = _trouble_block(swarm.trouble)
+    if trouble is not None:
+        parts += [trouble, Text("")]
+    parts.append(_stack_columns(swarm, cfg, health))
+    return section("DOCKER INFOS", Group(*parts))

@@ -2031,3 +2031,115 @@ def test_disk_colour_picks_the_mount_that_actually_holds_the_root_dir():
 def test_disk_colour_stays_absent_when_nothing_was_measured():
     """No filesystem data is not evidence of comfort, but it is not a finding either."""
     assert panels._disk_style(_disk(), None) is None
+
+
+# --- the TROUBLE block -----------------------------------------------------
+
+
+def _entry(name, severity="dead", **kw):
+    from terminal_status_panel.model import TroubleEntry
+
+    return TroubleEntry(name=name, severity=severity, **kw)
+
+
+def _trouble_swarm(entries):
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
+        nodes=[_mgr("srv-01", leader=True)],
+        trouble=list(entries),
+    )
+
+
+def test_no_trouble_means_no_block_at_all():
+    """The normal state. An empty heading would be noise on every login."""
+    out = _text(panels.services_section(_trouble_swarm([]), Config()), width=200)
+    assert "TROUBLE" not in out
+
+
+def test_the_block_sits_between_the_swarm_header_and_the_stacks():
+    swarm = _trouble_swarm([_entry("mystack_worker", fails=2)])
+    swarm.services = [ServiceStatus("mystack_worker", 0, 1, stack="mystack")]
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    lines = out.splitlines()
+    nodes_at = next(i for i, line in enumerate(lines) if line.strip().startswith("Nodes"))
+    trouble_at = next(i for i, line in enumerate(lines) if "TROUBLE" in line)
+    stacks_at = next(i for i, line in enumerate(lines) if "SWARM STACKS" in line)
+    assert nodes_at < trouble_at < stacks_at
+
+
+def test_entries_are_ordered_worst_first():
+    entries = [
+        _entry("mystack_recovered", severity="recovered", fails=1, uptime_seconds=47.0),
+        _entry("mystack_dead", severity="dead", fails=3),
+        _entry("mystack_flapping", severity="restarting", fails=2),
+    ]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    keys = ("dead", "flapping", "recovered")
+    order = [line for line in out.splitlines() if any(k in line for k in keys)]
+    positions = [next(i for i, line in enumerate(order) if name in line)
+                 for name in ("mystack_dead", "mystack_flapping", "mystack_recovered")]
+    assert positions == sorted(positions)
+
+
+def test_eleven_entries_render_ten_and_say_how_many_were_dropped():
+    """A silent cap would claim four services are troubled where fourteen are."""
+    entries = [_entry(f"mystack_svc{i:02d}", fails=1) for i in range(11)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert sum(1 for line in out.splitlines() if "mystack_svc" in line) == 10
+    assert "and 1 more" in out
+
+
+def test_ten_entries_need_no_closing_line():
+    entries = [_entry(f"mystack_svc{i:02d}", fails=1) for i in range(10)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "more" not in out
+
+
+def test_a_capped_count_is_rendered_as_a_floor():
+    entries = [_entry("mystack_worker", fails=5, fails_capped=True)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "≥5" in out
+
+
+def test_an_uncapped_count_is_not_rendered_as_a_floor():
+    entries = [_entry("mystack_worker", fails=5, fails_capped=False)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "≥" not in out
+
+
+def test_an_unknown_cause_renders_as_a_dash_not_as_blank():
+    entries = [_entry("mystack_worker", severity="recovered", fails=2, uptime_seconds=47.0)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    line = next(line for line in out.splitlines() if "mystack_worker" in line)
+    assert "—" in line
+
+
+def test_a_service_that_never_started_shows_neither_count_nor_uptime():
+    entries = [_entry("mystack_builder", cause="no suitable node (insufficient memory)")]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    line = next(line for line in out.splitlines() if "mystack_builder" in line)
+    assert "no suitable node" in line
+    assert "↻" not in line
+
+
+def test_a_fresh_uptime_is_reported_in_seconds():
+    """'up 0m' would read as standing still; the seconds are the whole point."""
+    entries = [_entry("mystack_worker", severity="recovered", fails=2, uptime_seconds=47.0)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "47s" in out
+
+
+def test_names_keep_their_underscores_in_full():
+    entries = [_entry("mystack_wallet_apple_vas_account_binding", fails=1)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "mystack_wallet_apple_vas_account_binding" in out
+
+
+def test_the_block_survives_a_narrow_terminal():
+    entries = [_entry("mystack_worker", fails=2, cause="exit 137", node="srv-01")]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=80)
+    assert "TROUBLE" in out
+    assert "mystack_worker" in out

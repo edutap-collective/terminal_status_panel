@@ -166,6 +166,15 @@ class ServiceStatus:
     image: str | None = None
 
 
+#: How far back a fall still counts. Twelve hours spans a night, so what broke
+#: at 03:00 is still on the panel at the login that follows.
+#:
+#: It lives here rather than in the collector because the renderer states it in
+#: the heading. Two copies would be free to drift, and then the block would
+#: promise a window it does not apply.
+TROUBLE_WINDOW_SECONDS: int = 12 * 3600
+
+
 #: Severities a TroubleEntry can carry, worst first. The order is the render
 #: order: what is down outranks what is still thrashing, which outranks what
 #: has already caught itself. A service standing right now is the least urgent
