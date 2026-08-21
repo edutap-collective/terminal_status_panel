@@ -22,6 +22,7 @@ from rich.text import Text
 from ..collectors.clusters import kind_for_service
 from ..config import Config, Thresholds
 from ..model import (
+    TROUBLE_WINDOW_SECONDS,
     ClusterService,
     HealthInfo,
     PeerReachability,
@@ -573,34 +574,300 @@ def filesystem_panel(res: ResourceUsage | None) -> Group:
 # --------------------------------------------------------------------------- #
 
 
+#: Above this, the filesystem holding Docker's data is under real pressure and
+#: reclaimable bytes are worth acting on. Below it the same figures are just
+#: housekeeping, and a warning that glows while a disk is a fifth full becomes
+#: wallpaper -- unread on the day it finally means something.
+_DISK_PRESSURE_PERCENT = 80.0
+
+
+def _disk_style(disk, resources) -> str | None:
+    """Yellow where Docker's data sits on a filesystem under pressure.
+
+    The colour follows the *disk*, not the size of the reclaimable heap: 28 GB
+    of recoverable images matter on a full volume and matter not at all on an
+    empty one.
+
+    The mount is found by longest match rather than by assuming "/", because a
+    node that gives Docker its own volume is exactly the node where the two
+    filesystems disagree. Without filesystem data no colour is chosen at all --
+    an unmeasured disk is not evidence of comfort, but claiming pressure would
+    be a finding nobody took.
+    """
+    if disk is None or resources is None or not disk.root_dir:
+        return None
+    best = None
+    for fs in resources.filesystems:
+        base = fs.mountpoint.rstrip("/")
+        if disk.root_dir == fs.mountpoint or disk.root_dir.startswith(f"{base}/"):
+            if best is None or len(fs.mountpoint) > len(best.mountpoint):
+                best = fs
+    if best is None or best.percent is None:
+        return None
+    return "yellow" if best.percent > _DISK_PRESSURE_PERCENT else None
+
+
+def _disk_line(disk, resources=None) -> Text:
+    """The one-line Docker footprint, or a stated absence.
+
+    Absence renders rather than disappears. A missing line reads as "nothing to
+    report", and that is the single reading here that would be untrue.
+    """
+    if disk is None:
+        return Text("n/a (timeout)", style="dim")
+    style = _disk_style(disk, resources)
+    line = Text()
+    if disk.node:
+        line.append(disk.node, style="bold")
+        line.append("  ·  ")
+    line.append(f"{format_bytes(disk.used)} used")
+    line.append(f"  ·  ↺ {format_bytes(disk.reclaimable)} reclaimable", style=style or "")
+    line.append(
+        f"  ·  images {format_bytes(disk.images)}"
+        f"  ·  cache {format_bytes(disk.build_cache)}"
+        f"  ·  volumes {format_bytes(disk.volumes)}",
+        style="dim",
+    )
+    if disk.volumes_total:
+        line.append(f"  ·  {disk.volumes_unused}/{disk.volumes_total} unused", style=style or "dim")
+    return line
+
+
+#: How many trouble rows the block ever renders. A node reboot brings every
+#: service on it in at once, and this panel has a hard height limit -- twenty
+#: rows here would push the stack tables, the point of the section, off the
+#: screen. What is dropped is always named: a silent cap would claim ten
+#: services are troubled where twenty are, and that is the reading a status
+#: panel may least afford.
+_TROUBLE_MAX_ROWS = 10
+
+#: Marks a row of instances that are nailed to their nodes. Placed after the
+#: health glyph so the row reads "healthy, and immovable" rather than
+#: replacing one statement with the other.
+_PINNED = "📌"
+
+
+def _fmt_short_age(seconds: float | None) -> str:
+    """An age that keeps its seconds while they still matter.
+
+    Neither existing formatter fits. ``_fmt_age`` is coarse by design and
+    renders 47 seconds as "0m", which reads as "standing still" -- the exact
+    opposite of what a service that came up forty-seven seconds ago is doing.
+    ``_fmt_uptime`` spells out days and hours for a machine that has been up
+    for weeks. Here the interesting range is the small one: a service back up
+    seconds ago is flapping, and that is the finding.
+    """
+    if seconds is None:
+        return "—"
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        return f"{total // 60}m"
+    if total < 86400:
+        return f"{total // 3600}h"
+    return f"{total // 86400}d"
+
+
+def _trouble_table(entries) -> Table:
+    """The rows themselves, worst first and capped."""
+    ordered = sorted(entries, key=lambda e: (e.rank, e.name))
+    shown = ordered[:_TROUBLE_MAX_ROWS]
+
+    table = Table.grid(padding=(0, 2))
+    table.add_column()  # symbol
+    table.add_column()  # name
+    table.add_column()  # node
+    table.add_column(justify="right")  # fails
+    table.add_column(justify="right")  # uptime
+    table.add_column()  # cause
+    table.add_row(
+        Text(""),
+        Text("SERVICE", style="dim"),
+        Text("NODE", style="dim"),
+        Text("FAILS", style="dim"),
+        Text("UP", style="dim"),
+        Text("CAUSE", style="dim"),
+    )
+    for entry in shown:
+        dead = entry.severity == "dead"
+        if entry.fails is None:
+            # No counter applies: it never started, so it never fell. A "0"
+            # here would be a measurement of something that did not happen.
+            fails = Text("—", style="dim")
+        else:
+            prefix = "≥" if entry.fails_capped else ""
+            fails = Text(f"↻ {prefix}{entry.fails}×")
+        table.add_row(
+            Text(_DEAD if dead else _WARN),
+            Text(entry.name, style="bold"),
+            Text(entry.node or "—", style="dim"),
+            fails,
+            Text(_fmt_short_age(entry.uptime_seconds), style="dim"),
+            Text(entry.cause or "—", style="red" if dead else "yellow"),
+        )
+    if len(ordered) > len(shown):
+        table.add_row(
+            Text(""),
+            Text(f"… and {len(ordered) - len(shown)} more", style="dim"),
+            Text(""),
+            Text(""),
+            Text(""),
+            Text(""),
+        )
+    return table
+
+
+def _trouble_block(entries) -> RenderableType | None:
+    """The TROUBLE block, or None when there is nothing to report.
+
+    Nothing is the normal state, and it renders as nothing at all -- not as an
+    empty heading. A block that is present every day stops being read on the
+    day it has something to say.
+    """
+    if not entries:
+        return None
+    hours = TROUBLE_WINDOW_SECONDS // 3600
+    return Group(_subhead(f"TROUBLE  (last {hours} h)"), _trouble_table(entries))
+
+
+#: Marks a figure measured against a reservation rather than a limit. The two
+#: must not look alike: exceeding a limit gets the service killed, exceeding a
+#: reservation quietly makes the cluster's capacity arithmetic wrong.
+_RESERVED = "⚑"
+
+
+def _memory_cell(services) -> Text:
+    """One row's memory on this node, against whatever reference exists.
+
+    Three cases, and they are deliberately distinguishable at a glance:
+
+    * a limit renders ``412.0 MB / 1.0 GB`` -- how close to being killed;
+    * a reservation renders ``890.0 MB ⚑ 512.0 MB`` -- over what the cluster
+      planned for, which kills nothing and breaks placement arithmetic;
+    * neither renders ``6.0 GB no limit`` -- a finding in itself, because an
+      unbounded service takes the node with it when it leaks.
+
+    ``elsewhere`` where the service runs, but not here: `/containers/{id}/stats`
+    reaches only the local daemon. Not a dash, which would claim the figure was
+    unobtainable, and not a blank, which beside a filled cell reads as
+    "consumes nothing".
+
+    A service running *nowhere* gets a dash instead. "Elsewhere" would send a
+    reader looking for it on another node, when in truth it is down -- and the
+    Working cell two columns to the left already says so. The distinction is
+    not hypothetical: a stopped Compose container has no local task either, and
+    it is emphatically not somewhere else.
+    """
+    local = [s for s in services if s.local_tasks]
+    if not local:
+        running = any(s.running_replicas for s in services)
+        return Text("elsewhere" if running else "—", style="dim")
+    used = sum(s.memory_bytes or 0 for s in local)
+    limit = sum(s.memory_limit or 0 for s in local)
+    reservation = sum(s.memory_reservation or 0 for s in local)
+    cell = Text(format_bytes(used))
+    if limit:
+        cell.append(f" / {format_bytes(limit)}", style="dim")
+    elif reservation:
+        cell.append(f" {_RESERVED} {format_bytes(reservation)}", style="dim")
+    else:
+        cell.append(" no limit", style="yellow")
+    return cell
+
+
 def _node_health(node) -> Text:
-    """✅ ready and active · ⚠️ ready but drained/paused · 💀 unreachable."""
+    """✅ ready and active · ⚠️ drained/paused or unreachable · 💀 down."""
     if not node.reachable:
         return Text(f"{_DEAD} {node.state or 'down'}", style="red")
     if not node.operational:
         return Text(f"{_WARN} {node.availability or 'unavailable'}", style="yellow")
+    # Last, because it is the only one of the three that would otherwise render
+    # green. The orchestrator can call a node `ready` while the other managers
+    # cannot reach it, and that combination is a quorum risk wearing a healthy
+    # tick. The two earlier branches already cover nodes that look broken.
+    if node.reachable_by_managers is False:
+        return Text(f"{_WARN} unreachable", style="yellow")
     return Text(_OK)
 
 
-def _node_inline(node, mark_leader: bool = False, peers=None) -> Text:
+def _node_inline(node, mark_leader: bool = False, peers=None, common_version=None) -> Text:
     line = Text.assemble((node.name, "bold"), " ") + _node_health(node)
     note = _node_tunnel_note(node, peers)
     if note is not None:
         line.append_text(note)
+    # Only a node that disagrees carries a version. Printing the common one
+    # beside every node would repeat what the summary line above already says,
+    # once per node, and bury the single entry worth finding.
+    if common_version is not None and node.engine_version not in (None, common_version):
+        line.append(f" {_WARN} {node.engine_version}", style="yellow")
     if mark_leader and node.leader:
         line.append(" (leader)", style="dim")
     return line
 
 
-def _nodes_inline(nodes, mark_leader: bool = False, peers=None) -> Text:
+def _nodes_inline(nodes, mark_leader: bool = False, peers=None, common_version=None) -> Text:
     if not nodes:
         return Text("n/a", style="dim")
     line = Text()
     for i, node in enumerate(sorted(nodes, key=lambda n: n.name)):
         if i:
             line.append("   ")
-        line.append_text(_node_inline(node, mark_leader=mark_leader, peers=peers))
+        line.append_text(
+            _node_inline(node, mark_leader=mark_leader, peers=peers, common_version=common_version)
+        )
     return line
+
+
+def _engine_versions(nodes) -> tuple[str | None, int]:
+    """The version to state in the header, and how many distinct ones exist.
+
+    The reported one is the most common; ties break on the lexicographically
+    greatest, purely so the choice is deterministic rather than dependent on
+    node ordering. Which of two equally frequent versions is called the norm
+    changes nothing that matters — both are rendered either way, one in the
+    header and the other beside the node that carries it.
+
+    Nodes that reported no version are ignored rather than counted as a third
+    kind. A version nobody stated is not a divergence; it is a silence.
+    """
+    stated = [n.engine_version for n in nodes if n.engine_version]
+    if not stated:
+        return None, 0
+    counts: dict[str, int] = {}
+    for version in stated:
+        counts[version] = counts.get(version, 0) + 1
+    reported = max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+    return reported, len(counts)
+
+
+def _manager_quorum(nodes) -> Text | None:
+    """A warning when one more manager loss would cost the swarm its quorum.
+
+    Only ``False`` counts against a manager. ``None`` means the daemon said
+    nothing about reachability, and treating silence as failure would raise an
+    alarm about a cluster nobody measured.
+    """
+    managers = [n for n in nodes if n.role == "manager"]
+    if not managers:
+        return None
+    unreachable = [n for n in managers if n.reachable_by_managers is False]
+    if not unreachable:
+        return None
+    reachable = len(managers) - len(unreachable)
+    quorum = len(managers) // 2 + 1
+    if reachable > quorum:
+        return None
+    if reachable < quorum:
+        return Text(
+            f"{_WARN} {reachable}/{len(managers)} managers reachable — quorum lost",
+            style="red",
+        )
+    return Text(
+        f"{_WARN} {reachable}/{len(managers)} managers reachable — "
+        "one more failure locks the swarm",
+        style="yellow",
+    )
 
 
 def _short_node_names(nodes) -> list[tuple[str, str]]:
@@ -693,7 +960,7 @@ def _node_tunnel_note(node: SwarmNode, peers: list[PeerReachability] | None) -> 
     return Text(f" (wg: {reason})", style="red")
 
 
-def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
+def _swarm_body(swarm: SwarmInfo, peers=None, resources=None) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
     n_stacks = len({s.stack for s in swarm.services if s.stack})
@@ -710,8 +977,31 @@ def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
     summary.append(f"  ·  {len(swarm.services)} services  ·  {n_stacks} stacks")
     if swarm.containers:
         summary.append(f"  ·  {len(swarm.containers)} containers")
+    common_version, distinct = _engine_versions(swarm.nodes)
+    if common_version is not None:
+        summary.append(f"  ·  Docker {common_version}")
+        if distinct > 1:
+            summary.append(f" {_WARN} {distinct} versions", style="yellow")
+    elif not swarm.nodes and swarm.local_engine_version:
+        # A worker may not enumerate the swarm, so this is the only version
+        # there is. It is marked as local because an unqualified version in
+        # the swarm header reads as a statement about the swarm.
+        summary.append(f"  ·  Docker {swarm.local_engine_version}")
+        summary.append(" (local)", style="dim")
     table.add_row("Swarm", summary)
-    table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True, peers=peers))
+    table.add_row(
+        "Nodes",
+        _nodes_inline(
+            swarm.nodes,
+            mark_leader=True,
+            peers=peers,
+            common_version=common_version if distinct > 1 else None,
+        ),
+    )
+    quorum = _manager_quorum(swarm.nodes)
+    if quorum is not None:
+        table.add_row("", quorum)
+    table.add_row("Disk", _disk_line(swarm.disk, resources))
     return table
 
 
@@ -767,11 +1057,45 @@ def _strip_stack_prefix(base: str, stack: str) -> str:
     return base
 
 
+def _group_key(svc, node_names) -> str:
+    """Which row a service belongs in.
+
+    An explicit ``status.group`` wins, because a deployment that states the
+    answer should not be second-guessed. It also fixes a fault the heuristic
+    knowingly accepts: two *unrelated* services differing only in a trailing
+    `_<digits>` -- `infra_php_7` and `infra_php_8` -- collapse into one row
+    and the second one's description vanishes with it. Labelled, they stay
+    apart.
+
+    An empty label is not a group. Presence, not truthiness: a service saying
+    ``status.group=""`` is saying "group me with no one", and falling through
+    to the heuristic there would group it by name after all.
+    """
+    if svc.group:
+        return svc.group
+    return _base_service_name(svc.name, node_names)
+
+
 def _base_groups(services, node_names) -> dict[str, list]:
     groups: dict[str, list] = {}
     for svc in services:
-        groups.setdefault(_base_service_name(svc.name, node_names), []).append(svc)
+        groups.setdefault(_group_key(svc, node_names), []).append(svc)
     return groups
+
+
+def _with_pin(cell: Text, services) -> Text:
+    """Mark a collapsed row whose members cannot move.
+
+    Only for a row that actually collapsed something. A lone `1/1` claims no
+    mobility, so there is none to correct -- and a symbol on every constrained
+    service would appear so often it would stop being read.
+
+    Shown in health as much as in failure. A marker introduced only once
+    everything is already red is a marker nobody has had the chance to learn.
+    """
+    if len(services) < 2 or not all(getattr(s, "pinned", False) for s in services):
+        return cell
+    return cell + Text(f" {_PINNED}")
 
 
 def _group_desc(services) -> str:
@@ -877,13 +1201,14 @@ def _stack_matrix(
     table = Table.grid(padding=(0, 1))
     table.add_column(style="bold")  # stack / service name
     table.add_column(justify="left")  # Working
+    table.add_column(justify="left")  # RAM on this node
     for _ in short:
         table.add_column(justify="center")  # per-node status
     table.add_column(style="dim")  # description
     if show_image:
         table.add_column()  # image
 
-    header = [_subhead(title), Text("Working", style="cyan")]
+    header = [_subhead(title), Text("Working", style="cyan"), Text("RAM (this node)", style="cyan")]
     header += [Text(s, style="cyan") for _, s in short]
     header.append(Text("Description", style="cyan"))
     if show_image:
@@ -892,13 +1217,13 @@ def _stack_matrix(
 
     #: Cells to the right of a row's first one -- what a header or placeholder
     #: row has to fill so the columns below it still line up.
-    trailing = len(short) + (3 if show_image else 2)
+    trailing = len(short) + (4 if show_image else 3)
 
     if not entries:
         table.add_row(Text("—", style="dim"), *[""] * trailing)
 
     def _row(label, services, desc):
-        cells = [label, verdict(services)]
+        cells = [label, _with_pin(verdict(services), services), _memory_cell(services)]
         cells += [_node_cell(services, full) for full, _ in short]
         cells.append(Text(desc or ""))
         if show_image:
@@ -1041,25 +1366,59 @@ def _stack_columns(
     return Group(*parts)
 
 
+def _disk_row(disk, resources) -> Table:
+    """The disk line on its own grid, for the layout that has no SWARM block."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan")
+    grid.add_column()
+    grid.add_row("Disk", _disk_line(disk, resources))
+    return grid
+
+
 def services_section(
-    swarm: SwarmInfo | None, cfg: Config, health: HealthInfo | None = None
+    swarm: SwarmInfo | None,
+    cfg: Config,
+    health: HealthInfo | None = None,
+    resources: ResourceUsage | None = None,
 ) -> Group:
     """The DOCKER INFOS block: Swarm stacks, containers and their verdicts.
 
     *health* is optional: without it the Working cells fall back to Docker's
     own replica measurement rather than claiming a cluster verdict nobody
     took.
+
+    *resources* is optional in the same spirit, and used for one thing only:
+    deciding whether Docker's disk footprint sits on a filesystem under
+    pressure. Without it the figures still render, just uncoloured -- which is
+    what `status-docker` on its own can honestly say.
     """
     if swarm is None or not swarm.reachable:
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
     if not swarm.enabled:
-        return section("DOCKER INFOS", _stack_columns(swarm, cfg, health))
+        # No SWARM block to hang it under, so the line leads the section. The
+        # width pressure that argues for brevity comes from a cluster panel
+        # with dozens of services; a host without a swarm has the room, and an
+        # accumulated Docker is likelier there, not less.
+        plain: list[RenderableType] = [_disk_row(swarm.disk, resources), Text("")]
+        trouble = _trouble_block(swarm.trouble)
+        if trouble is not None:
+            plain += [trouble, Text("")]
+        plain.append(_stack_columns(swarm, cfg, health))
+        return section("DOCKER INFOS", Group(*plain))
 
-    body = Group(
+    parts: list[RenderableType] = [
         _subhead("SWARM"),
-        _swarm_body(swarm, health.peers if health else None),
+        _swarm_body(swarm, health.peers if health else None, resources),
         Text(""),
-        _stack_columns(swarm, cfg, health),
-    )
-    return section("DOCKER INFOS", body)
+    ]
+    # Between the header and the stacks, and only when it has something to
+    # say. Appended below sixty stack rows it would be read by nobody who was
+    # not already scrolling; here it stands where the warning it explains was
+    # raised, and in the normal case it displaces nothing because it does not
+    # exist.
+    trouble = _trouble_block(swarm.trouble)
+    if trouble is not None:
+        parts += [trouble, Text("")]
+    parts.append(_stack_columns(swarm, cfg, health))
+    return section("DOCKER INFOS", Group(*parts))

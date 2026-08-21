@@ -1814,3 +1814,553 @@ def test_the_image_column_can_be_switched_off():
     assert "Image" not in out
     assert "2026-08-14_1206" not in out
     assert "Shop API" in out
+
+
+# --- engine version and manager reachability -------------------------------
+
+
+def _versioned_swarm(nodes, role="manager", local_version=None) -> SwarmInfo:
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role=role,
+        node_count=len(nodes) or None,
+        nodes=list(nodes),
+        local_engine_version=local_version,
+    )
+
+
+def _mgr(name, version="28.5.2", reachable_by_managers=True, leader=False):
+    return SwarmNode(
+        name,
+        reachable=True,
+        role="manager",
+        leader=leader,
+        state="ready",
+        availability="active",
+        engine_version=version,
+        reachable_by_managers=reachable_by_managers,
+    )
+
+
+def _wrk(name, version="28.5.2"):
+    return SwarmNode(
+        name,
+        reachable=True,
+        role="worker",
+        state="ready",
+        availability="active",
+        engine_version=version,
+    )
+
+
+def _swarm_line(out: str) -> str:
+    return next(line for line in out.splitlines() if line.strip().startswith("Swarm"))
+
+
+def _nodes_line(out: str) -> str:
+    return next(line for line in out.splitlines() if line.strip().startswith("Nodes"))
+
+
+def test_one_engine_version_renders_once_and_not_per_node():
+    swarm = _versioned_swarm([_mgr("srv-01", leader=True), _wrk("srv-02"), _wrk("srv-03")])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "Docker 28.5.2" in _swarm_line(out)
+    assert "28.5.2" not in _nodes_line(out)
+    assert "versions" not in _swarm_line(out)
+
+
+def test_a_deviating_engine_version_unfolds_only_that_node():
+    swarm = _versioned_swarm(
+        [_mgr("srv-01", leader=True), _wrk("srv-02", version="27.3.1"), _wrk("srv-03")]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2 versions" in _swarm_line(out)
+    nodes = _nodes_line(out)
+    assert "27.3.1" in nodes
+    # Only the deviating node carries a version; the others stay bare.
+    assert nodes.count("28.5.2") == 0
+
+
+def test_a_deviating_patch_level_warns_like_a_minor():
+    swarm = _versioned_swarm([_mgr("srv-01", leader=True), _wrk("srv-02", version="28.5.1")])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2 versions" in _swarm_line(out)
+    assert "28.5.1" in _nodes_line(out)
+
+
+def test_a_worker_labels_its_version_as_local():
+    swarm = _versioned_swarm([], role="worker", local_version="28.5.2")
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "Docker 28.5.2 (local)" in _swarm_line(out)
+
+
+def test_a_node_without_a_version_does_not_invent_one():
+    swarm = _versioned_swarm([_mgr("srv-01", version=None, leader=True)])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "Docker" not in _swarm_line(out)
+
+
+def test_an_unreachable_manager_is_marked_and_keeps_its_leader_suffix():
+    swarm = _versioned_swarm(
+        [
+            _mgr("srv-01", leader=True, reachable_by_managers=False),
+            _mgr("srv-02"),
+            _mgr("srv-03"),
+        ]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    nodes = _nodes_line(out)
+    assert "unreachable" in nodes
+    assert "(leader)" in nodes
+
+
+def test_the_quorum_line_appears_when_one_more_loss_would_lock_the_swarm():
+    swarm = _versioned_swarm(
+        [_mgr("srv-01", leader=True), _mgr("srv-02"), _mgr("srv-03", reachable_by_managers=False)]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2/3 managers reachable" in out
+
+
+def test_no_quorum_line_when_every_manager_is_reachable():
+    swarm = _versioned_swarm([_mgr("srv-01", leader=True), _mgr("srv-02"), _mgr("srv-03")])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "managers reachable" not in out
+
+
+def test_the_quorum_line_counts_managers_not_nodes():
+    """Five nodes, three of them managers -- the ratio must be over managers."""
+    swarm = _versioned_swarm(
+        [
+            _mgr("srv-01", leader=True),
+            _mgr("srv-02"),
+            _mgr("srv-03", reachable_by_managers=False),
+            _wrk("srv-04"),
+            _wrk("srv-05"),
+        ]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2/3 managers reachable" in out
+    assert "4/5" not in out
+
+
+# --- docker disk usage -----------------------------------------------------
+
+
+def _disk(node="srv-01", root_dir="/var/lib/docker", **kw):
+    from terminal_status_panel.model import DockerDiskUsage
+
+    defaults = dict(
+        node=node,
+        root_dir=root_dir,
+        used=43 * 2**30,
+        reclaimable=28 * 2**30,
+        images=20 * 2**30,
+        build_cache=12 * 2**30,
+        volumes=2 * 2**30,
+        containers=2**28,
+        volumes_unused=178,
+        volumes_total=185,
+    )
+    defaults.update(kw)
+    return DockerDiskUsage(**defaults)
+
+
+def _disk_swarm(disk):
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
+        nodes=[_mgr("srv-01", leader=True)],
+        disk=disk,
+    )
+
+
+def test_the_disk_line_names_the_node_it_describes():
+    out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
+    line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    assert "srv-01" in line
+
+
+def test_the_disk_line_leads_with_what_can_be_reclaimed():
+    out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
+    line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    assert line.index("reclaimable") < line.index("images")
+    assert "178/185 unused" in line
+
+
+def test_a_missing_disk_reading_says_so_rather_than_vanishing():
+    """A line that disappears reads as 'nothing to report', which would be false."""
+    out = _text(panels.services_section(_disk_swarm(None), Config()), width=200)
+    line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    assert "n/a (timeout)" in line
+
+
+def test_the_disk_line_renders_without_a_swarm():
+    swarm = SwarmInfo(reachable=True, enabled=False, disk=_disk())
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert any(line.strip().startswith("Disk") for line in out.splitlines())
+
+
+def _fs(mountpoint, percent):
+    from terminal_status_panel.model import FilesystemUsage
+
+    return FilesystemUsage(mountpoint=mountpoint, total=100, used=int(percent), percent=percent)
+
+
+def test_disk_colour_follows_real_pressure_not_the_reclaimable_size():
+    from terminal_status_panel.model import ResourceUsage
+
+    roomy = ResourceUsage(filesystems=[_fs("/", 22.0)])
+    assert panels._disk_style(_disk(), roomy) is None
+
+    tight = ResourceUsage(filesystems=[_fs("/", 91.0)])
+    assert panels._disk_style(_disk(), tight) == "yellow"
+
+
+def test_disk_colour_picks_the_mount_that_actually_holds_the_root_dir():
+    """The longest matching mountpoint wins, not the first or the shortest."""
+    from terminal_status_panel.model import ResourceUsage
+
+    res = ResourceUsage(filesystems=[_fs("/", 95.0), _fs("/var/lib/docker", 30.0)])
+    assert panels._disk_style(_disk(root_dir="/var/lib/docker"), res) is None
+
+
+def test_disk_colour_stays_absent_when_nothing_was_measured():
+    """No filesystem data is not evidence of comfort, but it is not a finding either."""
+    assert panels._disk_style(_disk(), None) is None
+
+
+# --- the TROUBLE block -----------------------------------------------------
+
+
+def _entry(name, severity="dead", **kw):
+    from terminal_status_panel.model import TroubleEntry
+
+    return TroubleEntry(name=name, severity=severity, **kw)
+
+
+def _trouble_swarm(entries):
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
+        nodes=[_mgr("srv-01", leader=True)],
+        trouble=list(entries),
+    )
+
+
+def test_no_trouble_means_no_block_at_all():
+    """The normal state. An empty heading would be noise on every login."""
+    out = _text(panels.services_section(_trouble_swarm([]), Config()), width=200)
+    assert "TROUBLE" not in out
+
+
+def test_the_block_sits_between_the_swarm_header_and_the_stacks():
+    swarm = _trouble_swarm([_entry("mystack_worker", fails=2)])
+    swarm.services = [ServiceStatus("mystack_worker", 0, 1, stack="mystack")]
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    lines = out.splitlines()
+    nodes_at = next(i for i, line in enumerate(lines) if line.strip().startswith("Nodes"))
+    trouble_at = next(i for i, line in enumerate(lines) if "TROUBLE" in line)
+    stacks_at = next(i for i, line in enumerate(lines) if "SWARM STACKS" in line)
+    assert nodes_at < trouble_at < stacks_at
+
+
+def test_entries_are_ordered_worst_first():
+    entries = [
+        _entry("mystack_recovered", severity="recovered", fails=1, uptime_seconds=47.0),
+        _entry("mystack_dead", severity="dead", fails=3),
+        _entry("mystack_flapping", severity="restarting", fails=2),
+    ]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    keys = ("dead", "flapping", "recovered")
+    order = [line for line in out.splitlines() if any(k in line for k in keys)]
+    positions = [
+        next(i for i, line in enumerate(order) if name in line)
+        for name in ("mystack_dead", "mystack_flapping", "mystack_recovered")
+    ]
+    assert positions == sorted(positions)
+
+
+def test_eleven_entries_render_ten_and_say_how_many_were_dropped():
+    """A silent cap would claim four services are troubled where fourteen are."""
+    entries = [_entry(f"mystack_svc{i:02d}", fails=1) for i in range(11)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert sum(1 for line in out.splitlines() if "mystack_svc" in line) == 10
+    assert "and 1 more" in out
+
+
+def test_ten_entries_need_no_closing_line():
+    entries = [_entry(f"mystack_svc{i:02d}", fails=1) for i in range(10)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "more" not in out
+
+
+def test_a_capped_count_is_rendered_as_a_floor():
+    entries = [_entry("mystack_worker", fails=5, fails_capped=True)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "≥5" in out
+
+
+def test_an_uncapped_count_is_not_rendered_as_a_floor():
+    entries = [_entry("mystack_worker", fails=5, fails_capped=False)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "≥" not in out
+
+
+def test_an_unknown_cause_renders_as_a_dash_not_as_blank():
+    entries = [_entry("mystack_worker", severity="recovered", fails=2, uptime_seconds=47.0)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    line = next(line for line in out.splitlines() if "mystack_worker" in line)
+    assert "—" in line
+
+
+def test_a_service_that_never_started_shows_neither_count_nor_uptime():
+    entries = [_entry("mystack_builder", cause="no suitable node (insufficient memory)")]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    line = next(line for line in out.splitlines() if "mystack_builder" in line)
+    assert "no suitable node" in line
+    assert "↻" not in line
+
+
+def test_a_fresh_uptime_is_reported_in_seconds():
+    """'up 0m' would read as standing still; the seconds are the whole point."""
+    entries = [_entry("mystack_worker", severity="recovered", fails=2, uptime_seconds=47.0)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "47s" in out
+
+
+def test_names_keep_their_underscores_in_full():
+    entries = [_entry("mystack_wallet_apple_vas_account_binding", fails=1)]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=200)
+    assert "mystack_wallet_apple_vas_account_binding" in out
+
+
+def test_the_block_survives_a_narrow_terminal():
+    entries = [_entry("mystack_worker", fails=2, cause="exit 137", node="srv-01")]
+    out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=80)
+    assert "TROUBLE" in out
+    assert "mystack_worker" in out
+
+
+# --- explicit grouping and the pin marker ----------------------------------
+
+
+def _svc(name, running=1, desired=1, group=None, pinned=False, stack=None, node="srv-01"):
+    return ServiceStatus(
+        name,
+        running,
+        desired,
+        stack=stack,
+        group=group,
+        pinned=pinned,
+        tasks=[ServiceTask(node, "running")] * running,
+    )
+
+
+def test_grouping_without_labels_is_exactly_what_it_was():
+    """The heuristic must not shift under services that carry no label."""
+    nodes = ["swarm01-mgr-01", "swarm01-wrk-01"]
+    assert panels._base_service_name("mystack_connector_1", nodes) == "mystack_connector"
+    assert (
+        panels._base_service_name("PostgreSQL-18_PostgreSQL-18", nodes)
+        == "PostgreSQL-18_PostgreSQL-18"
+    )
+    groups = panels._base_groups(
+        [_svc("mystack_connector_1"), _svc("mystack_connector_2"), _svc("other")], nodes
+    )
+    assert sorted(groups) == ["mystack_connector", "other"]
+
+
+def test_an_explicit_group_collapses_names_that_share_no_prefix():
+    groups = panels._base_groups(
+        [_svc("alpha", group="search"), _svc("beta", group="search"), _svc("gamma")],
+        ["swarm01-mgr-01"],
+    )
+    assert sorted(groups) == ["gamma", "search"]
+    assert len(groups["search"]) == 2
+
+
+def test_an_empty_group_label_groups_with_nothing():
+    """Presence, not truthiness -- the same rule the description label uses."""
+    groups = panels._base_groups(
+        [_svc("alpha", group=""), _svc("beta", group="")], ["swarm01-mgr-01"]
+    )
+    assert sorted(groups) == ["alpha", "beta"]
+
+
+def test_an_explicit_group_wins_over_the_heuristic():
+    """Two ordinals that are NOT instances of one service stay apart when said so."""
+    groups = panels._base_groups(
+        [_svc("infra_php_7", group="php7"), _svc("infra_php_8", group="php8")],
+        ["swarm01-mgr-01"],
+    )
+    assert sorted(groups) == ["php7", "php8"]
+
+
+def _pin_out(services):
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=2,
+        nodes=[_mgr("srv-01", leader=True), _wrk("srv-02")],
+        services=list(services),
+    )
+    return _text(panels.services_section(swarm, Config()), width=200)
+
+
+#: A second, unrelated service in the stack, so the stack renders as a header
+#: with sub-rows. A stack holding exactly one row collapses onto the stack
+#: name -- existing behaviour, and it would hide the row under test.
+def _pinned_pair():
+    return [
+        _svc("mystack_search_1", group="search", pinned=True, stack="mystack"),
+        _svc("mystack_search_2", group="search", pinned=True, stack="mystack", node="srv-02"),
+        _svc("mystack_web", stack="mystack"),
+    ]
+
+
+def test_a_group_of_pinned_instances_is_marked():
+    out = _pin_out(_pinned_pair())
+    line = next(line for line in out.splitlines() if "search" in line and "2/2" in line)
+    assert "📌" in line
+
+
+def test_the_pin_shows_in_health_not_only_in_shortfall():
+    """Introducing a symbol only once everything is red teaches it to nobody."""
+    out = _pin_out(_pinned_pair())
+    line = next(line for line in out.splitlines() if "search" in line and "2/2" in line)
+    assert "✅" in line and "📌" in line
+
+
+def test_a_group_with_one_movable_member_is_not_pinned():
+    out = _pin_out(
+        [
+            _svc("mystack_search_1", group="search", pinned=True, stack="mystack"),
+            _svc("mystack_search_2", group="search", pinned=False, stack="mystack", node="srv-02"),
+            _svc("mystack_web", stack="mystack"),
+        ]
+    )
+    assert "📌" not in out
+
+
+def test_a_lone_service_is_never_pinned():
+    """A 1/1 row claims no mobility, so there is none to correct."""
+    out = _pin_out([_svc("mystack_solo", pinned=True, stack="mystack")])
+    assert "📌" not in out
+
+
+# --- the RAM column --------------------------------------------------------
+
+_MiB = 2**20
+
+
+def _mem_svc(name, stack="mystack", **kw):
+    return ServiceStatus(name, 1, 1, stack=stack, tasks=[ServiceTask("srv-01", "running")], **kw)
+
+
+def _mem_out(services, width=200):
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=2,
+        nodes=[_mgr("srv-01", leader=True), _wrk("srv-02")],
+        services=list(services),
+    )
+    return _text(panels.services_section(swarm, Config()), width=width)
+
+
+def test_a_limit_is_rendered_as_a_ratio():
+    out = _mem_out(
+        [
+            _mem_svc("web", memory_bytes=412 * _MiB, memory_limit=1024 * _MiB, local_tasks=1),
+            _mem_svc("other"),
+        ]
+    )
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "412.0 MB" in line and "1.0 GB" in line
+
+
+def test_a_reservation_without_a_limit_is_marked_as_different():
+    """33% of a limit and 33% of a reservation are different statements."""
+    out = _mem_out(
+        [
+            _mem_svc("web", memory_bytes=890 * _MiB, memory_reservation=512 * _MiB, local_tasks=1),
+            _mem_svc("other"),
+        ]
+    )
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "⚑" in line and "512.0 MB" in line
+    assert "/" not in line.split("890.0 MB")[1].split("512.0 MB")[0]
+
+
+def test_no_limit_at_all_is_a_finding_in_its_own_right():
+    out = _mem_out(
+        [_mem_svc("web", memory_bytes=6 * 1024 * _MiB, local_tasks=1), _mem_svc("other")]
+    )
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "no limit" in line
+
+
+def test_a_service_running_nowhere_here_says_so():
+    out = _mem_out([_mem_svc("web", local_tasks=0), _mem_svc("other")])
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "elsewhere" in line
+    assert "—" not in line.split("elsewhere")[0][-4:]
+
+
+def test_the_ram_column_sits_directly_after_working():
+    out = _mem_out([_mem_svc("web", memory_bytes=1 * _MiB, local_tasks=1), _mem_svc("other")])
+    header = next(line for line in out.splitlines() if "Working" in line)
+    assert header.index("Working") < header.index("RAM")
+    assert header.index("RAM") < header.index("Description")
+
+
+def test_the_ram_header_names_the_node_it_covers():
+    out = _mem_out([_mem_svc("web", memory_bytes=1 * _MiB, local_tasks=1), _mem_svc("other")])
+    header = next(line for line in out.splitlines() if "RAM" in line)
+    assert "this node" in header
+
+
+def test_the_ram_column_is_independent_of_the_process_row_switch():
+    """It is a table column, not part of the process block, and shares none of
+    its switches."""
+    cfg = Config()
+    cfg.top_processes = 0
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=1,
+        nodes=[_mgr("srv-01", leader=True)],
+        services=[_mem_svc("web", memory_bytes=1 * _MiB, local_tasks=1), _mem_svc("other")],
+    )
+    out = _text(panels.services_section(swarm, cfg), width=200)
+    assert "RAM" in out
+
+
+def test_the_ram_column_survives_a_narrow_terminal():
+    out = _mem_out(
+        [
+            _mem_svc("web", memory_bytes=412 * _MiB, memory_limit=1024 * _MiB, local_tasks=1),
+            _mem_svc("other"),
+        ],
+        width=80,
+    )
+    assert "web" in out
+
+
+def test_a_service_running_nowhere_is_not_called_elsewhere():
+    """A stopped local container is not somewhere else -- it is down, and the
+    Working cell already says so."""
+    stopped = ServiceStatus("web", 0, 1, stack="mystack", tasks=[ServiceTask("srv-01", "exited")])
+    out = _mem_out([stopped, _mem_svc("other")])
+    line = next(line for line in out.splitlines() if line.strip().startswith("web"))
+    assert "elsewhere" not in line
+    assert "—" in line

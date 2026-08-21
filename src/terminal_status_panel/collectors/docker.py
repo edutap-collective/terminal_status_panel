@@ -12,12 +12,23 @@ so a missing or hung Docker socket can never block login.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import NamedTuple
 
 import docker
 
-from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
-from ..model import JobRun, ServiceStatus, ServiceTask, SwarmInfo, SwarmNode
+from ..config import DEFAULT_DESCRIPTION_LABEL, DEFAULT_GROUP_LABEL, LEGACY_DESCRIPTION_LABEL
+from ..model import (
+    TROUBLE_WINDOW_SECONDS,
+    DockerDiskUsage,
+    JobRun,
+    ServiceStatus,
+    ServiceTask,
+    SwarmInfo,
+    SwarmNode,
+    TroubleEntry,
+)
 from ._labels import (
     COMPOSE_PROJECT_LABEL,
     SWARM_SERVICE_LABEL,
@@ -59,6 +70,12 @@ def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
         manager = attrs.get("ManagerStatus") or {}
         state = attrs.get("Status", {}).get("State")
         spec = attrs.get("Spec", {})
+        # Absence and unreachability are kept apart. A worker carries no
+        # ManagerStatus, so the key is missing rather than negative, and
+        # reading that as "unreachable" would report every worker in the
+        # cluster as a broken manager. Only a manager that actually reported a
+        # reachability gets a boolean here.
+        reachability = manager.get("Reachability")
         nodes.append(
             SwarmNode(
                 name=name,
@@ -68,6 +85,12 @@ def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
                 state=state,
                 # active / pause / drain — a drained node is ready but idle.
                 availability=spec.get("Availability"),
+                engine_version=(attrs.get("Description", {}).get("Engine") or {}).get(
+                    "EngineVersion"
+                ),
+                reachable_by_managers=(
+                    None if reachability is None else reachability == "reachable"
+                ),
             )
         )
     nodes.sort(key=lambda n: n.name)  # stable, alphabetical hostname order
@@ -113,6 +136,18 @@ def _container_image(container) -> str | None:
     """
     attrs = getattr(container, "attrs", {}) or {}
     return _without_digest((attrs.get("Config") or {}).get("Image"))
+
+
+def _is_pinned(service) -> bool:
+    """Whether a placement constraint nails this service to particular nodes.
+
+    An empty constraint list is not pinning -- Swarm writes one for services
+    that were never constrained at all, and reading it as a pin would mark the
+    whole cluster immovable.
+    """
+    template = (getattr(service, "attrs", {}) or {}).get("Spec", {}).get("TaskTemplate") or {}
+    constraints = (template.get("Placement") or {}).get("Constraints")
+    return bool(constraints)
 
 
 def _job_schedule(labels: dict) -> str | None:
@@ -198,8 +233,27 @@ def _desired_count(service) -> int | None:
         return None  # e.g. global-mode services
 
 
-def _service_tasks(service, id_to_name: dict[str, str]) -> tuple[list[ServiceTask], int]:
-    """Return (per-node tasks, unassigned count) for tasks that should run.
+class _TaskFacts(NamedTuple):
+    """What one filtered task listing yields, beyond the placement itself.
+
+    The last two fields exist so the trouble pre-selection and the
+    "never placed" case are answered from the listing the collector makes
+    anyway, rather than from a second call per service.
+    """
+
+    tasks: list[ServiceTask]
+    unassigned: int
+    #: When the youngest running task last changed state -- close enough to
+    #: "since when is this up". None where nothing is running.
+    newest_running_at: float | None
+    #: Why an unplaced task is unplaced, verbatim from Swarm: "no suitable
+    #: node (insufficient memory on 3 nodes)". This is the sentence people
+    #: open an SSH session to read.
+    placement_error: str | None
+
+
+def _service_tasks(service, id_to_name: dict[str, str]) -> _TaskFacts:
+    """Facts about the tasks that *should* be running.
 
     Mirrors the operations script: filter to desired-state ``running``, split
     into node-assigned tasks (reporting their *actual* state) and orphaned
@@ -208,36 +262,180 @@ def _service_tasks(service, id_to_name: dict[str, str]) -> tuple[list[ServiceTas
     try:
         all_tasks = service.tasks(filters={"desired-state": "running"})
     except Exception:
-        return [], 0
+        return _TaskFacts([], 0, None, None)
     tasks: list[ServiceTask] = []
     unassigned = 0
+    newest_running_at: float | None = None
+    placement_error: str | None = None
     for t in all_tasks:
         node_id = t.get("NodeID")
-        state = t.get("Status", {}).get("State", "unknown")
+        status = t.get("Status", {})
+        state = status.get("State", "unknown")
         if node_id:
             tasks.append(ServiceTask(node=id_to_name.get(node_id, node_id), state=state))
+            if state == "running":
+                at = _parse_timestamp(status.get("Timestamp"))
+                if at is not None and (newest_running_at is None or at > newest_running_at):
+                    newest_running_at = at
         else:
             unassigned += 1
+            if placement_error is None:
+                placement_error = (status.get("Err") or "").strip() or None
     tasks.sort(key=lambda task: task.node or "")
-    return tasks, unassigned
+    return _TaskFacts(tasks, unassigned, newest_running_at, placement_error)
+
+
+#: Task states Swarm uses for an attempt that went wrong. The same set
+#: ``JobRun.failed`` names, and deliberately excluding ``shutdown`` and
+#: ``complete``: a rolling update ends its old tasks cleanly, and counting
+#: those would report every ordinary image bump as a crash.
+_FAILED_TASK_STATES = frozenset({"failed", "rejected", "orphaned"})
+
+
+def _retention_limit(client) -> int | None:
+    """How many historic tasks Swarm keeps per slot, or None if unreadable.
+
+    It bounds every count taken from the history: at the Docker default of 5,
+    a service that fell twelve times is indistinguishable from one that fell
+    five. Knowing the bound is what lets the renderer say ``≥`` instead of
+    quietly understating the worst case. Unreadable is not fatal -- the count
+    is then reported as it stands, which is what was actually seen.
+    """
+    try:
+        orchestration = client.swarm.attrs["Spec"]["Orchestration"]
+        limit = int(orchestration["TaskHistoryRetentionLimit"])
+    except Exception:
+        return None
+    return limit if limit > 0 else None
+
+
+def _task_cause(status: dict) -> str | None:
+    """Why one finished task ended, from what Swarm kept about it."""
+    exit_code = ((status.get("ContainerStatus") or {}).get("ExitCode")) or 0
+    error = (status.get("Err") or "").strip()
+    if exit_code:
+        return f'exit {exit_code} · "{error}"' if error else f"exit {exit_code}"
+    return error or None
+
+
+def _failed_history(service, id_to_name: dict[str, str]) -> tuple[int, str | None, str | None]:
+    """(failures in the window, newest cause, newest node) from the task history.
+
+    The one expensive call in this module, which is why only pre-selected
+    services reach it. It is also the only place a *cause* survives: Swarm
+    keeps each attempt as its own task, where a local container overwrites its
+    exit code the moment it comes back up.
+    """
+    try:
+        tasks = service.tasks()
+    except Exception:
+        return 0, None, None
+    fails = 0
+    newest_at: float | None = None
+    cause: str | None = None
+    node: str | None = None
+    for task in tasks:
+        status = task.get("Status") or {}
+        if status.get("State") not in _FAILED_TASK_STATES:
+            continue
+        at = _parse_timestamp(status.get("Timestamp"))
+        if at is None or _now() - at > _TROUBLE_WINDOW_SECONDS:
+            continue
+        fails += 1
+        if newest_at is None or at > newest_at:
+            newest_at = at
+            cause = _task_cause(status)
+            node_id = task.get("NodeID")
+            node = id_to_name.get(node_id, node_id) if node_id else None
+    return fails, cause, node
+
+
+def _service_trouble(
+    service,
+    name: str,
+    id_to_name: dict[str, str],
+    facts: _TaskFacts,
+    running: int,
+    desired: int | None,
+    retention: int | None,
+) -> TroubleEntry | None:
+    """A trouble entry for one Swarm service, or None when it is fine.
+
+    The pre-selection is the cost argument of this whole feature. A service
+    that meets its replica count and has been up longer than the window is
+    dismissed without the history call, so in steady state -- which is nearly
+    always -- the extra traffic is zero. In an incident the few services that
+    qualify each pay one call, and in exchange the panel says what an SSH
+    session would have said.
+    """
+    short = desired is not None and running < desired
+    recent = (
+        facts.newest_running_at is not None
+        and _now() - facts.newest_running_at <= _TROUBLE_WINDOW_SECONDS
+    )
+    if not short and not recent:
+        return None
+
+    fails, cause, node = _failed_history(service, id_to_name)
+    if not fails:
+        # Nothing fell, so the only thing worth reporting is a service that
+        # never got anywhere -- and then Swarm's own sentence is the report.
+        if facts.placement_error:
+            return TroubleEntry(name=name, cause=facts.placement_error, severity="dead")
+        return None
+
+    up = running > 0
+    return TroubleEntry(
+        name=name,
+        node=node or (facts.tasks[0].node if facts.tasks else None),
+        fails=fails,
+        fails_capped=retention is not None and fails >= retention,
+        uptime_seconds=(
+            max(0.0, _now() - facts.newest_running_at)
+            if up and facts.newest_running_at is not None
+            else None
+        ),
+        cause=cause,
+        severity="recovered" if up else "dead",
+    )
 
 
 def _swarm_services(
-    client, critical: set[str], description_label: str, id_to_name: dict[str, str]
-) -> list[ServiceStatus]:
+    client,
+    critical: set[str],
+    description_label: str,
+    id_to_name: dict[str, str],
+    group_label: str,
+    memory: dict[str, _Memory],
+) -> tuple[list[ServiceStatus], list[TroubleEntry]]:
     services = []
+    trouble: list[TroubleEntry] = []
+    retention = _retention_limit(client)
     for svc in client.services.list():
         labels = _labels(svc)
-        tasks, unassigned = _service_tasks(svc, id_to_name)
+        facts = _service_tasks(svc, id_to_name)
+        tasks, unassigned = facts.tasks, facts.unassigned
         # The second task listing costs an API call, so only job rows pay for
         # it -- for a long-running service the current replicas are the answer
         # and its task history says nothing the panel shows.
         job = _is_job(svc, labels)
+        running = sum(1 for t in tasks if t.running)
+        desired = _desired_count(svc)
+        if not job:
+            # Jobs are excluded before the pre-selection even runs. One that
+            # is meant to start, finish and vanish would qualify on every
+            # scheduled run, and a quarter-hourly job would report dozens of
+            # "failures" for doing precisely its work. Their own rendering
+            # already carries the outcome, beside the schedule that makes it
+            # readable.
+            entry = _service_trouble(svc, svc.name, id_to_name, facts, running, desired, retention)
+            if entry is not None:
+                trouble.append(entry)
         services.append(
             ServiceStatus(
                 name=svc.name,
-                running_replicas=sum(1 for t in tasks if t.running),
-                desired_replicas=_desired_count(svc),
+                running_replicas=running,
+                desired_replicas=desired,
                 critical=svc.name in critical,
                 stack=labels.get(STACK_LABEL),
                 # The configured key wins; the legacy key is the fallback, so a
@@ -257,9 +455,15 @@ def _swarm_services(
                 schedule=_job_schedule(labels),
                 last_run=_last_run(svc, id_to_name) if job else None,
                 image=_service_image(svc),
+                # Presence, not truthiness -- see ServiceStatus.group. A
+                # service setting the key to "" is saying "group me with no
+                # one", which `.get()` alone could not tell from silence.
+                group=labels.get(group_label) if group_label in labels else None,
+                pinned=_is_pinned(svc),
             )
         )
-    return services
+        _apply_memory(services[-1], memory.get(svc.name))
+    return services, trouble
 
 
 def _raw_state(container) -> str:
@@ -291,7 +495,174 @@ def _is_completed_job(container) -> bool:
     return state.get("Status") == "exited" and state.get("ExitCode") == 0
 
 
-def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[str, str]]:
+#: The window is not decoration, it is half the qualifying rule. `RestartCount`
+#: is cumulative over a container's whole life and is not reset by a manual
+#: start (measured, Docker 29.7.2), so on its own it would pin a stumble from
+#: three months ago to the panel for ever, and the block would never be empty
+#: again. The counter says "it has fallen"; the window says "recently".
+#:
+#: Defined in model.py because the renderer names it in the heading.
+_TROUBLE_WINDOW_SECONDS = TROUBLE_WINDOW_SECONDS
+
+
+def _container_cause(state: dict) -> str | None:
+    """Why the container fell, where Docker still knows.
+
+    ``None`` for a container that is running again. This is not an oversight
+    but the measured behaviour: once it comes back, ``ExitCode`` reads 0 and
+    ``OOMKilled`` false, and the reason is simply gone. The renderer shows a
+    dash there. Swarm, whose finished tasks each keep their own exit code,
+    answers this better -- see the task history.
+    """
+    if state.get("Status") == "running":
+        return None
+    exit_code = state.get("ExitCode")
+    if state.get("OOMKilled"):
+        return f"OOMKilled · exit {exit_code}"
+    if not exit_code:
+        return None
+    cause = f"exit {exit_code}"
+    # Presence, not truthiness: Docker leaves `Error` as an empty string far
+    # more often than it fills it -- it was empty even for a confirmed OOM
+    # kill -- and appending it blindly would produce a trailing `· ""`.
+    error = (state.get("Error") or "").strip()
+    return f'{cause} · "{error}"' if error else cause
+
+
+def _container_trouble(container, name: str) -> TroubleEntry | None:
+    """A trouble entry for one local container, or None when it is fine.
+
+    Two conditions, and both are needed -- see ``_TROUBLE_WINDOW_SECONDS``.
+    """
+    attrs = getattr(container, "attrs", {}) or {}
+    restarts = attrs.get("RestartCount") or 0
+    if restarts <= 0:
+        return None
+    state = attrs.get("State") or {}
+    started = _parse_timestamp(state.get("StartedAt"))
+    if started is None:
+        return None
+    age = _now() - started
+    if age > _TROUBLE_WINDOW_SECONDS:
+        return None
+    status = state.get("Status")
+    if status == "running":
+        severity, uptime = "recovered", max(0.0, age)
+    elif status == "restarting":
+        severity, uptime = "restarting", None
+    else:
+        severity, uptime = "dead", None
+    return TroubleEntry(
+        name=name,
+        fails=restarts,
+        uptime_seconds=uptime,
+        cause=_container_cause(state),
+        severity=severity,
+    )
+
+
+@dataclass
+class _Memory:
+    """Memory held by one service's tasks on this node, accumulated."""
+
+    usage: int = 0
+    limit: int = 0
+    reservation: int = 0
+    tasks: int = 0
+    #: True once any task's figure could not be read. The sum is then a floor
+    #: over an unknown number of tasks, and reporting it as a total would
+    #: understate the service.
+    partial: bool = False
+
+
+def _container_memory(container) -> tuple[int, int, int] | None:
+    """(usage, limit, reservation) for one running container, or None.
+
+    ``one_shot`` is not optional. Without it the daemon collects two samples
+    before answering and blocks about a second *per container* (measured:
+    1009.7 ms for one, against 2.1 ms with it) -- on a node with twenty
+    containers that alone would cost the login path twenty seconds. The price
+    is that ``precpu_stats`` comes back zeroed and no CPU share can be
+    derived, which is why this reports memory only.
+
+    ``memory_stats.usage`` is not the figure anyone means. It includes the
+    page cache, and ``docker stats`` subtracts ``inactive_file`` (cgroup v2)
+    or ``total_inactive_file`` (v1) before printing. Measured against a live
+    daemon the difference was not cosmetic: one container reported 79.0 MB
+    raw against 32.4 MB real.
+
+    The limit is read from ``HostConfig.Memory`` rather than
+    ``memory_stats.limit``, because the latter is the host's total RAM when no
+    limit was set -- a plausible-looking number that would make every service
+    on the node look comfortable at a fraction of a percent.
+    """
+    try:
+        stats = container.stats(stream=False, one_shot=True)
+    except Exception:
+        return None
+    memory_stats = (stats or {}).get("memory_stats") or {}
+    usage = memory_stats.get("usage")
+    if usage is None:
+        return None
+    detail = memory_stats.get("stats") or {}
+    inactive = detail.get("inactive_file")
+    if inactive is None:
+        inactive = detail.get("total_inactive_file", 0)
+    host_config = (getattr(container, "attrs", {}) or {}).get("HostConfig") or {}
+    return (
+        max(0, int(usage) - int(inactive or 0)),
+        int(host_config.get("Memory") or 0),
+        int(host_config.get("MemoryReservation") or 0),
+    )
+
+
+def _record_memory(memory: dict[str, _Memory], name: str, container) -> None:
+    """Add one running container's figures to its service's running total.
+
+    Only running containers are asked. A stopped one holds nothing, and the
+    call would spend its two milliseconds to learn zero.
+    """
+    if _raw_state(container) != "running":
+        return
+    entry = memory.setdefault(name, _Memory())
+    reading = _container_memory(container)
+    if reading is None:
+        entry.partial = True
+        return
+    usage, limit, reservation = reading
+    entry.usage += usage
+    entry.limit += limit
+    entry.reservation += reservation
+    entry.tasks += 1
+
+
+def _apply_memory(service: ServiceStatus, reading: _Memory | None) -> None:
+    """Copy one service's accumulated figures onto its row.
+
+    ``None`` where nothing of the service runs here, and the fields stay
+    ``None`` -- distinct from zero, which would claim a measurement of nothing.
+
+    Limit and reservation are summed alongside usage, over the same tasks.
+    Comparing a summed usage against a single instance's limit would
+    manufacture an alarm out of arithmetic: two tasks of 100 MB each against
+    one 256 MB limit would read as 78% full when each is comfortably at 39%.
+    """
+    if reading is None or not reading.tasks:
+        return
+    service.memory_bytes = reading.usage
+    service.memory_limit = reading.limit or None
+    service.memory_reservation = reading.reservation or None
+    service.local_tasks = reading.tasks
+
+
+def _container_groups(
+    client,
+) -> tuple[
+    dict[tuple[str | None, str], list],
+    dict[str, str],
+    list[TroubleEntry],
+    dict[str, _Memory],
+]:
     """Groups of non-Swarm containers, and every container's id → service name.
 
     The map is built here rather than in a pass of its own because
@@ -303,6 +674,8 @@ def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[
     """
     groups: dict[tuple[str | None, str], list] = {}
     origins: dict[str, str] = {}
+    trouble: list[TroubleEntry] = []
+    memory: dict[str, _Memory] = {}
     for container in client.containers.list(all=True):
         labels = container_labels(container)
         swarm_service = labels.get(SWARM_SERVICE_LABEL)
@@ -311,6 +684,11 @@ def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[
             # through services.list() and so is skipped for grouping, but the
             # process rows still need to resolve its id.
             origins[container.id] = swarm_service
+            # Measured before the `continue` for the same reason the id is
+            # recorded here: this container belongs to a Swarm service, whose
+            # row is built from services.list() and never sees the container
+            # itself. This is the only pass that holds both.
+            _record_memory(memory, swarm_service, container)
             continue
         if _is_completed_job(container):
             continue
@@ -331,7 +709,15 @@ def _container_groups(client) -> tuple[dict[tuple[str | None, str], list], dict[
         key = (project, compose_identity(labels, container.name))
         origins[container.id] = f"{key[0]}_{key[1]}" if key[0] else key[1]
         groups.setdefault(key, []).append((container, labels))
-    return groups, origins
+        # Deliberately after every `continue` above, so the exclusions already
+        # decided there hold here too: a Swarm task is counted from the manager
+        # API instead, and a job that exited cleanly finished its work rather
+        # than falling over.
+        entry = _container_trouble(container, origins[container.id])
+        if entry is not None:
+            trouble.append(entry)
+        _record_memory(memory, origins[container.id], container)
+    return groups, origins, trouble, memory
 
 
 def _group_image(members) -> str | None:
@@ -350,9 +736,18 @@ def _group_image(members) -> str | None:
 
 def _container_services(
     client, critical: set[str], description_label: str, node_name: str | None
-) -> tuple[list[ServiceStatus], dict[str, str]]:
-    """Plain and Compose containers as ServiceStatus entries, and the id map."""
-    groups, origins = _container_groups(client)
+) -> tuple[list[ServiceStatus], dict[str, str], list[TroubleEntry], dict[str, _Memory]]:
+    """Plain and Compose containers as ServiceStatus entries.
+
+    Also yields the container-id map, the trouble entries and the per-service
+    memory readings -- all four fall out of the one listing this makes, and
+    walking it again for any of them would repeat a full inspect per container.
+    """
+    groups, origins, trouble, memory = _container_groups(client)
+    for entry in trouble:
+        # Only known here: these are by definition the containers of this host,
+        # and this is the layer that knows which node that is.
+        entry.node = node_name
     services: list[ServiceStatus] = []
     for (stack, name), members in groups.items():
         states = [_reported_state(container) for container, _ in members]
@@ -382,14 +777,75 @@ def _container_services(
                 image=_group_image(members),
             )
         )
+    for svc in services:
+        # The readings are keyed the way `origins` names a container --
+        # `<project>_<service>` -- while a ServiceStatus carries the two apart.
+        # Rebuilding the key here rather than storing a second one keeps a
+        # single naming rule in play.
+        _apply_memory(svc, memory.get(f"{svc.stack}_{svc.name}" if svc.stack else svc.name))
     services.sort(key=lambda svc: (svc.stack or "", svc.name))
-    return services, origins
+    return services, origins, trouble, memory
+
+
+#: Categories `/system/df` reports, as (response key, attribute name). A daemon
+#: that reports none of them is too old for this reading, and the collector
+#: then returns None rather than a row of zeroes -- "Docker occupies nothing"
+#: is a claim, and it would be a false one.
+_DF_CATEGORIES = (
+    ("ImageUsage", "images"),
+    ("ContainerUsage", "containers"),
+    ("VolumeUsage", "volumes"),
+    ("BuildCacheUsage", "build_cache"),
+)
+
+
+def _disk_usage(node: str | None, root_dir: str | None, timeout: float) -> DockerDiskUsage | None:
+    """Docker's own disk footprint, or None when it could not be read.
+
+    Deliberately builds its **own** client. `/system/df` was measured at 510 ms
+    against a daemon holding 47 images and 185 volumes, and the cost scales
+    with the number of objects -- so on a busy node it can exceed the socket
+    timeout the rest of this module runs on. That matters more than it looks:
+    `collect_docker` catches every exception and degrades to
+    SwarmInfo(reachable=False), so a slow reading taken on the shared client
+    would erase the entire DOCKER INFOS section -- swarm, stacks, nodes and
+    containers alike -- to report a disk figure. With its own client and its
+    own guard, a failure here costs one line.
+    """
+    try:
+        client = docker.from_env(timeout=timeout)
+        raw = client.df()
+        if not isinstance(raw, dict):
+            return None
+        usage = DockerDiskUsage(node=node, root_dir=root_dir)
+        seen = False
+        for key, attribute in _DF_CATEGORIES:
+            category = raw.get(key)
+            if not isinstance(category, dict):
+                continue
+            seen = True
+            size = int(category.get("TotalSize") or 0)
+            setattr(usage, attribute, size)
+            usage.used += size
+            usage.reclaimable += int(category.get("Reclaimable") or 0)
+        if not seen:
+            return None
+        volumes = raw.get("Volumes") or []
+        usage.volumes_total = len(volumes)
+        usage.volumes_unused = sum(
+            1 for v in volumes if (v.get("UsageData") or {}).get("RefCount", -1) == 0
+        )
+        return usage
+    except Exception:
+        return None
 
 
 def collect_docker(
     timeout: float = 1.5,
     critical: list[str] | None = None,
     description_label: str = DEFAULT_DESCRIPTION_LABEL,
+    df_timeout: float = 4.0,
+    group_label: str = DEFAULT_GROUP_LABEL,
 ) -> SwarmInfo:
     """Return Swarm and container health; never raises."""
     critical_set = set(critical or [])
@@ -403,25 +859,45 @@ def collect_docker(
             role = "manager" if swarm.get("ControlAvailable") else "worker"
             nodes, id_to_name = _node_map(client)
             local_node = id_to_name.get(swarm.get("NodeID") or "")
-            containers, origins = _container_services(
+            containers, origins, trouble, memory = _container_services(
                 client, critical_set, description_label, local_node
             )
+            swarm_services, swarm_trouble = _swarm_services(
+                client, critical_set, description_label, id_to_name, group_label, memory
+            )
+            trouble = trouble + swarm_trouble
             return SwarmInfo(
                 reachable=True,
                 enabled=True,
                 node_role=role,
                 node_count=swarm.get("Nodes") or (len(nodes) or None),
-                services=_swarm_services(client, critical_set, description_label, id_to_name),
+                services=swarm_services,
                 containers=containers,
                 nodes=nodes,
                 container_services=origins,
+                disk=_disk_usage(
+                    local_node or info.get("Name"), info.get("DockerRootDir"), df_timeout
+                ),
+                trouble=trouble,
+                # Carried unconditionally, though it is only ever rendered
+                # where `nodes` came back empty: a worker may not list the
+                # swarm, and then this is the only version anyone can state.
+                local_engine_version=info.get("ServerVersion") if isinstance(info, dict) else None,
             )
-        containers, origins = _container_services(client, critical_set, description_label, None)
+        containers, origins, trouble, _memory = _container_services(
+            client, critical_set, description_label, None
+        )
         return SwarmInfo(
             reachable=True,
             enabled=False,
             containers=containers,
             container_services=origins,
+            disk=_disk_usage(
+                info.get("Name") if isinstance(info, dict) else None,
+                info.get("DockerRootDir") if isinstance(info, dict) else None,
+                df_timeout,
+            ),
+            trouble=trouble,
         )
     except Exception:
         return SwarmInfo(reachable=False)
