@@ -59,6 +59,12 @@ def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
         manager = attrs.get("ManagerStatus") or {}
         state = attrs.get("Status", {}).get("State")
         spec = attrs.get("Spec", {})
+        # Absence and unreachability are kept apart. A worker carries no
+        # ManagerStatus, so the key is missing rather than negative, and
+        # reading that as "unreachable" would report every worker in the
+        # cluster as a broken manager. Only a manager that actually reported a
+        # reachability gets a boolean here.
+        reachability = manager.get("Reachability")
         nodes.append(
             SwarmNode(
                 name=name,
@@ -68,6 +74,12 @@ def _node_map(client) -> tuple[list[SwarmNode], dict[str, str]]:
                 state=state,
                 # active / pause / drain — a drained node is ready but idle.
                 availability=spec.get("Availability"),
+                engine_version=(attrs.get("Description", {}).get("Engine") or {}).get(
+                    "EngineVersion"
+                ),
+                reachable_by_managers=(
+                    None if reachability is None else reachability == "reachable"
+                ),
             )
         )
     nodes.sort(key=lambda n: n.name)  # stable, alphabetical hostname order
@@ -415,6 +427,10 @@ def collect_docker(
                 containers=containers,
                 nodes=nodes,
                 container_services=origins,
+                # Carried unconditionally, though it is only ever rendered
+                # where `nodes` came back empty: a worker may not list the
+                # swarm, and then this is the only version anyone can state.
+                local_engine_version=info.get("ServerVersion") if isinstance(info, dict) else None,
             )
         containers, origins = _container_services(client, critical_set, description_label, None)
         return SwarmInfo(

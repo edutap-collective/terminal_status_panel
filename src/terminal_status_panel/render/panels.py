@@ -574,33 +574,97 @@ def filesystem_panel(res: ResourceUsage | None) -> Group:
 
 
 def _node_health(node) -> Text:
-    """✅ ready and active · ⚠️ ready but drained/paused · 💀 unreachable."""
+    """✅ ready and active · ⚠️ drained/paused or unreachable · 💀 down."""
     if not node.reachable:
         return Text(f"{_DEAD} {node.state or 'down'}", style="red")
     if not node.operational:
         return Text(f"{_WARN} {node.availability or 'unavailable'}", style="yellow")
+    # Last, because it is the only one of the three that would otherwise render
+    # green. The orchestrator can call a node `ready` while the other managers
+    # cannot reach it, and that combination is a quorum risk wearing a healthy
+    # tick. The two earlier branches already cover nodes that look broken.
+    if node.reachable_by_managers is False:
+        return Text(f"{_WARN} unreachable", style="yellow")
     return Text(_OK)
 
 
-def _node_inline(node, mark_leader: bool = False, peers=None) -> Text:
+def _node_inline(node, mark_leader: bool = False, peers=None, common_version=None) -> Text:
     line = Text.assemble((node.name, "bold"), " ") + _node_health(node)
     note = _node_tunnel_note(node, peers)
     if note is not None:
         line.append_text(note)
+    # Only a node that disagrees carries a version. Printing the common one
+    # beside every node would repeat what the summary line above already says,
+    # once per node, and bury the single entry worth finding.
+    if common_version is not None and node.engine_version not in (None, common_version):
+        line.append(f" {_WARN} {node.engine_version}", style="yellow")
     if mark_leader and node.leader:
         line.append(" (leader)", style="dim")
     return line
 
 
-def _nodes_inline(nodes, mark_leader: bool = False, peers=None) -> Text:
+def _nodes_inline(nodes, mark_leader: bool = False, peers=None, common_version=None) -> Text:
     if not nodes:
         return Text("n/a", style="dim")
     line = Text()
     for i, node in enumerate(sorted(nodes, key=lambda n: n.name)):
         if i:
             line.append("   ")
-        line.append_text(_node_inline(node, mark_leader=mark_leader, peers=peers))
+        line.append_text(
+            _node_inline(node, mark_leader=mark_leader, peers=peers, common_version=common_version)
+        )
     return line
+
+
+def _engine_versions(nodes) -> tuple[str | None, int]:
+    """The version to state in the header, and how many distinct ones exist.
+
+    The reported one is the most common; ties break on the lexicographically
+    greatest, purely so the choice is deterministic rather than dependent on
+    node ordering. Which of two equally frequent versions is called the norm
+    changes nothing that matters — both are rendered either way, one in the
+    header and the other beside the node that carries it.
+
+    Nodes that reported no version are ignored rather than counted as a third
+    kind. A version nobody stated is not a divergence; it is a silence.
+    """
+    stated = [n.engine_version for n in nodes if n.engine_version]
+    if not stated:
+        return None, 0
+    counts: dict[str, int] = {}
+    for version in stated:
+        counts[version] = counts.get(version, 0) + 1
+    reported = max(counts.items(), key=lambda item: (item[1], item[0]))[0]
+    return reported, len(counts)
+
+
+def _manager_quorum(nodes) -> Text | None:
+    """A warning when one more manager loss would cost the swarm its quorum.
+
+    Only ``False`` counts against a manager. ``None`` means the daemon said
+    nothing about reachability, and treating silence as failure would raise an
+    alarm about a cluster nobody measured.
+    """
+    managers = [n for n in nodes if n.role == "manager"]
+    if not managers:
+        return None
+    unreachable = [n for n in managers if n.reachable_by_managers is False]
+    if not unreachable:
+        return None
+    reachable = len(managers) - len(unreachable)
+    quorum = len(managers) // 2 + 1
+    if reachable > quorum:
+        return None
+    if reachable < quorum:
+        return Text(
+            f"{_WARN} {reachable}/{len(managers)} managers reachable — quorum lost",
+            style="red",
+        )
+    return Text(
+        f"{_WARN} {reachable}/{len(managers)} managers reachable — "
+        "one more failure locks the swarm",
+        style="yellow",
+    )
 
 
 def _short_node_names(nodes) -> list[tuple[str, str]]:
@@ -710,8 +774,30 @@ def _swarm_body(swarm: SwarmInfo, peers=None) -> RenderableType:
     summary.append(f"  ·  {len(swarm.services)} services  ·  {n_stacks} stacks")
     if swarm.containers:
         summary.append(f"  ·  {len(swarm.containers)} containers")
+    common_version, distinct = _engine_versions(swarm.nodes)
+    if common_version is not None:
+        summary.append(f"  ·  Docker {common_version}")
+        if distinct > 1:
+            summary.append(f" {_WARN} {distinct} versions", style="yellow")
+    elif not swarm.nodes and swarm.local_engine_version:
+        # A worker may not enumerate the swarm, so this is the only version
+        # there is. It is marked as local because an unqualified version in
+        # the swarm header reads as a statement about the swarm.
+        summary.append(f"  ·  Docker {swarm.local_engine_version}")
+        summary.append(" (local)", style="dim")
     table.add_row("Swarm", summary)
-    table.add_row("Nodes", _nodes_inline(swarm.nodes, mark_leader=True, peers=peers))
+    table.add_row(
+        "Nodes",
+        _nodes_inline(
+            swarm.nodes,
+            mark_leader=True,
+            peers=peers,
+            common_version=common_version if distinct > 1 else None,
+        ),
+    )
+    quorum = _manager_quorum(swarm.nodes)
+    if quorum is not None:
+        table.add_row("", quorum)
     return table
 
 

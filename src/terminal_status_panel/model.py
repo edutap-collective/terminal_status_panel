@@ -176,6 +176,23 @@ class SwarmNode:
     leader: bool = False
     state: str | None = None  # raw node state (ready / down / ...)
     availability: str | None = None  # active / pause / drain (Spec.Availability)
+    #: The engine this node runs, from ``Description.Engine.EngineVersion``.
+    #: ``None`` where the daemon did not report one, which must render as
+    #: nothing rather than as agreement with the others -- a node whose version
+    #: is unknown has not been shown to match.
+    engine_version: str | None = None
+    #: Whether the other managers can reach this one, from
+    #: ``ManagerStatus.Reachability``. Tri-state on purpose: a worker has no
+    #: ``ManagerStatus`` at all, and ``None`` there means *not applicable*.
+    #: Collapsing that into ``False`` would report every worker in the cluster
+    #: as an unreachable manager.
+    #:
+    #: This is a different question from ``reachable``, which is the manager's
+    #: view of the node as a whole. A node can be ``ready`` to the orchestrator
+    #: and unreachable to its fellow managers at the same time, and that
+    #: combination is precisely the one worth showing: it is a quorum risk that
+    #: otherwise renders as a healthy tick.
+    reachable_by_managers: bool | None = None
 
     @property
     def operational(self) -> bool:
@@ -207,6 +224,13 @@ class SwarmInfo:
     #: while the containers are being listed anyway; the process rows use it to
     #: turn a cgroup's bare container ID into a name a reader recognises.
     container_services: dict[str, str] = field(default_factory=dict)
+    #: This host's own engine version, from ``info()``. It matters only where
+    #: ``nodes`` is empty because the host could not enumerate the swarm -- a
+    #: worker may not -- and it is then the sole version there is. The renderer
+    #: marks it as local for that reason: an unqualified version in the swarm
+    #: header reads as a statement about the swarm, and on a worker that would
+    #: be exactly wrong.
+    local_engine_version: str | None = None
 
 
 @dataclass

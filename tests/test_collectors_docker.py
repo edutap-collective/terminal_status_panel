@@ -63,7 +63,15 @@ class _FakeService:
 
 class _FakeNode:
     def __init__(
-        self, node_id, hostname, state="ready", role="worker", leader=False, availability="active"
+        self,
+        node_id,
+        hostname,
+        state="ready",
+        role="worker",
+        leader=False,
+        availability="active",
+        engine_version=None,
+        reachability=None,
     ):
         self.id = node_id
         self.attrs = {
@@ -72,8 +80,14 @@ class _FakeNode:
             "Status": {"State": state},
             "Spec": {"Role": role, "Availability": availability},
         }
-        if leader:
-            self.attrs["ManagerStatus"] = {"Leader": True}
+        if engine_version is not None:
+            self.attrs["Description"]["Engine"] = {"EngineVersion": engine_version}
+        if leader or reachability is not None:
+            manager = self.attrs.setdefault("ManagerStatus", {})
+            if leader:
+                manager["Leader"] = True
+            if reachability is not None:
+                manager["Reachability"] = reachability
 
 
 class _FakeClient:
@@ -878,3 +892,63 @@ def test_a_compose_group_reports_the_image_that_is_actually_serving(monkeypatch)
     (group,) = docker_collector.collect_docker().containers
 
     assert group.image == "api:2.0"
+
+
+# --- engine version and manager reachability -------------------------------
+
+
+def test_nodes_carry_their_engine_version(monkeypatch):
+    client = _FakeClient(
+        "active",
+        nodes=[
+            _FakeNode("n1", "srv-01", role="manager", engine_version="28.5.2"),
+            _FakeNode("n2", "srv-02", engine_version="27.3.1"),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    by_name = {n.name: n for n in docker_collector.collect_docker().nodes}
+    assert by_name["srv-01"].engine_version == "28.5.2"
+    assert by_name["srv-02"].engine_version == "27.3.1"
+
+
+def test_a_node_without_an_engine_block_reports_no_version(monkeypatch):
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    assert docker_collector.collect_docker().nodes[0].engine_version is None
+
+
+def test_a_manager_carries_its_reachability(monkeypatch):
+    client = _FakeClient(
+        "active",
+        nodes=[
+            _FakeNode("n1", "srv-01", role="manager", leader=True, reachability="reachable"),
+            _FakeNode("n2", "srv-02", role="manager", reachability="unreachable"),
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    by_name = {n.name: n for n in docker_collector.collect_docker().nodes}
+    assert by_name["srv-01"].reachable_by_managers is True
+    assert by_name["srv-02"].reachable_by_managers is False
+
+
+def test_a_worker_has_no_reachability_rather_than_a_false_one(monkeypatch):
+    """A worker has no ManagerStatus at all, and absent must not read as down."""
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01", role="worker")])
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    assert docker_collector.collect_docker().nodes[0].reachable_by_managers is None
+
+
+def test_the_local_engine_version_is_kept_when_nodes_cannot_be_listed(monkeypatch):
+    """On a worker `nodes.list()` is refused, and only the own version remains."""
+
+    class _WorkerClient(_FakeClient):
+        @property
+        def nodes(self):
+            raise Exception("This node is not a swarm manager")
+
+    client = _WorkerClient("active")
+    client._info["ServerVersion"] = "28.5.2"
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.nodes == []
+    assert result.local_engine_version == "28.5.2"

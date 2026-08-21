@@ -1814,3 +1814,132 @@ def test_the_image_column_can_be_switched_off():
     assert "Image" not in out
     assert "2026-08-14_1206" not in out
     assert "Shop API" in out
+
+
+# --- engine version and manager reachability -------------------------------
+
+
+def _versioned_swarm(nodes, role="manager", local_version=None) -> SwarmInfo:
+    return SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role=role,
+        node_count=len(nodes) or None,
+        nodes=list(nodes),
+        local_engine_version=local_version,
+    )
+
+
+def _mgr(name, version="28.5.2", reachable_by_managers=True, leader=False):
+    return SwarmNode(
+        name,
+        reachable=True,
+        role="manager",
+        leader=leader,
+        state="ready",
+        availability="active",
+        engine_version=version,
+        reachable_by_managers=reachable_by_managers,
+    )
+
+
+def _wrk(name, version="28.5.2"):
+    return SwarmNode(
+        name,
+        reachable=True,
+        role="worker",
+        state="ready",
+        availability="active",
+        engine_version=version,
+    )
+
+
+def _swarm_line(out: str) -> str:
+    return next(line for line in out.splitlines() if line.strip().startswith("Swarm"))
+
+
+def _nodes_line(out: str) -> str:
+    return next(line for line in out.splitlines() if line.strip().startswith("Nodes"))
+
+
+def test_one_engine_version_renders_once_and_not_per_node():
+    swarm = _versioned_swarm([_mgr("srv-01", leader=True), _wrk("srv-02"), _wrk("srv-03")])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "Docker 28.5.2" in _swarm_line(out)
+    assert "28.5.2" not in _nodes_line(out)
+    assert "versions" not in _swarm_line(out)
+
+
+def test_a_deviating_engine_version_unfolds_only_that_node():
+    swarm = _versioned_swarm(
+        [_mgr("srv-01", leader=True), _wrk("srv-02", version="27.3.1"), _wrk("srv-03")]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2 versions" in _swarm_line(out)
+    nodes = _nodes_line(out)
+    assert "27.3.1" in nodes
+    # Only the deviating node carries a version; the others stay bare.
+    assert nodes.count("28.5.2") == 0
+
+
+def test_a_deviating_patch_level_warns_like_a_minor():
+    swarm = _versioned_swarm([_mgr("srv-01", leader=True), _wrk("srv-02", version="28.5.1")])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2 versions" in _swarm_line(out)
+    assert "28.5.1" in _nodes_line(out)
+
+
+def test_a_worker_labels_its_version_as_local():
+    swarm = _versioned_swarm([], role="worker", local_version="28.5.2")
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "Docker 28.5.2 (local)" in _swarm_line(out)
+
+
+def test_a_node_without_a_version_does_not_invent_one():
+    swarm = _versioned_swarm([_mgr("srv-01", version=None, leader=True)])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "Docker" not in _swarm_line(out)
+
+
+def test_an_unreachable_manager_is_marked_and_keeps_its_leader_suffix():
+    swarm = _versioned_swarm(
+        [
+            _mgr("srv-01", leader=True, reachable_by_managers=False),
+            _mgr("srv-02"),
+            _mgr("srv-03"),
+        ]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    nodes = _nodes_line(out)
+    assert "unreachable" in nodes
+    assert "(leader)" in nodes
+
+
+def test_the_quorum_line_appears_when_one_more_loss_would_lock_the_swarm():
+    swarm = _versioned_swarm(
+        [_mgr("srv-01", leader=True), _mgr("srv-02"), _mgr("srv-03", reachable_by_managers=False)]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2/3 managers reachable" in out
+
+
+def test_no_quorum_line_when_every_manager_is_reachable():
+    swarm = _versioned_swarm([_mgr("srv-01", leader=True), _mgr("srv-02"), _mgr("srv-03")])
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "managers reachable" not in out
+
+
+def test_the_quorum_line_counts_managers_not_nodes():
+    """Five nodes, three of them managers -- the ratio must be over managers."""
+    swarm = _versioned_swarm(
+        [
+            _mgr("srv-01", leader=True),
+            _mgr("srv-02"),
+            _mgr("srv-03", reachable_by_managers=False),
+            _wrk("srv-04"),
+            _wrk("srv-05"),
+        ]
+    )
+    out = _text(panels.services_section(swarm, Config()), width=200)
+    assert "2/3 managers reachable" in out
+    assert "4/5" not in out
