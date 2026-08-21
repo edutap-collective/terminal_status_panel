@@ -13,6 +13,13 @@ from . import platform_defaults
 #: Vendor-neutral, as befits a public package.
 DEFAULT_DESCRIPTION_LABEL = "status.description"
 
+#: Label that says which services belong in one row. Where it is absent the
+#: name heuristic in the renderer decides, which is deliberately conservative:
+#: it collapses a trailing `_<digits>` but not `-<digits>`, because a stack
+#: named `PostgreSQL-18` would otherwise be mutilated. This label removes the
+#: guessing wherever a deployment can simply state the answer.
+DEFAULT_GROUP_LABEL = "status.group"
+
 #: The key this panel read before the rename. Still honoured as a fallback by
 #: the Docker collector, so installations that set it -- and never set
 #: ``docker.description_label`` -- keep their descriptions without changing
@@ -161,6 +168,7 @@ class Config:
     docker_df_timeout: float = 4.0
     critical_services: list[str] = field(default_factory=list)
     description_label: str = DEFAULT_DESCRIPTION_LABEL
+    group_label: str = DEFAULT_GROUP_LABEL
     #: Whether the DOCKER INFOS rows carry the image they run. It is the one
     #: column that answers "which version is deployed here", and the one that
     #: costs the description its width on a narrow terminal -- hence a switch.
@@ -343,6 +351,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         docker_df_timeout=float(docker.get("df_timeout", 4.0)),
         critical_services=_list_setting(services.get("critical"), []),
         description_label=str(docker.get("description_label", DEFAULT_DESCRIPTION_LABEL)),
+        group_label=str(docker.get("group_label", DEFAULT_GROUP_LABEL)),
         show_image=bool(docker.get("show_image", True)),
         infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),

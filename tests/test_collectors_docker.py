@@ -28,6 +28,8 @@ class _FakeService:
         image=None,
         task_timestamp=None,
         placement_error=None,
+        constraints=None,
+        container_labels=None,
     ):
         self.task_timestamp = task_timestamp
         self.placement_error = placement_error
@@ -42,8 +44,16 @@ class _FakeService:
         self.attrs = {
             "Spec": {"Mode": mode or {"Replicated": {"Replicas": desired}}, "Labels": labels}
         }
-        if image is not None:
-            self.attrs["Spec"]["TaskTemplate"] = {"ContainerSpec": {"Image": image}}
+        if image is not None or constraints is not None or container_labels is not None:
+            template = self.attrs["Spec"].setdefault("TaskTemplate", {})
+            if image is not None or container_labels is not None:
+                spec = template.setdefault("ContainerSpec", {})
+                if image is not None:
+                    spec["Image"] = image
+                if container_labels is not None:
+                    spec["Labels"] = dict(container_labels)
+            if constraints is not None:
+                template["Placement"] = {"Constraints": list(constraints)}
         self._tasks = tasks
         #: (node_id, state, timestamp) for tasks Swarm has already shut down --
         #: what a finished job leaves behind. Only an unfiltered listing sees them.
@@ -1448,3 +1458,84 @@ def test_the_retention_limit_is_read_once_not_per_service(monkeypatch):
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     docker_collector.collect_docker()
     assert len(reads) == 1
+
+
+# --- grouping label and placement pinning ----------------------------------
+
+
+def _services(monkeypatch, *services):
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], services=list(services))
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    return {s.name: s for s in docker_collector.collect_docker().services}
+
+
+def test_the_group_label_is_read_from_service_labels(monkeypatch):
+    by_name = _services(
+        monkeypatch,
+        _FakeService("web", desired=1, tasks=[("n1", "running")],
+                     raw_labels={"status.group": "frontend"}),
+    )
+    assert by_name["web"].group == "frontend"
+
+
+def test_the_group_label_is_read_from_the_container_spec(monkeypatch):
+    by_name = _services(
+        monkeypatch,
+        _FakeService("web", desired=1, tasks=[("n1", "running")],
+                     container_labels={"status.group": "frontend"}),
+    )
+    assert by_name["web"].group == "frontend"
+
+
+def test_an_absent_group_label_is_none_not_empty(monkeypatch):
+    """None means 'not stated'; '' means 'stated as nothing'. They differ."""
+    by_name = _services(
+        monkeypatch, _FakeService("web", desired=1, tasks=[("n1", "running")])
+    )
+    assert by_name["web"].group is None
+
+
+def test_an_explicitly_empty_group_label_is_kept_as_empty(monkeypatch):
+    by_name = _services(
+        monkeypatch,
+        _FakeService("web", desired=1, tasks=[("n1", "running")], raw_labels={"status.group": ""}),
+    )
+    assert by_name["web"].group == ""
+
+
+def test_a_placement_constraint_marks_the_service_as_pinned(monkeypatch):
+    by_name = _services(
+        monkeypatch,
+        _FakeService("web", desired=1, tasks=[("n1", "running")],
+                     constraints=["node.hostname == srv-01"]),
+    )
+    assert by_name["web"].pinned is True
+
+
+def test_a_service_without_constraints_is_not_pinned(monkeypatch):
+    by_name = _services(
+        monkeypatch, _FakeService("web", desired=1, tasks=[("n1", "running")])
+    )
+    assert by_name["web"].pinned is False
+
+
+def test_an_empty_constraint_list_is_not_pinning(monkeypatch):
+    by_name = _services(
+        monkeypatch,
+        _FakeService("web", desired=1, tasks=[("n1", "running")], constraints=[]),
+    )
+    assert by_name["web"].pinned is False
+
+
+def test_the_group_label_key_is_configurable(monkeypatch):
+    client = _FakeClient(
+        "active",
+        nodes=[_FakeNode("n1", "srv-01")],
+        services=[
+            _FakeService("web", desired=1, tasks=[("n1", "running")],
+                         raw_labels={"example.group": "frontend"})
+        ],
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker(group_label="example.group")
+    assert result.services[0].group == "frontend"

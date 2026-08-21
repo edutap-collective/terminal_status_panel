@@ -2143,3 +2143,111 @@ def test_the_block_survives_a_narrow_terminal():
     out = _text(panels.services_section(_trouble_swarm(entries), Config()), width=80)
     assert "TROUBLE" in out
     assert "mystack_worker" in out
+
+
+# --- explicit grouping and the pin marker ----------------------------------
+
+
+def _svc(name, running=1, desired=1, group=None, pinned=False, stack=None, node="srv-01"):
+    return ServiceStatus(
+        name,
+        running,
+        desired,
+        stack=stack,
+        group=group,
+        pinned=pinned,
+        tasks=[ServiceTask(node, "running")] * running,
+    )
+
+
+def test_grouping_without_labels_is_exactly_what_it_was():
+    """The heuristic must not shift under services that carry no label."""
+    nodes = ["swarm01-mgr-01", "swarm01-wrk-01"]
+    assert panels._base_service_name("mystack_connector_1", nodes) == "mystack_connector"
+    assert (
+        panels._base_service_name("PostgreSQL-18_PostgreSQL-18", nodes)
+        == "PostgreSQL-18_PostgreSQL-18"
+    )
+    groups = panels._base_groups(
+        [_svc("mystack_connector_1"), _svc("mystack_connector_2"), _svc("other")], nodes
+    )
+    assert sorted(groups) == ["mystack_connector", "other"]
+
+
+def test_an_explicit_group_collapses_names_that_share_no_prefix():
+    groups = panels._base_groups(
+        [_svc("alpha", group="search"), _svc("beta", group="search"), _svc("gamma")],
+        ["swarm01-mgr-01"],
+    )
+    assert sorted(groups) == ["gamma", "search"]
+    assert len(groups["search"]) == 2
+
+
+def test_an_empty_group_label_groups_with_nothing():
+    """Presence, not truthiness -- the same rule the description label uses."""
+    groups = panels._base_groups(
+        [_svc("alpha", group=""), _svc("beta", group="")], ["swarm01-mgr-01"]
+    )
+    assert sorted(groups) == ["alpha", "beta"]
+
+
+def test_an_explicit_group_wins_over_the_heuristic():
+    """Two ordinals that are NOT instances of one service stay apart when said so."""
+    groups = panels._base_groups(
+        [_svc("infra_php_7", group="php7"), _svc("infra_php_8", group="php8")],
+        ["swarm01-mgr-01"],
+    )
+    assert sorted(groups) == ["php7", "php8"]
+
+
+def _pin_out(services):
+    swarm = SwarmInfo(
+        reachable=True,
+        enabled=True,
+        node_role="manager",
+        node_count=2,
+        nodes=[_mgr("srv-01", leader=True), _wrk("srv-02")],
+        services=list(services),
+    )
+    return _text(panels.services_section(swarm, Config()), width=200)
+
+
+#: A second, unrelated service in the stack, so the stack renders as a header
+#: with sub-rows. A stack holding exactly one row collapses onto the stack
+#: name -- existing behaviour, and it would hide the row under test.
+def _pinned_pair():
+    return [
+        _svc("mystack_search_1", group="search", pinned=True, stack="mystack"),
+        _svc("mystack_search_2", group="search", pinned=True, stack="mystack", node="srv-02"),
+        _svc("mystack_web", stack="mystack"),
+    ]
+
+
+def test_a_group_of_pinned_instances_is_marked():
+    out = _pin_out(_pinned_pair())
+    line = next(line for line in out.splitlines() if "search" in line and "2/2" in line)
+    assert "📌" in line
+
+
+def test_the_pin_shows_in_health_not_only_in_shortfall():
+    """Introducing a symbol only once everything is red teaches it to nobody."""
+    out = _pin_out(_pinned_pair())
+    line = next(line for line in out.splitlines() if "search" in line and "2/2" in line)
+    assert "✅" in line and "📌" in line
+
+
+def test_a_group_with_one_movable_member_is_not_pinned():
+    out = _pin_out(
+        [
+            _svc("mystack_search_1", group="search", pinned=True, stack="mystack"),
+            _svc("mystack_search_2", group="search", pinned=False, stack="mystack", node="srv-02"),
+            _svc("mystack_web", stack="mystack"),
+        ]
+    )
+    assert "📌" not in out
+
+
+def test_a_lone_service_is_never_pinned():
+    """A 1/1 row claims no mobility, so there is none to correct."""
+    out = _pin_out([_svc("mystack_solo", pinned=True, stack="mystack")])
+    assert "📌" not in out

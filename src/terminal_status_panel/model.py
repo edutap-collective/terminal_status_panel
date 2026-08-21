@@ -164,6 +164,20 @@ class ServiceStatus:
     #: rendering question, and a model that stored the shortened form could not
     #: answer the fuller one later.
     image: str | None = None
+    #: An explicit grouping key from the configured label. Services of one
+    #: stack sharing it render as one row. ``None`` means the label was not
+    #: set and the name heuristic decides instead; ``""`` means it was set to
+    #: nothing, which groups with no one -- presence, not truthiness, the same
+    #: rule ``description`` follows.
+    group: str | None = None
+    #: Whether this service is nailed to a node by a placement constraint.
+    #:
+    #: It changes what a collapsed row means. ``3/3`` on a replicated service
+    #: says "the orchestrator places three, and it will move them"; the same
+    #: figure over pinned instances says "three that cannot go anywhere". Read
+    #: as the first, the second borrows a resilience it does not have -- and
+    #: that is exactly the property that decides what happens when a node dies.
+    pinned: bool = False
 
 
 #: How far back a fall still counts. Twelve hours spans a night, so what broke

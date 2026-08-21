@@ -641,6 +641,11 @@ def _disk_line(disk, resources=None) -> Text:
 #: panel may least afford.
 _TROUBLE_MAX_ROWS = 10
 
+#: Marks a row of instances that are nailed to their nodes. Placed after the
+#: health glyph so the row reads "healthy, and immovable" rather than
+#: replacing one statement with the other.
+_PINNED = "📌"
+
 
 def _fmt_short_age(seconds: float | None) -> str:
     """An age that keeps its seconds while they still matter.
@@ -1007,11 +1012,46 @@ def _strip_stack_prefix(base: str, stack: str) -> str:
     return base
 
 
+def _group_key(svc, node_names) -> str:
+    """Which row a service belongs in.
+
+    An explicit ``status.group`` wins, because a deployment that states the
+    answer should not be second-guessed. It also fixes a fault the heuristic
+    knowingly accepts: two *unrelated* services differing only in a trailing
+    `_<digits>` -- `infra_php_7` and `infra_php_8` -- collapse into one row
+    and the second one's description vanishes with it. Labelled, they stay
+    apart.
+
+    An empty label is not a group. Presence, not truthiness: a service saying
+    ``status.group=""`` is saying "group me with no one", and falling through
+    to the heuristic there would group it by name after all.
+    """
+    if svc.group:
+        return svc.group
+    return _base_service_name(svc.name, node_names)
+
+
 def _base_groups(services, node_names) -> dict[str, list]:
     groups: dict[str, list] = {}
     for svc in services:
-        groups.setdefault(_base_service_name(svc.name, node_names), []).append(svc)
+        groups.setdefault(_group_key(svc, node_names), []).append(svc)
     return groups
+
+
+def _with_pin(cell: Text, services) -> Text:
+    """Mark a collapsed row whose members cannot move.
+
+    Only for a row that actually collapsed something. A lone `1/1` claims no
+    mobility, so there is none to correct -- and a symbol on every constrained
+    service would appear so often it would stop being read.
+
+    Shown in health as much as in failure. A marker introduced only once
+    everything is already red is a marker nobody has had the chance to learn.
+    """
+    if len(services) < 2 or not all(getattr(s, "pinned", False) for s in services):
+        return cell
+    return cell + Text(f" {_PINNED}")
+
 
 
 def _group_desc(services) -> str:
@@ -1138,7 +1178,7 @@ def _stack_matrix(
         table.add_row(Text("—", style="dim"), *[""] * trailing)
 
     def _row(label, services, desc):
-        cells = [label, verdict(services)]
+        cells = [label, _with_pin(verdict(services), services)]
         cells += [_node_cell(services, full) for full, _ in short]
         cells.append(Text(desc or ""))
         if show_image:

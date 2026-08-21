@@ -17,7 +17,7 @@ from typing import NamedTuple
 
 import docker
 
-from ..config import DEFAULT_DESCRIPTION_LABEL, LEGACY_DESCRIPTION_LABEL
+from ..config import DEFAULT_DESCRIPTION_LABEL, DEFAULT_GROUP_LABEL, LEGACY_DESCRIPTION_LABEL
 from ..model import (
     TROUBLE_WINDOW_SECONDS,
     DockerDiskUsage,
@@ -135,6 +135,18 @@ def _container_image(container) -> str | None:
     """
     attrs = getattr(container, "attrs", {}) or {}
     return _without_digest((attrs.get("Config") or {}).get("Image"))
+
+
+def _is_pinned(service) -> bool:
+    """Whether a placement constraint nails this service to particular nodes.
+
+    An empty constraint list is not pinning -- Swarm writes one for services
+    that were never constrained at all, and reading it as a pin would mark the
+    whole cluster immovable.
+    """
+    template = (getattr(service, "attrs", {}) or {}).get("Spec", {}).get("TaskTemplate") or {}
+    constraints = (template.get("Placement") or {}).get("Constraints")
+    return bool(constraints)
 
 
 def _job_schedule(labels: dict) -> str | None:
@@ -388,7 +400,11 @@ def _service_trouble(
 
 
 def _swarm_services(
-    client, critical: set[str], description_label: str, id_to_name: dict[str, str]
+    client,
+    critical: set[str],
+    description_label: str,
+    id_to_name: dict[str, str],
+    group_label: str,
 ) -> tuple[list[ServiceStatus], list[TroubleEntry]]:
     services = []
     trouble: list[TroubleEntry] = []
@@ -439,6 +455,11 @@ def _swarm_services(
                 schedule=_job_schedule(labels),
                 last_run=_last_run(svc, id_to_name) if job else None,
                 image=_service_image(svc),
+                # Presence, not truthiness -- see ServiceStatus.group. A
+                # service setting the key to "" is saying "group me with no
+                # one", which `.get()` alone could not tell from silence.
+                group=labels.get(group_label) if group_label in labels else None,
+                pinned=_is_pinned(svc),
             )
         )
     return services, trouble
@@ -706,6 +727,7 @@ def collect_docker(
     critical: list[str] | None = None,
     description_label: str = DEFAULT_DESCRIPTION_LABEL,
     df_timeout: float = 4.0,
+    group_label: str = DEFAULT_GROUP_LABEL,
 ) -> SwarmInfo:
     """Return Swarm and container health; never raises."""
     critical_set = set(critical or [])
@@ -723,7 +745,7 @@ def collect_docker(
                 client, critical_set, description_label, local_node
             )
             swarm_services, swarm_trouble = _swarm_services(
-                client, critical_set, description_label, id_to_name
+                client, critical_set, description_label, id_to_name, group_label
             )
             trouble = trouble + swarm_trouble
             return SwarmInfo(
