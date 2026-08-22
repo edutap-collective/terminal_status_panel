@@ -1795,3 +1795,44 @@ def test_a_timeout_is_named_a_timeout_and_nothing_else_is(monkeypatch):
     other = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=None)
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: other)
     assert docker_collector.collect_docker().disk.error == "unavailable"
+
+
+def test_the_shape_a_real_cluster_node_answers_with(monkeypatch):
+    """Proportions measured on a production manager, 2026-08-22:
+
+        Images         30 total, 17 active, 21.14 GB, 10.17 GB reclaimable
+        Containers     17 total, 17 active, 105.1 MB, 0 B reclaimable
+        Local Volumes  3908 total, 3 active, 434 kB, 434 kB reclaimable
+        Build Cache    0
+
+    Two of those were absent from the earlier fixtures: an empty build cache,
+    and a volume list three orders of magnitude longer than anything tested.
+    """
+    running = [{"SizeRw": 6 * 2**20, "State": "running"} for _ in range(17)]
+    volumes = [{"Name": "keep-%d" % i, "UsageData": {"RefCount": 1, "Size": 0}}
+               for i in range(3)]
+    volumes += [{"Name": "orphan-%d" % i, "UsageData": {"RefCount": 0, "Size": 111}}
+                for i in range(3905)]
+    payload = {
+        "LayersSize": 21 * 2**30,
+        "Images": (
+            [{"Size": 2**30, "SharedSize": 0, "Containers": 1} for _ in range(17)]
+            + [{"Size": 2**30, "SharedSize": 0, "Containers": 0} for _ in range(13)]
+        ),
+        "Containers": running,
+        "Volumes": volumes,
+        "BuildCache": [],
+    }
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=payload)
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    disk = docker_collector.collect_docker().disk
+
+    assert disk.error is None
+    # An empty build cache is zero, not a reason to give up on the whole reading.
+    assert disk.build_cache == 0
+    # Every container runs, so nothing there is reclaimable -- as docker system df says.
+    assert disk.containers == 17 * 6 * 2**20
+    assert (disk.volumes_unused, disk.volumes_total) == (3905, 3908)
+    # 21 GiB of layers, 17 of them held by a container.
+    assert disk.images == 21 * 2**30
+    assert disk.reclaimable >= 4 * 2**30
