@@ -1995,7 +1995,23 @@ def test_a_missing_disk_reading_says_so_rather_than_vanishing():
     """A line that disappears reads as 'nothing to report', which would be false."""
     out = _text(panels.services_section(_disk_swarm(None), Config()), width=200)
     line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
-    assert "n/a (timeout)" in line
+    assert "n/a" in line
+
+
+def test_the_disk_line_names_the_failure_it_had():
+    """It used to say 'timeout' whatever went wrong, which cost an incident an
+    hour of looking for a timeout that never happened."""
+    for reason in ("timeout", "unreadable", "unavailable"):
+        out = _text(panels.services_section(_disk_swarm(_disk(error=reason)), Config()), width=200)
+        line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+        assert f"n/a ({reason})" in line
+
+
+def test_a_failed_reading_is_never_coloured_as_pressure():
+    from terminal_status_panel.model import ResourceUsage
+
+    tight = ResourceUsage(filesystems=[_fs("/", 91.0)])
+    assert panels._disk_style(_disk(error="unreadable"), tight) is None
 
 
 def test_the_disk_line_renders_without_a_swarm():
