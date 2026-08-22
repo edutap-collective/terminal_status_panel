@@ -1809,10 +1809,10 @@ def test_the_shape_a_real_cluster_node_answers_with(monkeypatch):
     and a volume list three orders of magnitude longer than anything tested.
     """
     running = [{"SizeRw": 6 * 2**20, "State": "running"} for _ in range(17)]
-    volumes = [{"Name": "keep-%d" % i, "UsageData": {"RefCount": 1, "Size": 0}}
-               for i in range(3)]
-    volumes += [{"Name": "orphan-%d" % i, "UsageData": {"RefCount": 0, "Size": 111}}
-                for i in range(3905)]
+    volumes = [{"Name": f"keep-{i}", "UsageData": {"RefCount": 1, "Size": 0}} for i in range(3)]
+    volumes += [
+        {"Name": f"orphan-{i}", "UsageData": {"RefCount": 0, "Size": 111}} for i in range(3905)
+    ]
     payload = {
         "LayersSize": 21 * 2**30,
         "Images": (
