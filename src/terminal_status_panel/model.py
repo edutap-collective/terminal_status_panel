@@ -282,6 +282,15 @@ class DockerDiskUsage:
     #: ever mention it.
     volumes_unused: int = 0
     volumes_total: int = 0
+    #: Why there are no figures, where there are none. ``None`` when the
+    #: reading succeeded.
+    #:
+    #: It exists because the first version rendered "n/a (timeout)" for every
+    #: failure, and the first real incident was therefore spent looking for a
+    #: timeout that had never happened -- the daemon had answered in 84 ms, in
+    #: a response shape the collector did not read. Naming the cause is the
+    #: difference between a diagnosis and a guess.
+    error: str | None = None
 
 
 @dataclass

@@ -594,7 +594,7 @@ def _disk_style(disk, resources) -> str | None:
     an unmeasured disk is not evidence of comfort, but claiming pressure would
     be a finding nobody took.
     """
-    if disk is None or resources is None or not disk.root_dir:
+    if disk is None or disk.error or resources is None or not disk.root_dir:
         return None
     best = None
     for fs in resources.filesystems:
@@ -614,7 +614,9 @@ def _disk_line(disk, resources=None) -> Text:
     report", and that is the single reading here that would be untrue.
     """
     if disk is None:
-        return Text("n/a (timeout)", style="dim")
+        return Text("n/a", style="dim")
+    if disk.error:
+        return Text(f"n/a ({disk.error})", style="dim")
     style = _disk_style(disk, resources)
     line = Text()
     if disk.node:

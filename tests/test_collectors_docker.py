@@ -158,6 +158,8 @@ class _FakeClient:
     def df(self):
         if self._df is None:
             raise Exception("df not available")
+        if isinstance(self._df, Exception):
+            raise self._df
         return self._df
 
     class _Coll:
@@ -1090,7 +1092,9 @@ def test_a_failing_df_loses_only_itself(monkeypatch):
     )
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
-    assert result.disk is None
+    # The reading reports why it has nothing rather than vanishing, but it is
+    # still only the reading that is lost.
+    assert result.disk.error is not None and result.disk.used == 0
     assert result.reachable is True and result.enabled is True
     assert [s.name for s in result.services] == ["postgres"]
     assert [n.name for n in result.nodes] == ["srv-01"]
@@ -1700,3 +1704,94 @@ def test_a_service_with_no_local_task_has_no_figure(monkeypatch):
     svc = by_name["mystack_remote"]
     assert svc.memory_bytes is None
     assert svc.local_tasks == 0
+
+
+# --- /system/df: the pre-aggregate response form ----------------------------
+
+
+def _df_legacy_payload():
+    """What Docker 26.1.5 answers: lists and LayersSize, no *Usage aggregates.
+
+    Measured against lmzvd06-ccc-01 on 2026-08-22 — the keys were exactly
+    ['BuildCache', 'Containers', 'Images', 'LayersSize', 'Volumes'].
+    """
+    return {
+        "LayersSize": 20 * 2**30,
+        "Images": [
+            # In use by a container: its unique size is not reclaimable.
+            {"Size": 12 * 2**30, "SharedSize": 2 * 2**30, "Containers": 1},
+            # Referenced by nothing.
+            {"Size": 10 * 2**30, "SharedSize": 2 * 2**30, "Containers": 0},
+        ],
+        "Containers": [
+            {"SizeRw": 100 * 2**20, "State": "running"},
+            {"SizeRw": 40 * 2**20, "State": "exited"},
+        ],
+        "Volumes": [
+            {"Name": "a", "UsageData": {"RefCount": 1, "Size": 3 * 2**30}},
+            {"Name": "b", "UsageData": {"RefCount": 0, "Size": 2 * 2**30}},
+        ],
+        "BuildCache": [
+            {"Size": 5 * 2**30, "InUse": False, "Shared": False},
+            {"Size": 1 * 2**30, "InUse": True, "Shared": False},
+        ],
+    }
+
+
+def test_the_pre_aggregate_response_is_read_too(monkeypatch):
+    """Docker 26.1.5 answers without *Usage keys, and the panel showed n/a."""
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=_df_legacy_payload())
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    disk = docker_collector.collect_docker().disk
+    assert disk is not None and disk.error is None
+    # Images: LayersSize minus the unique size of images a container uses.
+    assert disk.images == 20 * 2**30
+    # Containers: writable layers; volumes and cache from their own lists.
+    assert disk.containers == 140 * 2**20
+    assert disk.volumes == 5 * 2**30
+    assert disk.build_cache == 6 * 2**30
+    assert (disk.volumes_unused, disk.volumes_total) == (1, 2)
+
+
+def test_the_pre_aggregate_form_computes_what_can_be_reclaimed(monkeypatch):
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=_df_legacy_payload())
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    disk = docker_collector.collect_docker().disk
+    # images: 20 GiB total - 10 GiB unique-and-in-use = 10 GiB
+    # containers: only the stopped one -> 40 MiB
+    # volumes: the unreferenced one -> 2 GiB
+    # build cache: the entry not in use -> 5 GiB
+    assert disk.reclaimable == 17 * 2**30 + 40 * 2**20
+
+
+def test_the_aggregate_form_still_wins_where_it_exists(monkeypatch):
+    """A daemon answering both must not be read twice or inconsistently."""
+    payload = _df_payload()
+    payload.update({k: v for k, v in _df_legacy_payload().items() if k not in payload})
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=payload)
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    disk = docker_collector.collect_docker().disk
+    assert disk.images == 20 * 2**30
+    assert disk.reclaimable == (13 + 2 + 1) * 2**30 + 2**28
+
+
+def test_a_response_with_neither_form_is_reported_as_unreadable(monkeypatch):
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df={"Something": 1})
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    assert docker_collector.collect_docker().disk.error == "unreadable"
+
+
+def test_a_timeout_is_named_a_timeout_and_nothing_else_is(monkeypatch):
+    """The panel claimed 'timeout' for every failure, which sent the first real
+    incident chasing a timeout that never happened."""
+    import requests
+
+    client = _FakeClient(
+        "active", nodes=[_FakeNode("n1", "srv-01")], df=requests.exceptions.ReadTimeout("slow")
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    assert docker_collector.collect_docker().disk.error == "timeout"
+
+    other = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=None)
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: other)
+    assert docker_collector.collect_docker().disk.error == "unavailable"
