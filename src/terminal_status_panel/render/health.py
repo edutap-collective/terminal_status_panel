@@ -88,6 +88,10 @@ def _service_lines(service: ClusterService) -> Text:
             line += f"  {member.role}"
         if member.warning:
             line += f"  {WARN} {member.warning}"
+            # The distance turns "it is behind" into something a reader can
+            # weigh: 4 kB and 2 GB are the same warning otherwise.
+            if member.lag_bytes is not None:
+                line += f" {format_bytes(member.lag_bytes)}"
         text.append(line + "\n")
     return text
 

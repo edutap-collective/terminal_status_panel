@@ -1177,3 +1177,86 @@ def test_output_without_a_timeline_field_parses_as_before():
     assert len(service.members) == 5
     assert service.quorum_ok is True
     assert all(m.healthy for m in service.members)
+
+
+# --- lag reports its size ---------------------------------------------------
+#
+# Any LSN difference used to yield a bare "lag". On an active cluster the
+# primary's LSN moves constantly, so the warning was almost always there and
+# was accordingly ignored -- during the incident it sat next to a genuine
+# failure and drowned it.
+#
+# No threshold is invented: we do not know at what point a byte count hurts on
+# a given cluster, and a guessed boundary would be exactly the kind of claim
+# this panel avoids. The number is more honest than a verdict.
+
+
+def test_a_lagging_secondary_reports_how_far_behind_it_is():
+    lagging = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: 0/70243B8",
+    )
+    service = clusters.parse_pg_state(lagging)
+    behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert behind.warning == "lag"
+    assert behind.lag_bytes is not None and behind.lag_bytes > 0
+
+
+def test_a_lagging_secondary_stays_healthy():
+    """It catches up on its own -- unlike a diverged one."""
+    lagging = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: 0/70243B8",
+    )
+    service = clusters.parse_pg_state(lagging)
+    behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert behind.healthy is True
+    assert service.quorum_ok is True
+
+
+def test_a_small_lag_and_a_large_one_read_differently():
+    small = clusters.parse_pg_state(
+        PG_STATE.replace(
+            "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+            "pg18-swarm01-wrk-03:5432 |   1: 0/7524000",
+        )
+    )
+    large = clusters.parse_pg_state(
+        PG_STATE.replace(
+            "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+            "pg18-swarm01-wrk-03:5432 |   1: 0/1000000",
+        )
+    )
+    small_lag = [m for m in small.members if m.name == "pg18-swarm01-wrk-03"][0].lag_bytes
+    large_lag = [m for m in large.members if m.name == "pg18-swarm01-wrk-03"][0].lag_bytes
+    assert small_lag is not None and large_lag is not None
+    assert large_lag > small_lag * 100, "die Groessenordnungen muessen sich unterscheiden"
+
+
+def test_an_identical_lsn_warns_about_nothing():
+    service = clusters.parse_pg_state(PG_STATE)
+    assert all(m.warning is None for m in service.members)
+
+
+def test_an_unreadable_lsn_yields_no_size_rather_than_a_wrong_one():
+    broken = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: not-an-lsn",
+    )
+    service = clusters.parse_pg_state(broken)
+    behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert behind.warning == "lag"
+    assert behind.lag_bytes is None, "eine falsche Distanz waere schlimmer als keine"
+
+
+def test_a_secondary_ahead_of_the_primary_is_not_reported_as_lagging():
+    """Right after a promotion the figures can cross. A negative distance is
+    not a lag, and rendering one would be nonsense."""
+    ahead = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: 0/85243B8",
+    )
+    service = clusters.parse_pg_state(ahead)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert member.warning == "lag"
+    assert member.lag_bytes is None, "eine negative Distanz waere Unsinn"

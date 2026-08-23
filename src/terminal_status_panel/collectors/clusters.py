@@ -261,6 +261,34 @@ def _node_from_member(name: str) -> str | None:
     return stripped or None
 
 
+def _lsn_position(lsn: str) -> int | None:
+    """A PostgreSQL LSN as a byte offset, or None if it is not one.
+
+    LSNs are written ``hi/lo`` in hexadecimal, where ``hi`` counts 4 GB
+    segments. Anything that does not parse yields None rather than a guess --
+    a wrong distance would be worse than no distance.
+    """
+    hi, _, lo = lsn.partition("/")
+    try:
+        return (int(hi, 16) << 32) | int(lo, 16)
+    except ValueError:
+        return None
+
+
+def _lag_distance(member_lsn: str, primary_lsn: str) -> int | None:
+    """How many bytes a member trails the primary by, or None if unknowable.
+
+    None rather than a guess in two cases: an LSN that does not parse, and a
+    member *ahead* of the primary. The latter is not hypothetical -- right
+    after a promotion the figures can cross, and a negative distance would be
+    nonsense to render.
+    """
+    here, there = _lsn_position(member_lsn), _lsn_position(primary_lsn)
+    if here is None or there is None or there <= here:
+        return None
+    return there - here
+
+
 def _split_timeline(tli_lsn: str) -> tuple[str | None, str]:
     """``5: 0/23942800`` -> ``("5", "0/23942800")``.
 
@@ -349,7 +377,9 @@ def parse_pg_state(output: str) -> ClusterService:
     leader = next((m.name for m in members if m.role == "primary"), None)
     for member in members:
         if member.role == "secondary" and primary_lsn and member.detail != primary_lsn:
-            member.warning = member.warning or "lag"
+            if member.warning is None:
+                member.warning = "lag"
+                member.lag_bytes = _lag_distance(member.detail or "", primary_lsn)
 
     healthy_count = sum(1 for m in members if m.healthy)
     return ClusterService(

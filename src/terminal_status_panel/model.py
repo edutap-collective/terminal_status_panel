@@ -383,6 +383,20 @@ class ClusterMember:
     healthy: bool | None = None
     detail: str | None = None  # kind-specific: LSN, brick path, endpoint
     warning: str | None = None  # short note: "lag", "→ primary"
+    #: How far a lagging member is behind, in bytes. ``None`` where there is no
+    #: lag or the distance could not be computed.
+    #:
+    #: A number, not a formatted string: the collector measures, the renderer
+    #: presents -- the same split ``ProcessInfo.memory_bytes`` already follows.
+    #: Formatting here would make a collector import from ``render``, which no
+    #: collector in this package does.
+    #:
+    #: Deliberately no threshold anywhere. Any LSN difference used to warn, and
+    #: on an active cluster the primary's LSN moves constantly -- so the notice
+    #: was almost always present and was accordingly ignored. A boundary would
+    #: only move that problem; we do not know at what point a byte count hurts
+    #: on a given cluster. The number lets the reader judge.
+    lag_bytes: int | None = None
 
 
 @dataclass
