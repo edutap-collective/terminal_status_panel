@@ -618,6 +618,52 @@ request is bounded by `docker.timeout` (1.5 s by default), the knob documented
 for it; the larger health timeout is applied to the client afterwards, so it
 bounds only the requests made inside the budget.
 
+### A stopped standby is not a slow one
+
+PostgreSQL members carry one of two notices when they are not level with the
+primary, and the difference between them is the difference between "wait" and
+"act":
+
+```
+✅ node-b  secondary  ⚠️ lag 952.0 B
+✅ node-c  secondary  ⚠️ lag 101.1 MB
+💀 node-d  secondary  ⚠️ TLI 4≠5 → report_lsn
+```
+
+**`lag <size>`** means the member trails the primary by that many bytes. It
+stays ✅ and counts toward quorum, because a lagging standby catches up on its
+own. There is deliberately **no threshold**: we cannot know at what point a
+byte count hurts on a given cluster, and 952 B beside 101 MB distinguishes
+itself without one. Where the distance cannot be computed — an unreadable LSN,
+or a member briefly *ahead* of the primary after a promotion — the size is
+omitted rather than guessed.
+
+**`TLI 4≠5`** means the member is on a different timeline than the primary.
+That is not a delay, it is a stop: after a failover the promoted node begins a
+new timeline, and a standby that did not follow will **never** catch up
+without intervention. Such a member is 💀, does **not** count toward quorum,
+and therefore turns the whole cluster's verdict red — which in turn reddens the
+service row in DOCKER INFOS, even while every container is running.
+
+The `→ assigned` marker stands beside it where a transition is in progress.
+Both are needed: one says the node is cut off, the other that the orchestrator
+is already working on it.
+
+**Why this is emphatic.** A production cluster once ran for hours with three of
+five nodes replicating nothing. Their WAL receivers kept the connections alive
+with keepalives, so pg_auto_failover reported them as healthy secondaries, and
+the panel — which compared only LSNs and discarded the timeline — reported
+`lag`. The service row read a green `5/5`, because the containers were indeed
+running. The nodes had stopped 3936 bytes past a fork point and PostgreSQL was
+refusing to start them.
+
+Nothing was measured too little. The mildest available interpretation was
+chosen, and it hid the severest state behind the most ordinary word.
+
+Two cases stay silent, per the rule below: with no member reporting `primary`
+there is no reference timeline and none is claimed, and output from an older
+`pg_autoctl` without the `TLI:` field parses as it always did.
+
 ### Icon vocabulary
 
 The section's core idea: it never claims to know something it did not

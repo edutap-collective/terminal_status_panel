@@ -1087,3 +1087,176 @@ def test_kind_for_service_is_case_insensitive():
 
 def test_glusterfs_has_no_docker_service_and_never_matches():
     assert clusters.kind_for_service("glusterfs") is None
+
+
+# --- timeline divergence ----------------------------------------------------
+#
+# A production cluster ran for hours with three of five nodes not replicating.
+# The panel reported "lag" -- the mildest reading available -- and the service
+# row showed a green 5/5, because the containers were in fact running. The
+# nodes were not behind; they had stopped on an older timeline, 3936 bytes past
+# the point where the new one forked, and PostgreSQL refused to start them.
+#
+# A lagging standby catches up. A diverged one never does.
+
+
+def _on_timeline(state: str, member: str, tli: int, lsn: str = "0/7000000") -> str:
+    """Move one member onto its own timeline."""
+    return state.replace(
+        f"{member}:5432 |   1: 0/75243B8",
+        f"{member}:5432 |   {tli}: {lsn}",
+    )
+
+
+def test_a_member_on_another_timeline_is_named_as_such():
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(diverged)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert member.warning is not None and "TLI 2" in member.warning
+    assert "1" in member.warning, "the reference timeline is missing"
+
+
+def test_a_diverged_member_does_not_show_its_lsn():
+    """On a divergence the byte figure suggests catching up is a matter of
+    time -- exactly the misreading this exists to prevent."""
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(diverged)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert "0/7000000" not in (member.detail or "")
+
+
+def test_a_diverged_member_is_not_healthy():
+    """The single lever: quorum_ok is counted from it, and _combined_icon
+    carries it into the service row in DOCKER INFOS."""
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(diverged)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert member.healthy is False
+
+
+def test_three_diverged_of_five_lose_the_quorum():
+    """The incident's state: containers running, cluster broken."""
+    broken = PG_STATE
+    for name in ("pg18-swarm01-wrk-04", "pg18-swarm01-mgr-01", "pg18-swarm01-wrk-01"):
+        broken = _on_timeline(broken, name, 2)
+    service = clusters.parse_pg_state(broken)
+    assert service.quorum_ok is False
+
+
+def test_the_transition_marker_stands_beside_the_timeline():
+    """One says the node is cut off, the other that the monitor is working on
+    it. Neither answers the other's question."""
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    moving = diverged.replace(
+        "|           secondary |           secondary",
+        "|           secondary |          report_lsn",
+        1,
+    )
+    service = clusters.parse_pg_state(moving)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert "TLI" in member.warning
+    assert "report_lsn" in member.warning
+
+
+def test_without_a_primary_no_timeline_verdict_is_made():
+    """During a failover there is no primary. Without a reference, no claim --
+    and nobody is marked unhealthy for it."""
+    headless = PG_STATE.replace("primary |             primary", "report_lsn |          report_lsn")
+    headless = _on_timeline(headless, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(headless)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert "TLI" not in (member.warning or "")
+    assert member.healthy is True
+
+
+def test_output_without_a_timeline_field_parses_as_before():
+    """Older pg_autoctl emits the LSN without a TLI prefix. This package runs
+    wherever it is installed."""
+    plain = PG_STATE.replace("   1: 0/75243B8", "      0/75243B8")
+    service = clusters.parse_pg_state(plain)
+    assert len(service.members) == 5
+    assert service.quorum_ok is True
+    assert all(m.healthy for m in service.members)
+
+
+# --- lag reports its size ---------------------------------------------------
+#
+# Any LSN difference used to yield a bare "lag". On an active cluster the
+# primary's LSN moves constantly, so the warning was almost always there and
+# was accordingly ignored -- during the incident it sat next to a genuine
+# failure and drowned it.
+#
+# No threshold is invented: we do not know at what point a byte count hurts on
+# a given cluster, and a guessed boundary would be exactly the kind of claim
+# this panel avoids. The number is more honest than a verdict.
+
+
+def test_a_lagging_secondary_reports_how_far_behind_it_is():
+    lagging = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: 0/70243B8",
+    )
+    service = clusters.parse_pg_state(lagging)
+    behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert behind.warning == "lag"
+    assert behind.lag_bytes is not None and behind.lag_bytes > 0
+
+
+def test_a_lagging_secondary_stays_healthy():
+    """It catches up on its own -- unlike a diverged one."""
+    lagging = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: 0/70243B8",
+    )
+    service = clusters.parse_pg_state(lagging)
+    behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert behind.healthy is True
+    assert service.quorum_ok is True
+
+
+def test_a_small_lag_and_a_large_one_read_differently():
+    small = clusters.parse_pg_state(
+        PG_STATE.replace(
+            "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+            "pg18-swarm01-wrk-03:5432 |   1: 0/7524000",
+        )
+    )
+    large = clusters.parse_pg_state(
+        PG_STATE.replace(
+            "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+            "pg18-swarm01-wrk-03:5432 |   1: 0/1000000",
+        )
+    )
+    small_lag = [m for m in small.members if m.name == "pg18-swarm01-wrk-03"][0].lag_bytes
+    large_lag = [m for m in large.members if m.name == "pg18-swarm01-wrk-03"][0].lag_bytes
+    assert small_lag is not None and large_lag is not None
+    assert large_lag > small_lag * 100, "die Groessenordnungen muessen sich unterscheiden"
+
+
+def test_an_identical_lsn_warns_about_nothing():
+    service = clusters.parse_pg_state(PG_STATE)
+    assert all(m.warning is None for m in service.members)
+
+
+def test_an_unreadable_lsn_yields_no_size_rather_than_a_wrong_one():
+    broken = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: not-an-lsn",
+    )
+    service = clusters.parse_pg_state(broken)
+    behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert behind.warning == "lag"
+    assert behind.lag_bytes is None, "eine falsche Distanz waere schlimmer als keine"
+
+
+def test_a_secondary_ahead_of_the_primary_is_not_reported_as_lagging():
+    """Right after a promotion the figures can cross. A negative distance is
+    not a lag, and rendering one would be nonsense."""
+    ahead = PG_STATE.replace(
+        "pg18-swarm01-wrk-03:5432 |   1: 0/75243B8",
+        "pg18-swarm01-wrk-03:5432 |   1: 0/85243B8",
+    )
+    service = clusters.parse_pg_state(ahead)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert member.warning == "lag"
+    assert member.lag_bytes is None, "eine negative Distanz waere Unsinn"
