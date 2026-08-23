@@ -1087,3 +1087,93 @@ def test_kind_for_service_is_case_insensitive():
 
 def test_glusterfs_has_no_docker_service_and_never_matches():
     assert clusters.kind_for_service("glusterfs") is None
+
+
+# --- timeline divergence ----------------------------------------------------
+#
+# A production cluster ran for hours with three of five nodes not replicating.
+# The panel reported "lag" -- the mildest reading available -- and the service
+# row showed a green 5/5, because the containers were in fact running. The
+# nodes were not behind; they had stopped on an older timeline, 3936 bytes past
+# the point where the new one forked, and PostgreSQL refused to start them.
+#
+# A lagging standby catches up. A diverged one never does.
+
+
+def _on_timeline(state: str, member: str, tli: int, lsn: str = "0/7000000") -> str:
+    """Move one member onto its own timeline."""
+    return state.replace(
+        f"{member}:5432 |   1: 0/75243B8",
+        f"{member}:5432 |   {tli}: {lsn}",
+    )
+
+
+def test_a_member_on_another_timeline_is_named_as_such():
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(diverged)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert member.warning is not None and "TLI 2" in member.warning
+    assert "1" in member.warning, "the reference timeline is missing"
+
+
+def test_a_diverged_member_does_not_show_its_lsn():
+    """On a divergence the byte figure suggests catching up is a matter of
+    time -- exactly the misreading this exists to prevent."""
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(diverged)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert "0/7000000" not in (member.detail or "")
+
+
+def test_a_diverged_member_is_not_healthy():
+    """The single lever: quorum_ok is counted from it, and _combined_icon
+    carries it into the service row in DOCKER INFOS."""
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(diverged)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert member.healthy is False
+
+
+def test_three_diverged_of_five_lose_the_quorum():
+    """The incident's state: containers running, cluster broken."""
+    broken = PG_STATE
+    for name in ("pg18-swarm01-wrk-04", "pg18-swarm01-mgr-01", "pg18-swarm01-wrk-01"):
+        broken = _on_timeline(broken, name, 2)
+    service = clusters.parse_pg_state(broken)
+    assert service.quorum_ok is False
+
+
+def test_the_transition_marker_stands_beside_the_timeline():
+    """One says the node is cut off, the other that the monitor is working on
+    it. Neither answers the other's question."""
+    diverged = _on_timeline(PG_STATE, "pg18-swarm01-wrk-03", 2)
+    moving = diverged.replace(
+        "|           secondary |           secondary",
+        "|           secondary |          report_lsn",
+        1,
+    )
+    service = clusters.parse_pg_state(moving)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert "TLI" in member.warning
+    assert "report_lsn" in member.warning
+
+
+def test_without_a_primary_no_timeline_verdict_is_made():
+    """During a failover there is no primary. Without a reference, no claim --
+    and nobody is marked unhealthy for it."""
+    headless = PG_STATE.replace("primary |             primary", "report_lsn |          report_lsn")
+    headless = _on_timeline(headless, "pg18-swarm01-wrk-03", 2)
+    service = clusters.parse_pg_state(headless)
+    member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
+    assert "TLI" not in (member.warning or "")
+    assert member.healthy is True
+
+
+def test_output_without_a_timeline_field_parses_as_before():
+    """Older pg_autoctl emits the LSN without a TLI prefix. This package runs
+    wherever it is installed."""
+    plain = PG_STATE.replace("   1: 0/75243B8", "      0/75243B8")
+    service = clusters.parse_pg_state(plain)
+    assert len(service.members) == 5
+    assert service.quorum_ok is True
+    assert all(m.healthy for m in service.members)

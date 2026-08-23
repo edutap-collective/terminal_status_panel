@@ -261,10 +261,29 @@ def _node_from_member(name: str) -> str | None:
     return stripped or None
 
 
+def _split_timeline(tli_lsn: str) -> tuple[str | None, str]:
+    """``5: 0/23942800`` -> ``("5", "0/23942800")``.
+
+    Older ``pg_autoctl`` versions emit the LSN without the timeline prefix.
+    Then there is no timeline to compare and none is claimed -- the check falls
+    back to what it did before. This package runs wherever it is installed, and
+    assuming the newest version is the mistake that produced the incident this
+    was written for.
+    """
+    if ":" not in tli_lsn:
+        return None, tli_lsn.strip()
+    timeline, lsn = tli_lsn.split(":", 1)
+    return timeline.strip() or None, lsn.strip()
+
+
 def parse_pg_state(output: str) -> ClusterService:
     """Parse the fixed-width table of ``pg_autoctl show state``."""
     members: list[ClusterMember] = []
     primary_lsn: str | None = None
+    primary_timeline: str | None = None
+    # Collected first, judged after: the primary can appear on any row, and a
+    # member's verdict depends on it.
+    raw: list[tuple[str, str | None, str, str, str]] = []
 
     for line in output.splitlines():
         # The separator row uses '+' rather than '|', so it drops out here.
@@ -274,19 +293,50 @@ def parse_pg_state(output: str) -> ClusterService:
         if len(columns) < 7 or columns[0] == "Name":
             continue
         name, _node, _host_port, tli_lsn, _connection, reported, assigned = columns[:7]
-        lsn = tli_lsn.split(":", 1)[1].strip() if ":" in tli_lsn else tli_lsn
+        timeline, lsn = _split_timeline(tli_lsn)
         if reported == "primary":
-            primary_lsn = lsn
+            primary_lsn, primary_timeline = lsn, timeline
+        raw.append((name, timeline, lsn, reported, assigned))
+
+    for name, timeline, lsn, reported, assigned in raw:
+        # A transition is ordinary and passes; a foreign timeline does not.
+        # Both are shown together where both apply: one says the node is cut
+        # off, the other that the monitor is already working on it, and
+        # neither answers the other's question.
+        transition = f"→ {assigned}" if reported != assigned else None
+        diverged = (
+            primary_timeline is not None and timeline is not None and timeline != primary_timeline
+        )
+        if diverged:
+            note = f"TLI {timeline}≠{primary_timeline}"
+            warning = f"{note} {transition}" if transition else note
+        else:
+            warning = transition
         members.append(
             ClusterMember(
                 name=name,
                 node=_node_from_member(name),
                 role=reported,
-                healthy=reported in ("primary", "secondary"),
-                detail=lsn,
-                # Reported != assigned means the cluster is mid-transition:
-                # neither healthy nor broken, so it is a warning.
-                warning=f"→ {assigned}" if reported != assigned else None,
+                # A node on a foreign timeline is NOT healthy, whatever the
+                # monitor reports about it. This one boolean is the whole
+                # lever: quorum_ok is counted from it, and the renderer's
+                # _combined_icon carries the verdict into the service row in
+                # DOCKER INFOS -- where a reader looks first.
+                #
+                # It matters because such a node looks perfectly fine. Its WAL
+                # receiver keeps the connection alive with keepalives, so
+                # pg_auto_failover reports it as a healthy secondary, and a
+                # production cluster once ran for hours that way with three of
+                # five nodes replicating nothing. They were not behind. They
+                # had stopped, and a standby that will never catch up
+                # contributes nothing in a failover -- it is a copy of
+                # yesterday.
+                healthy=(not diverged) and reported in ("primary", "secondary"),
+                # On a divergence the LSN is withheld deliberately: a byte
+                # figure suggests catching up is a matter of time, which is
+                # precisely the misreading this replaces.
+                detail=None if diverged else lsn,
+                warning=warning,
             )
         )
 
