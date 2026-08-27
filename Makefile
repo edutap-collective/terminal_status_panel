@@ -12,9 +12,12 @@ venv: ## Create .venv and install the package with its dev group
 	test -d $(VENV) || uv venv
 	uv sync --group dev
 
-lint: venv ## Run ruff checks and the type checker
+lint: venv ## Run ruff checks, the redefinition guard and the type checker
 	$(PYTHON) -m ruff check src tests tools
 	$(PYTHON) -m ruff format --check src tests tools
+	# Not covered by ruff: F811 only fires while the first binding is unused,
+	# so a pasted block whose names are called in between passes it clean.
+	$(PYTHON) tools/check_redefinitions.py
 	$(PYTHON) -m ty check src
 
 reformat: venv ## Autoformat and autofix
