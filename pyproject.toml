@@ -74,14 +74,21 @@ test = [
     # and a suite that goes red one morning for a reason unrelated to the
     # change that triggered it teaches people to ignore it.
     "cryptography>=44",
+    # Bounded for the same reason the runtime dependencies are, and with more
+    # urgency: uv resolves every group together, so an unconstrained tool drags
+    # the *whole* resolution down under `--resolution lowest-direct`. The
+    # minimum-deps job first went red on pillow 1.0 -- a 2010 release whose
+    # setup.py is Python 2 -- pulled in by the dev group while installing only
+    # this one.
+    "pytest-cov>=5",
 ]
-typecheck = ["ty"]
+typecheck = ["ty>=0.0.70"]
 dev = [
     {include-group = "test"},
     {include-group = "typecheck"},
-    "pdbp",
+    "pdbp>=1.5",
     "ruff>=0.16,<0.17",
-    "pillow",  # only to regenerate bundled logos via tools/generate_logos.py
+    "pillow>=11",  # only to regenerate bundled logos via tools/generate_logos.py
 ]
 
 [project.scripts]

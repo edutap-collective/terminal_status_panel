@@ -826,16 +826,23 @@ def test_without_a_configured_ca_the_system_trust_store_is_used(tmp_path):
     `_ssl_context` always runs too and always passes an explicit context --
     and `ssl.create_default_context()` loads from
     `ssl.get_default_verify_paths()`, which is the system store.
+
+    Asserted as "the same store a default context gets" rather than as a
+    certificate count, because the count is not portable: from a `cafile`
+    OpenSSL loads every root eagerly, from a `capath` -- the hashed directory
+    Debian, Ubuntu and FreeBSD ship -- it loads them by hash on demand, so a
+    perfectly configured host reports zero until a handshake needs one. An
+    earlier version of this test asserted the count and went red on every
+    platform except macOS.
     """
     cert, key = _self_signed(tmp_path, split_key=True)
     api = TraefikApiConfig(url="https://example.invalid/api", cert=cert, key=key)
 
     context = collector._ssl_context(api)
 
-    system_default = ssl.create_default_context()
-    loaded = system_default.cert_store_stats()["x509"]
-    assert loaded > 0, "no system roots on this host -- the assertion below would prove nothing"
-    assert context.cert_store_stats()["x509"] == loaded
+    paths = ssl.get_default_verify_paths()
+    assert paths.cafile or paths.capath, "no system trust store configured on this host"
+    assert context.cert_store_stats() == ssl.create_default_context().cert_store_stats()
 
 
 def test_a_configured_ca_replaces_the_system_roots(tmp_path):
@@ -845,12 +852,17 @@ def test_a_configured_ca_replaces_the_system_roots(tmp_path):
 
     context = collector._ssl_context(api)
 
-    # Exactly the one certificate handed in, and none of the system's set.
+    # Exactly the one certificate handed in, and not the system's set.
+    #
     # Counted under `x509` rather than `x509_ca`: the fixture is a self-signed
     # leaf with no basicConstraints, so OpenSSL does not file it as a CA -- an
     # accurate trust store for a test, and not what a real `traefik.ca` holds.
+    #
+    # A `cafile` is always loaded eagerly, so this count is 1 everywhere. What
+    # a default context reports is not portable (see the test above), so the
+    # second assertion says only that the two differ -- which is the claim.
     assert context.cert_store_stats()["x509"] == 1
-    assert ssl.create_default_context().cert_store_stats()["x509"] > 1
+    assert context.cert_store_stats() != ssl.create_default_context().cert_store_stats()
 
 
 def test_the_request_never_leaves_the_trust_decision_to_the_library(monkeypatch, tmp_path):
