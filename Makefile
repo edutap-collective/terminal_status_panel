@@ -2,7 +2,7 @@ PYTHON := .venv/bin/python
 VENV   := .venv
 
 .DEFAULT_GOAL := help
-.PHONY: help venv lint reformat test-local test-all clean
+.PHONY: help venv lint reformat test-local test-all docs docs-linkcheck docs-live clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -34,5 +34,16 @@ test-local: venv ## Run the test suite
 test-all: ## Run the test suite across every supported interpreter
 	uvx --with tox-uv tox
 
+docs: venv ## Build the documentation, warnings as errors
+	$(PYTHON) -m sphinx -b html -W --keep-going docs docs/_build/html
+
+docs-linkcheck: venv ## Check every link in the documentation resolves
+	$(PYTHON) -m sphinx -b linkcheck docs docs/_build/linkcheck
+
+# Autobuild is a writing tool, not a check: it is deliberately not -W, because
+# a warning should not close the browser tab you are working in.
+docs-live: venv ## Serve the documentation with live reload while writing
+	$(PYTHON) -m sphinx_autobuild docs docs/_build/html --open-browser
+
 clean: ## Remove the virtualenv and build artefacts
-	rm -rf $(VENV) dist build .pytest_cache htmlcov .coverage
+	rm -rf $(VENV) dist build .pytest_cache htmlcov .coverage docs/_build

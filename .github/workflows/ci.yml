@@ -112,6 +112,27 @@ jobs:
       - run: uv run --no-sync python tools/check_redefinitions.py
       - run: uv run --no-sync python -m ty check src
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.13"
+      # The dev group includes the docs one, and `make docs` depends on the
+      # `venv` target, which syncs dev. Installing anything narrower here would
+      # simply be undone by the first make invocation.
+      - run: uv sync --group dev
+      # -W: a broken cross-reference or an unreferenced page fails here rather
+      # than being found by a reader. The docs are the panel's contract -- the
+      # package has no public Python API -- so a build that merely "mostly
+      # works" is not good enough.
+      - run: uv run --no-sync make docs
+      # Separate step, and allowed to be the slow one: linkcheck reaches the
+      # network, so it is the job's only step that can fail for a reason that
+      # has nothing to do with the change under test.
+      - run: uv run --no-sync make docs-linkcheck
+
   freebsd:
     runs-on: ubuntu-latest
     steps:
