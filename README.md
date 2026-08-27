@@ -221,16 +221,21 @@ check what Traefik is actually wired to serve.
 ## Usage
 
 ```bash
-status-full    [--sections server,docker,health,traefik] [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
-status-server  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
-status-docker  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
-status-health  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
-status-traefik [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N]
+status-full    [--sections server,docker,health,traefik] [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N] [--debug]
+status-server  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N] [--debug]
+status-docker  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N] [--debug]
+status-health  [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N] [--debug]
+status-traefik [--width N] [--no-color] [--config PATH] [-f|--follow] [--interval N] [--debug]
 ```
 
 The command **always exits 0** so it can never break a login shell. If a
 collector fails (no Docker socket, non-Debian host, …) that section degrades to
 a placeholder instead of erroring.
+
+An error the collectors do not anticipate is swallowed too, and that used to be
+the end of it: an empty panel with no way to ask why. `--debug` lifts the
+silence without changing the contract — it still exits 0, and it still renders
+whatever it can. See [Diagnosing an empty panel](#diagnosing-an-empty-panel).
 
 ### Command-line options
 
@@ -243,6 +248,45 @@ a placeholder instead of erroring.
 | `-f`, `--follow` | off | Keep the panel on screen and refresh it, on all five commands. See [Follow mode](#follow-mode) below. |
 | `--interval N` | *(see below)* | Seconds between refreshes under `--follow`. Overrides both the config and the built-in default; values below 1 second are raised to 1 second. Ignored without `--follow`. |
 | `--processes N` | *(see below)* | Rows per process list in the TOP CPU / TOP RAM row. Overrides `[resources] top_processes` (default `5`). `0` turns the whole row off — see [Top processes](#top-processes) below. A negative value counts as `0`. |
+| `--debug`     | off     | Report config problems and any unexpected error on stderr. Still exits 0, still renders the panel; stdout stays the panel alone, so a pipe into an MOTD file is unaffected. `TERMINAL_STATUS_PANEL_DEBUG=1` does the same for a login shell whose profile snippet you would rather not edit. See [Diagnosing an empty panel](#diagnosing-an-empty-panel). |
+
+### Diagnosing an empty panel
+
+A value in the config file that cannot be read does not stop the panel: the
+built-in default is used instead, and the panel renders. What it does *not* do
+is guess — `thresholds.memory.warning = "soon"` is not a threshold, and the
+file is not silently treated as if it said something else.
+
+`--debug` prints what was skipped and why:
+
+```console
+$ status-full --debug --config /etc/terminal-status-panel/config.toml
+config: thresholds.memory.warning: expected a number (found 'soon', using 75.0)
+config: docker.show_image: expected true or false (found 'maybe', using True)
+```
+
+With a clean file it says so, rather than printing nothing — silence would not
+distinguish "no problems" from "the flag did nothing".
+
+Two readings are worth knowing about because they are easy to write by
+accident:
+
+- **A quoted boolean is read as written.** `show_image = "false"` means false.
+  Python's own `bool("false")` is `True`, so this used to mean the opposite of
+  what it said. TOML has a real boolean and `show_image = false` remains the
+  right way to write it; the quoted form is forgiven, not preferred.
+- **A value nobody can have meant falls back rather than being honoured.** A
+  `width` below 20 leaves no room for one column of content, and a `timeout` of
+  0 aborts every call before it starts. These are reported, not clamped: a typo
+  clamped to the nearest legal value disappears behind plausible behaviour.
+
+If the panel is empty because something raised rather than because of the
+config, `--debug` names the stage and the exception:
+
+```console
+$ status-full --debug
+failed while collecting the data: PermissionError: [Errno 13] /var/run/docker.sock
+```
 
 Colours are always **forced on** (unless `--no-color`), because at MOTD
 generation time there is no TTY to auto-detect a colour terminal.
