@@ -4,10 +4,16 @@
     "config:recommended",
     ":semanticCommits",
   ],
-  // The package declares lower bounds and ships no lock file, so there is
-  // nothing to bump for runtime dependencies. What is worth watching is the
-  // pinned tooling: the ruff floor-and-ceiling in pyproject, the hook
-  // revisions in .pre-commit-config.yaml, and the GitHub Actions versions.
+  // The runtime dependencies carry no version constraint at all -- not a
+  // lower bound, not an upper one -- and no lock file is committed, so there
+  // is nothing here for Renovate to bump. That is a gap rather than a design:
+  // the published metadata currently claims every release of rich, docker,
+  // psutil, distro, dnspython, pyyaml and httpx is supported. Once tested
+  // lower bounds are declared, revisit whether this file should watch them.
+  //
+  // What is worth watching today is the pinned tooling: the ruff
+  // floor-and-ceiling in pyproject, the hook revisions in
+  // .pre-commit-config.yaml, and the GitHub Actions versions.
   enabledManagers: ["github-actions", "pre-commit", "pep621"],
   "pre-commit": {
     enabled: true,

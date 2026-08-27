@@ -50,6 +50,10 @@ jobs:
       - run: uv sync --group dev
       - run: uv run --no-sync python -m ruff check src tests tools
       - run: uv run --no-sync python -m ruff format --check src tests tools
+      # Ruff's own F811 does not cover this: it fires only while the first
+      # binding is unused, and a pasted block whose names are called between
+      # the two copies never looks unused to it. See the tool's docstring.
+      - run: uv run --no-sync python tools/check_redefinitions.py
       - run: uv run --no-sync python -m ty check src
 
   freebsd:

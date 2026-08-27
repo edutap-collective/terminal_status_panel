@@ -2,7 +2,8 @@
 
 Five console scripts share this module:
 
-- ``status-full``    — the default sections (``server`` + ``docker`` + ``health``).
+- ``status-full``    — every section the layout knows how to build
+  (``server`` + ``docker`` + ``health`` + ``traefik``).
 - ``status-server``  — only the system/server section.
 - ``status-docker``  — only the Docker section.
 - ``status-health``  — only the cluster health section.
@@ -12,8 +13,9 @@ Each section collects only the data it needs, so ``status-docker`` never
 touches the system collectors and ``status-server`` never opens the Docker
 socket.
 
-``status-traefik`` is deliberately not part of ``status-full``'s default —
-see ``DEFAULT_SECTIONS`` below.
+``status-traefik`` renders the same TRAEFIK WIRING block ``status-full``
+does; what it saves is the rest — the system, Docker and health collectors
+a bare ``status-full`` pays for. See ``DEFAULT_SECTIONS`` below.
 """
 
 from __future__ import annotations
@@ -36,10 +38,13 @@ from .follow import run_follow
 from .model import PanelData, ProcessSnapshot
 from .render.layout import SECTIONS, build_layout
 
-# The sections a bare `status-full` renders — every section the layout knows
-# how to build. The wiring would bury the banner as a tree, so `build_layout`
-# renders it in summary form whenever it appears beside other sections; the
-# full tree is what `status-traefik` is for.
+# The sections a bare `status-full` renders: every section the layout knows
+# how to build, the wiring included. There is no second, shorter rendering of
+# it — `traefik_block` is handed the section data and nothing about its
+# neighbours, so the tree `status-traefik` prints is the tree `status-full`
+# prints. Keeping the two identical is the point: the wiring block holds
+# findings, and a panel that quietly abbreviated them would hide exactly what
+# it exists to surface.
 DEFAULT_SECTIONS: tuple[str, ...] = SECTIONS
 
 
