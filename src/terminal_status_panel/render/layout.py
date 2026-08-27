@@ -9,9 +9,11 @@ The panel is split into four independently selectable sections:
 
 ``build_layout`` renders whichever sections are requested (default: all of
 ``SECTIONS``), followed by a shared footer, and stretches to the console
-width. ``SECTIONS`` lists every section the layout knows how to build, so
-``--sections traefik`` works — it is not the same as the *default* set of
-sections a bare ``status-full`` renders; see ``cli.DEFAULT_SECTIONS`` for that.
+width. ``SECTIONS`` lists every section the layout knows how to build, and
+``cli.DEFAULT_SECTIONS`` is defined as exactly this tuple — a bare
+``status-full`` renders all four. A section is rendered the same way however
+many others accompany it: a builder receives the panel data and the config,
+never the list of its neighbours.
 """
 
 from __future__ import annotations

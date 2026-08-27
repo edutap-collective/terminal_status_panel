@@ -76,12 +76,57 @@ def test_traefik_is_a_known_section():
 
 
 def test_traefik_is_in_the_default_full_panel():
-    """It renders there in summary form — the tree would bury the banner, but
-    leaving the wiring out of the panel people actually see hides the findings
-    it exists to surface."""
+    """Leaving the wiring out of the panel people actually see would hide the
+    findings it exists to surface."""
     from terminal_status_panel import cli
 
     assert "traefik" in cli.DEFAULT_SECTIONS
+
+
+def test_the_default_sections_are_pinned():
+    """The set a bare ``status-full`` renders, written out rather than derived.
+
+    Asserting ``DEFAULT_SECTIONS == SECTIONS`` would pass however both change,
+    which is how the module docstring came to claim for three releases that
+    Traefik was not a default section while the code had already made it one.
+    Changing this tuple is a decision about what every login shows; it should
+    cost a deliberate edit here.
+    """
+    from terminal_status_panel import cli
+
+    assert cli.DEFAULT_SECTIONS == ("server", "docker", "health", "traefik")
+    assert SECTIONS == ("server", "docker", "health", "traefik")
+
+
+def test_a_section_is_rendered_the_same_beside_others_as_alone():
+    """The claim the old docstring got wrong: there is no summary form.
+
+    ``status-traefik`` and ``status-full`` print the same TRAEFIK WIRING block.
+    A builder is handed the data and the config and never learns which other
+    sections are present, so it *cannot* abbreviate itself -- but that is an
+    invariant worth holding rather than rediscovering.
+    """
+    from rich.console import Console
+
+    data = PanelData(health=HealthInfo())
+
+    def render(sections):
+        console = Console(width=100, force_terminal=False, color_system=None)
+        with console.capture() as capture:
+            console.print(build_layout(data, Config(), sections=sections))
+        return capture.get()
+
+    def wiring_block(output):
+        # Cut the shared footer off: it carries `datetime.now()` to the second,
+        # so comparing it would make this test fail on a second boundary.
+        start = output.index("TRAEFIK WIRING")
+        end = output.index("Tip: Run", start)
+        return output[start:end].rstrip()
+
+    alone = wiring_block(render(("traefik",)))
+    beside = wiring_block(render(("health", "traefik")))
+    assert alone == beside
+    assert alone  # a comparison of two empty strings would prove nothing
 
 
 def test_docker_section_receives_the_health_data(monkeypatch):
