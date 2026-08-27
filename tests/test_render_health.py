@@ -9,6 +9,7 @@ from terminal_status_panel.model import (
     HealthInfo,
     PeerReachability,
 )
+from terminal_status_panel.render import icons
 from terminal_status_panel.render.health import health_section
 
 
@@ -104,7 +105,7 @@ def test_unobservable_member_health_renders_a_neutral_dot():
         ],
     )
     output = _render(health)
-    assert "·" in output
+    assert icons.UNKNOWN in output
     assert "✅ mongodb-4" not in output
 
 
@@ -260,7 +261,7 @@ def test_unreported_quorum_says_so_and_has_no_neutral_dot_in_the_header():
     output = _render(health)
     assert "quorum not reported" in output
     header_line = next(line for line in output.splitlines() if "rustfs-vol" in line)
-    assert "·" not in header_line
+    assert icons.UNKNOWN not in header_line
 
 
 def test_quorum_true_and_false_are_unchanged():

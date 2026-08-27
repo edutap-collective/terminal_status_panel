@@ -118,7 +118,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     # INFOS block: every router's service line is resolved against the Swarm
     # service list, and without it `status-traefik` — the command the README
     # documents as the way to run the wiring viewer — could only ever print
-    # the neutral `·`, never a verdict.
+    # the neutral `⬜`, never a verdict.
     swarm = (
         collect_docker(
             timeout=cfg.docker_timeout,

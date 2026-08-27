@@ -8,7 +8,7 @@ up as a Docker task, which is the case where a replica count on its own lies.
 
 The reconciliation runs the other way too. See ``_combined_icon``: a replica
 state measured ``💀`` or ``⚠️`` is a fact about *this* Docker service and is
-never softened by a cluster-level ``✅`` or ``·``.
+never softened by a cluster-level ``✅`` or ``⬜``.
 
 Pure: no Rich layout, no I/O, so the table of cases is testable directly.
 """

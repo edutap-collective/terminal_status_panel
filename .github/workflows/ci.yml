@@ -79,7 +79,7 @@ jobs:
           uv run --no-sync python - <<'EOF'
           import importlib.metadata as md
           expected = {
-              "rich": "12.6.0", "docker": "6.0.0", "psutil": "5.9.8",
+              "rich": "15.0.0", "docker": "6.0.0", "psutil": "5.9.8",
               "distro": "1.5.0", "dnspython": "2.0.0", "PyYAML": "6.0.1",
               "httpx2": "2.12.0",
           }

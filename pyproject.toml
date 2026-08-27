@@ -32,9 +32,17 @@ authors = [
 # claim: docker 5.0.3 passes the whole suite on 3.11 and cannot even be
 # imported on 3.12 or later, because it reaches for `distutils`.
 dependencies = [
-    # 12.6 renders every construction used here (Group, Table.grid,
-    # Text.from_ansi, Screen).
-    "rich>=12.6",
+    # 15.0 is the first release whose `cell_len` measures every glyph in the
+    # status vocabulary the way a terminal does. Up to 14.1 it reports `⚠️`
+    # (U+26A0 U+FE0F) as one cell where the terminal draws two, so every
+    # warning row in the panel was one column out. Measured across 12.6, 13.0,
+    # 13.3.5, 13.7.1, 13.9.4, 14.0, 14.1 and 15.0; the change lands in 15.0.
+    #
+    # Every older construction the panel uses (Group, Table.grid,
+    # Text.from_ansi, Screen) works from 12.6, so this floor is about layout
+    # correctness rather than API availability -- but a status panel whose
+    # columns do not line up is not doing its job.
+    "rich>=15.0",
     # 6.0 is the floor Python sets, not the API: 5.x imports `distutils`,
     # removed in 3.12. `container.stats(one_shot=True)` needs 5.0 anyway.
     "docker>=6.0",

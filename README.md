@@ -47,10 +47,10 @@ out in five tiers:
   column and its node cell, so a lost instance is silent but a broken one is
   not. Each row also
   carries a **Working** cell right after the service name: an icon plus the
-  row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
+  row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `⬜ 0/0`.
   Five rules keep that cell from over-claiming:
 
-  - a service scaled to zero replicas renders `· 0/0`, not `💀` — that is a
+  - a service scaled to zero replicas renders `⬜ 0/0`, not `💀` — that is a
     decision, not an outage;
   - for the four clustered services that actually run as Docker services
     (PostgreSQL, MongoDB, Kafka, RustFS — GlusterFS is queried on the host via
@@ -58,10 +58,10 @@ out in five tiers:
     **icon** comes from that service's own CLUSTER HEALTH verdict while the
     **count** stays Docker's running/desired tally, so the two are allowed to
     disagree on purpose — except that a row measured `💀` or `⚠️` by its own
-    replicas keeps that icon: no cluster-level `✅` or `·` can talk a row with
+    replicas keeps that icon: no cluster-level `✅` or `⬜` can talk a row with
     nothing (or not everything) running into looking healthy;
   - under `status-docker`, which runs without the health section, a clustered
-    service's cell falls back to `·` plus Docker's own count instead of a
+    service's cell falls back to `⬜` plus Docker's own count instead of a
     replica-derived `✅` — "five brokers are running" is not the claim this
     column makes — and the same fallback applies when the probe found no
     member of that service on this node, or the kind is not listed in
@@ -81,7 +81,7 @@ out in five tiers:
     recognised either by the [swarm-cronjob](https://github.com/crazy-max/swarm-cronjob)
     labels (`swarm.cronjob.enable=true`) or by Swarm's own job modes
     (`ReplicatedJob`/`GlobalJob`, Docker 20.10+). Its cell reads `⏰ ok 12h`
-    when the last run completed, `💀 ✗ 20h` when it failed, `· never` when
+    when the last run completed, `💀 ✗ 20h` when it failed, `⬜ never` when
     there is no run to measure, and an ordinary `✅ 1/1` while a run is in
     progress. The outcome is taken from the *newest* task, not the most severe
     one: a job that failed yesterday and succeeded this morning is healthy.
@@ -131,7 +131,7 @@ out in five tiers:
   participates in (PostgreSQL, MongoDB, Kafka, GlusterFS, RustFS) with
   leader/member state, WireGuard peer handshake ages (TCP-probe fallback when
   passwordless sudo is unavailable), and DNS consistency checks. Every check
-  runs concurrently under a shared time budget (default 5 s); a check that
+  runs concurrently under a shared time budget (default 8 s); a check that
   runs out renders `…`, deliberately distinct from `✗` for a check that
   actually failed. Each applicable service gets its own block (leader,
   members, warnings), and the blocks flow into as many columns as the
@@ -192,7 +192,7 @@ its own entry point — plus the combined command:
 |---------|----------|-----|
 | `status-full` | server + docker + health + traefik | The full panel (default). |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
-| `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `·` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
+| `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `⬜` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
 | `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
 | `status-traefik` | traefik only | Traefik's entrypoint → router → middleware → service wiring, **as configured** — the same block `status-full` shows, without the rest of the panel. |
 
@@ -363,8 +363,8 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `thresholds.swap.warning` | platform-dependent | Swap usage % above which SWAP turns yellow. Defaults to `80` on macOS, which allocates swap continuously by design, and to `1` elsewhere. An explicit value overrides both. |
 | `thresholds.filesystem.warning` / `.critical` | `80` / `90` | Filesystem usage % thresholds. |
 | `thresholds.load.warning` / `.critical` | `0.8` / `1.0` | Load-average thresholds as a **per-CPU multiplier** (compared against `load1 / cpu_count`). |
-| `health.budget` | `5.0` | Total wall-clock budget in seconds for all health checks. Every check runs concurrently as its own task, so this bounds the login delay — it is not the sum of the individual timeouts. |
-| `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
+| `health.budget` | `8.0` | Total wall-clock budget in seconds for all health checks. Every check runs concurrently as its own task, so this bounds the login delay — it is not the sum of the individual timeouts. |
+| `health.timeout.*` | postgres `1.5`, mongodb `6.0`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
 | `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
 | `follow.interval` | `5.0` | Refresh interval in seconds for `--follow` when the `health` section is **not** among those requested (see [Follow mode](#follow-mode)). |
@@ -604,12 +604,29 @@ a failed check. Only RustFS needs a container's full attributes (for
 `RUSTFS_VOLUMES`), and it inspects only the one container it matched.
 
 Measured on a production manager of a five-node Swarm: the whole section
-takes **3.25 s** end to end, within the 5 s default budget, with individual
-probe costs of PostgreSQL `pg_autoctl show state` 0.13 s, Kafka
+takes **3.25 s** end to end, within the default budget, with individual probe
+costs of PostgreSQL `pg_autoctl show state` 0.13 s, Kafka
 `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not optimisable), GlusterFS
 `gluster … --xml` 0.10 s, and RustFS `/health` ~0.2 s. That cluster runs no
-MongoDB, so its figure — `db.hello()` 0.95 s — was measured separately on
-another cluster.
+MongoDB, so its figures were measured separately on another one, a five-member
+replica set:
+
+| MongoDB probe | Measured |
+|---|---|
+| `mongosh` start-up, before a line of script runs | 0.97–1.50 s |
+| local `db.hello()` only (the pre-0.10 check) | 0.97–1.50 s total |
+| **with the member fan-out, all five answering** | **1.95–2.01 s total** |
+| one member, when it answers | 171–279 ms |
+| one member, connection refused | 97 ms |
+| one member, name does not resolve | 113 ms |
+| one member, blackholed (the capped case) | 787 ms |
+| worst case: five members, all blackholed | 4.65–4.93 s total |
+
+The fan-out therefore costs about 0.8 s on a healthy set and stays **below
+Kafka's 2.6 s**, so it does not lengthen the section at all — the checks run
+concurrently and Kafka is still the one everything waits for. The 6 s deadline
+exists for the worst case, and the 8 s budget exists because a per-kind
+timeout above the budget has no effect.
 
 ### How the timeouts are enforced
 
@@ -719,7 +736,7 @@ measure.
 | ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
 | 💀 | measured broken |
 | ⏰ | a scheduled job, resting between successful runs |
-| `·` | not observable / not attempted — see below for where it appears |
+| `⬜` | not observable / not attempted — see below for where it appears |
 | `…` | the check ran out of the shared time budget |
 | `✗` | the check itself failed (a command errored, a connection was refused) |
 | `n/a here` | not applicable — this node runs no member of the service |
@@ -729,14 +746,33 @@ timeout says nothing about the service's health, only that the panel gave up
 waiting for it; a failed check (`✗`) is a statement about the service, or
 about the tool used to ask it.
 
-The neutral dot (`·`) exists because **MongoDB reports its replica-set
-members but not their state**: `db.hello()` tells the panel who belongs to
-the set, but only the primary and the member it just ran the command against
-have known state — every other member is genuinely unmeasured, and rendering
-an unearned ✅ for it would be worse than saying nothing. Every other check in
-this section (PostgreSQL's `pg_autoctl` rows, Kafka's quorum voters,
-GlusterFS peers/bricks) reports ✅ or 💀 for each member it lists, never `·`,
-because those commands do report per-member state. A *service* whose own
+Every icon in the table above occupies **two terminal cells**, and that is a
+requirement rather than a coincidence: a column mixing a one-cell glyph with a
+two-cell one steps left and right down the block. Until 0.10 the not-observable
+marker was a middle dot (`·`), one cell against `✅`'s two, and every cluster
+member list was ragged because of it. The same character still appears in the
+panel as a *separator* — `active · manager · 5 nodes`, and the follow-mode
+status line — which is a different use and unrelated to this vocabulary.
+
+The empty square (`⬜`) means the panel did not measure that member, and since
+0.10 that is the exception rather than the rule for MongoDB. `db.hello()` on
+one node reports the set's membership but state only for the primary and for
+the node answering — so the check now asks every member the same question
+directly. `hello` is answered before authentication, which is what makes that
+possible without credentials; `replSetGetStatus` would answer it all in one
+round trip, including replication lag, but replies `Command replSetGetStatus
+requires authentication`.
+
+A member still renders `⬜` when the check ran out of its deadline before
+reaching it. That is the degraded path and it is deliberately no worse than
+the old display: whatever was reached is reported, the rest stays blank, and
+an unearned ✅ is never invented for a member nobody asked. A member that *was*
+asked and could not be reached is a different thing and reads as such —
+`unreachable`, measured, not blank.
+
+Every other check in this section (PostgreSQL's `pg_autoctl` rows, Kafka's
+quorum voters, GlusterFS peers/bricks) reports ✅ or 💀 for each member it
+lists, because those commands report per-member state too. A *service* whose own
 quorum was never established shows no icon at all next to its name, just a
 dim "quorum not reported" note — so "not observable" (the dot) and "never
 asked" never look the same. That note appears whenever the panel has no basis
@@ -767,7 +803,7 @@ DNS check itself always runs, so within a real run this line cannot appear;
 it guards the case where the whole section is missing). All exist for
 the same reason — an empty list from a check that never ran would otherwise
 look identical to "checked, found nothing," which is a false clean bill of
-health. Those lines are also prefixed with the same neutral dot (`·`) as the
+health. Those lines are also prefixed with the same empty square (`⬜`) as the
 MongoDB member case above: a block that never ran carries exactly that claim
 — not observed, nothing more said.
 
@@ -929,7 +965,7 @@ service`, in red. That
 data is collected whenever the `traefik` section runs, including for a bare
 `status-traefik`; the DOCKER INFOS block itself is *not* rendered as a side
 effect. When the Docker daemon gives no answer at all — no client, or an
-unreachable or non-Swarm daemon — the service line shows a neutral `·`
+unreachable or non-Swarm daemon — the service line shows a neutral `⬜`
 rather than claiming the service is missing, since nothing was measured. A
 router naming no
 entrypoint is attached to every entrypoint by Traefik itself, so it appears
@@ -999,7 +1035,7 @@ A router can point at a service defined in the dynamic YAML rather than in
 Swarm — `account-api` → `account-api-placeholder` →
 `http://user-account.internal` is the live example. Those services are read
 along with the routers, and the upstream URL is shown in place of a Docker
-verdict, with a `·`: nothing about that target was measured. Matching them
+verdict, with a `⬜`: nothing about that target was measured. Matching them
 against Swarm service names instead reported `✗ no such service` for something
 that was never supposed to be a Swarm service.
 
@@ -1233,7 +1269,7 @@ together: the Docker Swarm block and the clustered-services health block
 answer different questions (what's scheduled vs. what's actually healthy)
 and both only make sense where the Docker socket is available. Installed
 alone, `--panel docker` collects no health at all, so the **Working** cell of
-every clustered service falls back to Docker's own measurement — `·` only for
+every clustered service falls back to Docker's own measurement — `⬜` only for
 a row Docker itself measured clean (fully staffed or scaled to zero), still
 `💀`/`⚠️` when Docker measured it dead or degraded — honest, but the column
 only earns its cluster icons with `--panel health` beside it.

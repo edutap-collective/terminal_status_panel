@@ -118,10 +118,15 @@ def test_collect_all_calls_health_when_selected(isolated_cli):
 def test_the_health_client_socket_outlives_the_slowest_enabled_probe():
     """docker-py bounds an exec by the client's socket timeout. With
     docker.timeout = 1.5 the Kafka probe (~2.6 s of JVM startup) could never
-    have succeeded, whatever health.timeout.kafka said."""
+    have succeeded, whatever health.timeout.kafka said.
+
+    The slowest enabled probe is MongoDB since its per-member fan-out; the
+    invariant is that the socket outlives whichever one that is, not that it
+    is any particular check.
+    """
     cfg = Config()
     assert cfg.docker_timeout == 1.5
-    assert cli._health_socket_timeout(cfg) == cfg.health.timeouts["kafka"] == 4.0
+    assert cli._health_socket_timeout(cfg) == max(cfg.health.timeouts.values()) == 6.0
 
 
 def test_the_health_client_never_drops_below_the_docker_timeout():
@@ -159,7 +164,7 @@ def test_the_health_client_is_built_at_the_docker_timeout(monkeypatch):
     cfg = Config()
     client = cli._docker_client(cfg)
     assert built["timeout"] == cfg.docker_timeout == 1.5
-    assert client.api.timeout == cli._health_socket_timeout(cfg) == 4.0
+    assert client.api.timeout == cli._health_socket_timeout(cfg) == 6.0
 
 
 def test_collect_all_never_reaches_the_docker_daemon_before_the_budget(isolated_cli):
@@ -219,7 +224,7 @@ def test_traefik_main_returns_zero(isolated_cli):
 
 
 def test_the_traefik_section_collects_the_swarm_data_too(isolated_cli):
-    """Without it every service line renders `·`: the tree would never show a
+    """Without it every service line renders `⬜`: the tree would never show a
     real verdict from the command the README documents as the way to run it,
     and `service_verdict` — reused so there is no second verdict logic — would
     be dead in that path."""
