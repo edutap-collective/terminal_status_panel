@@ -22,19 +22,38 @@ classifiers = [
 authors = [
 	{ name = "Alexander Loechel", email = "Alexander.Loechel@lmu.de" }
 ]
+# Every lower bound below was measured rather than guessed: the suite runs
+# green at exactly these versions on Python 3.11 and on 3.14, the two ends of
+# the supported range. The `minimum-deps` CI job pins them there on every push
+# so the claim keeps being true. There are no upper bounds -- one belongs here
+# only once an incompatibility is demonstrated, not in anticipation of it.
+#
+# Deriving a floor from the oldest interpreter alone would publish a false
+# claim: docker 5.0.3 passes the whole suite on 3.11 and cannot even be
+# imported on 3.12 or later, because it reaches for `distutils`.
 dependencies = [
-    "rich",
-    "docker",
-    "psutil",
-    "distro",
-    "dnspython",  # query resolvers directly: getaddrinfo would hide /etc/hosts divergence
-    "pyyaml",  # parse the Traefik file-provider config (api and ping-router routers)
+    # 12.6 renders every construction used here (Group, Table.grid,
+    # Text.from_ansi, Screen).
+    "rich>=12.6",
+    # 6.0 is the floor Python sets, not the API: 5.x imports `distutils`,
+    # removed in 3.12. `container.stats(one_shot=True)` needs 5.0 anyway.
+    "docker>=6.0",
+    # 5.9.8 is the oldest release with wheels across 3.11-3.14. Older ones do
+    # work, but only by compiling on the target, and this is a package that
+    # gets installed on servers.
+    "psutil>=5.9.8",
+    "distro>=1.5",
+    # 2.0 renamed `query` to `resolve`, which is what the DNS collector calls.
+    # Querying resolvers directly is the point: getaddrinfo would hide
+    # /etc/hosts divergence.
+    "dnspython>=2.0",
+    # 6.0.1 is the first that builds on 3.14; 6.0 has no wheel for it and its
+    # source build fails. Parses the Traefik file-provider config.
+    "pyyaml>=6.0.1",
     # The optional cross-check against Traefik's own /api/rawdata. httpx2 is
-    # the maintained continuation of httpx (github.com/pydantic/httpx2); the
-    # sibling packages use it, and it verifies against the system trust store
-    # by default rather than certifi's bundle -- which is the behaviour a
-    # privately signed endpoint on these servers needs.
-    "httpx2",
+    # the maintained continuation of httpx (github.com/pydantic/httpx2) and
+    # what the sibling packages use. 2.12 is its first release.
+    "httpx2>=2.12",
 ]
 
 # Development tooling lives in dependency groups (PEP 735), not in extras.
@@ -79,7 +98,13 @@ Repository = "https://github.com/edutap-collective/terminal_status_panel"
 Issues = "https://github.com/edutap-collective/terminal_status_panel/issues"
 
 [build-system]
-requires = ["hatchling"]
+# Measured by building this project with each: 1.26.3 produces a wheel whose
+# METADATA carries the legacy `License: EUPL-1.2` and no `License-File` at all
+# -- the LICENSE file is dropped without a warning. 1.27.0 emits
+# `License-Expression: EUPL-1.2` and `License-File: LICENSE`, which is what
+# `license` and `license-files` above are written for. 1.24.2 cannot build
+# this project at all.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

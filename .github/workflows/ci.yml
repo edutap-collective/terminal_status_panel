@@ -40,6 +40,31 @@ jobs:
       - run: uv sync --no-default-groups --group test
       - run: uv run --no-sync python -m pytest
 
+  # The matrix above resolves to whatever is current, so it says nothing about
+  # the lower bounds in pyproject.toml. This job installs exactly those bounds
+  # and runs the same suite. It runs on both ends of the supported interpreter
+  # range on purpose: docker 5.0.3 passes everything on 3.11 and cannot be
+  # imported on 3.12+, so a floor checked only against the oldest Python would
+  # publish a compatibility claim the package does not keep.
+  minimum-deps:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      # --resolution lowest-direct: the oldest version each *declared* bound
+      # allows, while transitive dependencies stay current. `lowest` would pin
+      # the whole tree to its oldest resolvable state, which tests other
+      # projects' floors rather than this project's.
+      - run: uv sync --no-default-groups --group test --resolution lowest-direct
+      - run: uv pip list
+      - run: uv run --no-sync python -m pytest
+
   lint:
     runs-on: ubuntu-latest
     steps:

@@ -4,14 +4,14 @@
     "config:recommended",
     ":semanticCommits",
   ],
-  // The runtime dependencies carry no version constraint at all -- not a
-  // lower bound, not an upper one -- and no lock file is committed, so there
-  // is nothing here for Renovate to bump. That is a gap rather than a design:
-  // the published metadata currently claims every release of rich, docker,
-  // psutil, distro, dnspython, pyyaml and httpx is supported. Once tested
-  // lower bounds are declared, revisit whether this file should watch them.
+  // The runtime dependencies carry tested lower bounds and no upper ones, and
+  // no lock file is committed. Renovate deliberately does not move those lower
+  // bounds: raising a floor is a claim that the older version is no longer
+  // supported, and the only evidence for that is a red `minimum-deps` job --
+  // which is exactly the signal a bot bumping the floor would erase. Floors
+  // move by hand, with the measurement written into the comment beside them.
   //
-  // What is worth watching today is the pinned tooling: the ruff
+  // What is worth watching here is the pinned tooling: the ruff
   // floor-and-ceiling in pyproject, the hook revisions in
   // .pre-commit-config.yaml, and the GitHub Actions versions.
   enabledManagers: ["github-actions", "pre-commit", "pep621"],
