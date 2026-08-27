@@ -60,10 +60,15 @@ def test_infra_ui_services_from_toml(tmp_path):
 
 def test_health_defaults_without_a_config_file():
     health = load_config("/nonexistent/config.toml").health
-    assert health.budget == 5.0
+    assert health.budget == 8.0
     assert health.enabled == list(DEFAULT_HEALTH_KINDS)
     assert health.timeouts["kafka"] == 4.0
+    assert health.timeouts["mongodb"] == 6.0
     assert health.timeouts["postgres"] == 1.5
+    # A per-kind timeout above the budget is silently capped by it, so a
+    # default that exceeded the default budget would be a value that cannot
+    # take effect anywhere.
+    assert max(health.timeouts.values()) <= health.budget
     assert health.dns_expect == []
 
 
@@ -122,7 +127,7 @@ def test_a_broken_health_block_falls_back_to_defaults_instead_of_raising(tmp_pat
 budget = "not a number"
 """,
     )
-    assert load_config(path).health.budget == 5.0
+    assert load_config(path).health.budget == 8.0
 
 
 def test_traefik_api_is_off_by_default():

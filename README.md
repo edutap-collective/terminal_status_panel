@@ -131,7 +131,7 @@ out in five tiers:
   participates in (PostgreSQL, MongoDB, Kafka, GlusterFS, RustFS) with
   leader/member state, WireGuard peer handshake ages (TCP-probe fallback when
   passwordless sudo is unavailable), and DNS consistency checks. Every check
-  runs concurrently under a shared time budget (default 5 s); a check that
+  runs concurrently under a shared time budget (default 8 s); a check that
   runs out renders `…`, deliberately distinct from `✗` for a check that
   actually failed. Each applicable service gets its own block (leader,
   members, warnings), and the blocks flow into as many columns as the
@@ -363,8 +363,8 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `thresholds.swap.warning` | platform-dependent | Swap usage % above which SWAP turns yellow. Defaults to `80` on macOS, which allocates swap continuously by design, and to `1` elsewhere. An explicit value overrides both. |
 | `thresholds.filesystem.warning` / `.critical` | `80` / `90` | Filesystem usage % thresholds. |
 | `thresholds.load.warning` / `.critical` | `0.8` / `1.0` | Load-average thresholds as a **per-CPU multiplier** (compared against `load1 / cpu_count`). |
-| `health.budget` | `5.0` | Total wall-clock budget in seconds for all health checks. Every check runs concurrently as its own task, so this bounds the login delay — it is not the sum of the individual timeouts. |
-| `health.timeout.*` | postgres `1.5`, mongodb `2.5`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
+| `health.budget` | `8.0` | Total wall-clock budget in seconds for all health checks. Every check runs concurrently as its own task, so this bounds the login delay — it is not the sum of the individual timeouts. |
+| `health.timeout.*` | postgres `1.5`, mongodb `6.0`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See [How the timeouts are enforced](#how-the-timeouts-are-enforced). |
 | `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
 | `follow.interval` | `5.0` | Refresh interval in seconds for `--follow` when the `health` section is **not** among those requested (see [Follow mode](#follow-mode)). |
@@ -604,12 +604,29 @@ a failed check. Only RustFS needs a container's full attributes (for
 `RUSTFS_VOLUMES`), and it inspects only the one container it matched.
 
 Measured on a production manager of a five-node Swarm: the whole section
-takes **3.25 s** end to end, within the 5 s default budget, with individual
-probe costs of PostgreSQL `pg_autoctl show state` 0.13 s, Kafka
+takes **3.25 s** end to end, within the default budget, with individual probe
+costs of PostgreSQL `pg_autoctl show state` 0.13 s, Kafka
 `kafka-metadata-quorum.sh` 2.6 s (JVM startup, not optimisable), GlusterFS
 `gluster … --xml` 0.10 s, and RustFS `/health` ~0.2 s. That cluster runs no
-MongoDB, so its figure — `db.hello()` 0.95 s — was measured separately on
-another cluster.
+MongoDB, so its figures were measured separately on another one, a five-member
+replica set:
+
+| MongoDB probe | Measured |
+|---|---|
+| `mongosh` start-up, before a line of script runs | 0.97–1.50 s |
+| local `db.hello()` only (the pre-0.10 check) | 0.97–1.50 s total |
+| **with the member fan-out, all five answering** | **1.95–2.01 s total** |
+| one member, when it answers | 171–279 ms |
+| one member, connection refused | 97 ms |
+| one member, name does not resolve | 113 ms |
+| one member, blackholed (the capped case) | 787 ms |
+| worst case: five members, all blackholed | 4.65–4.93 s total |
+
+The fan-out therefore costs about 0.8 s on a healthy set and stays **below
+Kafka's 2.6 s**, so it does not lengthen the section at all — the checks run
+concurrently and Kafka is still the one everything waits for. The 6 s deadline
+exists for the worst case, and the 8 s budget exists because a per-kind
+timeout above the budget has no effect.
 
 ### How the timeouts are enforced
 
@@ -737,14 +754,25 @@ member list was ragged because of it. The same character still appears in the
 panel as a *separator* — `active · manager · 5 nodes`, and the follow-mode
 status line — which is a different use and unrelated to this vocabulary.
 
-The empty square (`⬜`) exists because **MongoDB reports its replica-set
-members but not their state**: `db.hello()` tells the panel who belongs to
-the set, but only the primary and the member it just ran the command against
-have known state — every other member is genuinely unmeasured, and rendering
-an unearned ✅ for it would be worse than saying nothing. Every other check in
-this section (PostgreSQL's `pg_autoctl` rows, Kafka's quorum voters,
-GlusterFS peers/bricks) reports ✅ or 💀 for each member it lists, never `⬜`,
-because those commands do report per-member state. A *service* whose own
+The empty square (`⬜`) means the panel did not measure that member, and since
+0.10 that is the exception rather than the rule for MongoDB. `db.hello()` on
+one node reports the set's membership but state only for the primary and for
+the node answering — so the check now asks every member the same question
+directly. `hello` is answered before authentication, which is what makes that
+possible without credentials; `replSetGetStatus` would answer it all in one
+round trip, including replication lag, but replies `Command replSetGetStatus
+requires authentication`.
+
+A member still renders `⬜` when the check ran out of its deadline before
+reaching it. That is the degraded path and it is deliberately no worse than
+the old display: whatever was reached is reported, the rest stays blank, and
+an unearned ✅ is never invented for a member nobody asked. A member that *was*
+asked and could not be reached is a different thing and reads as such —
+`unreachable`, measured, not blank.
+
+Every other check in this section (PostgreSQL's `pg_autoctl` rows, Kafka's
+quorum voters, GlusterFS peers/bricks) reports ✅ or 💀 for each member it
+lists, because those commands report per-member state too. A *service* whose own
 quorum was never established shows no icon at all next to its name, just a
 dim "quorum not reported" note — so "not observable" (the dot) and "never
 asked" never look the same. That note appears whenever the panel has no basis

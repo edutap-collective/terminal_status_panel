@@ -54,7 +54,17 @@ class DnsExpectation:
 class HealthConfig:
     """What the CLUSTER HEALTH section may probe, and how long it may take."""
 
-    budget: float = 5.0
+    #: Wall clock for the whole section. The checks run concurrently, so this
+    #: bounds the login delay rather than summing the values below.
+    #:
+    #: Raised from 5.0 for the MongoDB fan-out. A per-kind timeout above the
+    #: budget has no effect -- the budget always wins -- so mongodb's 6.0 would
+    #: have been silently capped at 5.0 and the fan-out abandoned mid-way on
+    #: exactly the degraded cluster it exists to describe. The cost is paid
+    #: only when something is broken: with every check healthy the section
+    #: finishes in about the time its slowest member takes, and that is still
+    #: Kafka.
+    budget: float = 8.0
     timeouts: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_HEALTH_TIMEOUTS))
     enabled: list[str] = field(default_factory=lambda: list(DEFAULT_HEALTH_KINDS))
     dns_expect: list[DnsExpectation] = field(default_factory=list)
@@ -122,10 +132,18 @@ DEFAULT_HEALTH_KINDS = ("postgres", "mongodb", "kafka", "glusterfs", "rustfs")
 # call — so the health client is built with a socket timeout no smaller than
 # the largest enabled value here (see cli._health_socket_timeout), leaving the
 # task deadline as the bound that decides. Kafka is the expensive one: ~2.6 s
-# of JVM startup, which is why its value is the largest.
+# of JVM startup, which is why its value was the largest until MongoDB's
+# fan-out took that place.
+#
+# mongodb's 6.0 covers the worst case measured on a cluster node: mongosh takes
+# 0.97-1.50 s to start, and asking five members costs 1.14 s when they answer
+# (171-279 ms each) and up to 3.95 s when every one of them blackholes (787 ms
+# each, the cap the command sets). A healthy pass lands at 1.95-2.01 s, still
+# under Kafka's ~2.6 s -- so on a working cluster this section takes no longer
+# than it did with a single hello.
 DEFAULT_HEALTH_TIMEOUTS = {
     "postgres": 1.5,
-    "mongodb": 2.5,
+    "mongodb": 6.0,
     "kafka": 4.0,
     "glusterfs": 1.0,
     "rustfs": 2.0,

@@ -407,24 +407,87 @@ def probe_postgres(index: ContainerIndex) -> ClusterService:
     return service
 
 
+#: Fallback deadline for one cluster kind, used where the caller names none.
+#: The configured per-kind timeouts in `HealthConfig` are what normally apply.
+DEFAULT_KIND_TIMEOUT = 2.0
+
 MONGODB_PATTERNS = ("mongodb",)
 
-# db.hello() is unauthenticated — the Ansible role's own healthcheck already
-# relies on an unauthenticated ping. rs.status() would report per-member state
-# but needs credentials, which are deliberately out of scope.
-MONGO_EVAL = (
-    "const h = db.hello(); "
-    "JSON.stringify({set: h.setName, me: h.me, primary: h.primary, "
-    "isPrimary: h.isWritablePrimary, hosts: h.hosts})"
-)
-MONGO_COMMAND = [
-    "mongosh",
-    "--tls",
-    "--tlsAllowInvalidCertificates",
-    "--quiet",
-    "--eval",
-    MONGO_EVAL,
-]
+#: Wall-clock a `docker exec mongosh` spends before the first line of the
+#: script runs. Measured on a cluster node over five runs: 0.97 s to 1.50 s,
+#: almost all of it the shell's own start-up. The fan-out deadline is the
+#: check's timeout minus this, because a deadline measured from inside the
+#: script cannot account for the time spent getting there -- and one set to the
+#: full timeout would only be reached after the budget thread had already
+#: abandoned the check, turning a partial answer into a truncated one.
+MONGO_STARTUP_ALLOWANCE = 1.5
+
+#: Deadline for one member's `hello`, in milliseconds. Measured on the node: a
+#: healthy member answers in 171-279 ms, a refused connection costs 97 ms and
+#: an unresolvable name 113 ms. 700 ms is the only case that has to be capped
+#: -- a blackholed address, where the connection neither completes nor fails --
+#: and it was measured to hold at 787 ms wall clock.
+MONGO_MEMBER_TIMEOUT_MS = 700
+
+
+def _mongo_fanout_budget(timeout: float) -> float:
+    """How long the script may spend asking members, given the check's timeout.
+
+    Never zero or negative: with a timeout too small for any fan-out at all,
+    the local ``hello`` still has to run, and the loop then simply stops before
+    its first member. That degrades to exactly the old behaviour rather than to
+    an error.
+    """
+    return max(0.2, timeout - MONGO_STARTUP_ALLOWANCE)
+
+
+def mongo_command(timeout: float) -> list[str]:
+    """The mongosh invocation, with the fan-out deadline compiled in.
+
+    ``db.hello()`` is answered before authentication, which is what makes any
+    of this possible without credentials -- the Ansible role's own healthcheck
+    already relies on an unauthenticated ping. It reports the set's membership
+    but state only for the primary and for the node answering, so the script
+    then asks each member the same question directly.
+
+    ``replSetGetStatus`` would answer all of it in one round trip, including
+    replication lag. It is not an option here: measured against the real set it
+    replies ``Command replSetGetStatus requires authentication``.
+
+    The loop checks the clock before each member rather than after, so the
+    deadline bounds the work still to be started. Members left unasked simply
+    do not appear in ``members`` and are rendered unmeasured -- the state the
+    whole set was in before this existed, so a slow cluster degrades to the old
+    display instead of to an empty one.
+
+    Read-only throughout: ``hello`` and nothing else.
+    """
+    budget_ms = int(_mongo_fanout_budget(timeout) * 1000)
+    script = (
+        "const h = db.hello();"
+        "const hosts = (h.hosts || []).concat(h.passives || []).concat(h.arbiters || []);"
+        f"const deadline = Date.now() + {budget_ms};"
+        "const members = [];"
+        "for (const host of hosts) {"
+        "  if (Date.now() >= deadline) break;"
+        "  try {"
+        '    const uri = "mongodb://" + host + "/?tls=true&tlsAllowInvalidCertificates=true"'
+        f'      + "&serverSelectionTimeoutMS={MONGO_MEMBER_TIMEOUT_MS}"'
+        f'      + "&connectTimeoutMS={MONGO_MEMBER_TIMEOUT_MS}"'
+        f'      + "&socketTimeoutMS={MONGO_MEMBER_TIMEOUT_MS}";'
+        '    const hh = new Mongo(uri).getDB("admin").hello();'
+        '    const state = hh.arbiterOnly === true ? "arbiter"'
+        '      : hh.isWritablePrimary === true ? "primary"'
+        '      : hh.secondary === true ? "secondary" : "other";'
+        "    members.push({host: host, state: state});"
+        "  } catch (e) {"
+        '    members.push({host: host, state: "unreachable"});'
+        "  }"
+        "}"
+        "JSON.stringify({set: h.setName, me: h.me, primary: h.primary,"
+        " isPrimary: h.isWritablePrimary, hosts: hosts, members: members})"
+    )
+    return ["mongosh", "--tls", "--tlsAllowInvalidCertificates", "--quiet", "--eval", script]
 
 
 def parse_mongo_hello(output: str) -> ClusterService:
@@ -433,14 +496,43 @@ def parse_mongo_hello(output: str) -> ClusterService:
     data = json.loads(line)
     primary = data.get("primary")
     me = data.get("me")
-    hosts = data.get("hosts") or []
+    # `hello` reports arbiters and passive (zero-priority) members in their own
+    # fields rather than in `hosts`, so reading `hosts` alone shows a set that
+    # has them one row short, with nothing saying a vote is missing. The
+    # command already asks all three; the parser has to accept all three back.
+    hosts = list(data.get("hosts") or [])
+    for extra_field in ("passives", "arbiters"):
+        for host in data.get(extra_field) or []:
+            if host not in hosts:
+                hosts.append(host)
     if not hosts and not primary and not data.get("set"):
         # Valid JSON, but nothing we recognise as a replica set: no membership,
         # no primary, no set name. Nothing measured, so nothing claimed.
         return ClusterService(kind="mongodb", reachable=False, quorum_ok=None)
+    # What the fan-out reached, keyed by host. Absent for a member the deadline
+    # cut off, and for the whole answer when the script produced no fan-out at
+    # all -- both fall through to the membership-only reading below.
+    measured = {}
+    raw_members = data.get("members")
+    if isinstance(raw_members, list):
+        for entry in raw_members:
+            if isinstance(entry, dict) and entry.get("host"):
+                measured[str(entry["host"])] = str(entry.get("state") or "other")
+
     members = []
     for host in hosts:
-        if host == primary:
+        state = measured.get(host)
+        if state == "unreachable":
+            # Asked and could not be reached. That is a measurement, and a
+            # different thing from never having asked.
+            role, healthy = "unreachable", False
+        elif state in ("primary", "secondary", "arbiter"):
+            role, healthy = state, True
+        elif state == "other":
+            # Reached, answered, and in none of the states worth a name --
+            # starting up, rolling back, recovering. Alive, not serving.
+            role, healthy = "other", None
+        elif host == primary:
             role, healthy = "primary", True
         elif host == me:
             # We just executed a command against this member.
@@ -460,13 +552,13 @@ def parse_mongo_hello(output: str) -> ClusterService:
     )
 
 
-def probe_mongodb(index: ContainerIndex) -> ClusterService:
-    """``db.hello()`` through mongosh — no credentials required."""
+def probe_mongodb(index: ContainerIndex, timeout: float = DEFAULT_KIND_TIMEOUT) -> ClusterService:
+    """``db.hello()`` through mongosh, for the set and for each member."""
     container, verdict, extras = locate_member(index, "mongodb", MONGODB_PATTERNS)
     if verdict is not None:
         return verdict
     try:
-        service = parse_mongo_hello(exec_text(container, MONGO_COMMAND))
+        service = parse_mongo_hello(exec_text(container, mongo_command(timeout)))
     except Exception as exc:
         return ClusterService(kind="mongodb", error=str(exc))
     _note_extra_containers(service, extras)
@@ -869,14 +961,15 @@ _PROBES: dict[str, Callable[[ContainerIndex, float], ClusterService]] = {
     # (``budget.run_with_budget``), and the health client's socket timeout is
     # built so that it never expires first (``cli._health_socket_timeout``).
     "postgres": lambda index, _timeout: probe_postgres(index),
-    "mongodb": lambda index, _timeout: probe_mongodb(index),
+    # Unlike its two neighbours this one *does* use its timeout: not to bound
+    # the exec, which docker-py cannot do per call, but to compute the deadline
+    # the fan-out inside mongosh checks itself.
+    "mongodb": probe_mongodb,
     "kafka": lambda index, _timeout: probe_kafka(index),
     # These two spawn their own child process / curl and enforce it directly.
     "glusterfs": lambda _index, timeout: probe_glusterfs(timeout),
     "rustfs": probe_rustfs,
 }
-
-DEFAULT_KIND_TIMEOUT = 2.0
 
 
 def probe_cluster(
