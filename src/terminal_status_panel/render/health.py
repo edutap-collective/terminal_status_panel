@@ -3,14 +3,21 @@
 Icon vocabulary, extending the panel's existing scheme:
 
   ✅ measured healthy      ⚠️ warning        💀 measured broken
-  ·  not observable        … out of budget   n/a not applicable
+  ⬜ not observable        … out of budget   n/a not applicable
   ✗  check failed
 
-The neutral dot matters: MongoDB reports its set members but not their state,
-and a panel that renders an unmeasured ✅ is worse than one that says nothing.
-The dot is reserved for exactly that member-level case — a service whose own
+``⬜`` matters, and is reserved for the member level. A member the panel could
+not ask about renders unmeasured rather than healthy, because a panel that
+shows an unearned ✅ is worse than one that says nothing. A *service* whose own
 quorum was never reported gets a plain "quorum not reported" note instead, so
-"not observable" and "not measured at all" never look the same.
+"this member was not measured" and "nothing about quorum was attempted" never
+look like the same statement.
+
+Where each check can measure its members, it does: PostgreSQL, Kafka and
+GlusterFS report per-member state directly, and MongoDB asks each member in
+turn (see ``collectors/clusters.mongo_command``). ``⬜`` is then the exception
+-- a member the fan-out could not reach before its deadline -- rather than the
+rule it was until 0.10.
 
 Layout follows the rest of the dashboard (see ``render/panels.py``): a
 ``Rule`` header for the top-level section, plain bold-cyan sub-headers for
@@ -50,7 +57,38 @@ def _tri_state(value: bool | None) -> str:
     return OK if value else DEAD
 
 
+def _service_header(service: ClusterService, title: str) -> Text:
+    """The service's own line: quorum verdict, name, and any detail."""
+    if service.quorum_ok is None:
+        # Reserve the unmeasured marker for member-level "not observable". A
+        # service whose own quorum was never reported gets no icon at all -- an
+        # unmeasured glyph here would look like the same claim member health
+        # makes, when in fact nothing about quorum was even attempted.
+        header = Text(title + (f" — {service.detail}" if service.detail else ""), style="bold")
+        header.append("  quorum not reported", style="dim")
+        header.append("\n")
+        return header
+    icon = OK if service.quorum_ok else DEAD
+    line = f"{icon} {title}" + (f" — {service.detail}" if service.detail else "")
+    return Text(line + "\n", style="bold")
+
+
+def _member_line(member) -> str:
+    """One member: its verdict, its name, its role, and how far behind it is."""
+    line = f"   {_tri_state(member.healthy)} {member.node or member.name}"
+    if member.role:
+        line += f"  {member.role}"
+    if member.warning:
+        line += f"  {WARN} {member.warning}"
+        # The distance turns "it is behind" into something a reader can weigh:
+        # 4 kB and 2 GB are the same warning otherwise.
+        if member.lag_bytes is not None:
+            line += f" {format_bytes(member.lag_bytes)}"
+    return line + "\n"
+
+
 def _service_lines(service: ClusterService) -> Text:
+    """One cluster service as a block: header, leader, one line per member."""
     title = _KIND_TITLES.get(service.kind, service.kind)
     if service.name:
         title = f"{title} {service.name}"
@@ -60,39 +98,11 @@ def _service_lines(service: ClusterService) -> Text:
     if service.error:
         return Text(f"{FAILED} {title}: {service.error}", style="red")
 
-    text = Text()
-    if service.quorum_ok is None:
-        # Reserve the neutral dot for member-level "not observable". A service
-        # whose own quorum was never reported gets no icon at all — an unmeasured
-        # "·" here would look like the same claim member health makes, when in
-        # fact nothing about quorum was even attempted.
-        header = title
-        if service.detail:
-            header += f" — {service.detail}"
-        text.append(header, style="bold")
-        text.append("  quorum not reported", style="dim")
-        text.append("\n")
-    else:
-        icon = OK if service.quorum_ok else DEAD
-        header = f"{icon} {title}"
-        if service.detail:
-            header += f" — {service.detail}"
-        text.append(header + "\n", style="bold")
+    text = _service_header(service, title)
     if service.leader:
         text.append(f"   leader   {service.leader}\n")
     for member in service.members:
-        icon = _tri_state(member.healthy)
-        label = member.node or member.name
-        line = f"   {icon} {label}"
-        if member.role:
-            line += f"  {member.role}"
-        if member.warning:
-            line += f"  {WARN} {member.warning}"
-            # The distance turns "it is behind" into something a reader can
-            # weigh: 4 kB and 2 GB are the same warning otherwise.
-            if member.lag_bytes is not None:
-                line += f" {format_bytes(member.lag_bytes)}"
-        text.append(line + "\n")
+        text.append(_member_line(member))
     return text
 
 
