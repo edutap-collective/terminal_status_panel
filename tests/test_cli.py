@@ -219,7 +219,7 @@ def test_traefik_main_returns_zero(isolated_cli):
 
 
 def test_the_traefik_section_collects_the_swarm_data_too(isolated_cli):
-    """Without it every service line renders `·`: the tree would never show a
+    """Without it every service line renders `⬜`: the tree would never show a
     real verdict from the command the README documents as the way to run it,
     and `service_verdict` — reused so there is no second verdict logic — would
     be dead in that path."""

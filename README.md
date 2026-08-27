@@ -47,10 +47,10 @@ out in five tiers:
   column and its node cell, so a lost instance is silent but a broken one is
   not. Each row also
   carries a **Working** cell right after the service name: an icon plus the
-  row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `· 0/0`.
+  row's running/desired task count, e.g. `✅ 3/3`, `⚠️ 2/5`, `💀 0/3`, `⬜ 0/0`.
   Five rules keep that cell from over-claiming:
 
-  - a service scaled to zero replicas renders `· 0/0`, not `💀` — that is a
+  - a service scaled to zero replicas renders `⬜ 0/0`, not `💀` — that is a
     decision, not an outage;
   - for the four clustered services that actually run as Docker services
     (PostgreSQL, MongoDB, Kafka, RustFS — GlusterFS is queried on the host via
@@ -58,10 +58,10 @@ out in five tiers:
     **icon** comes from that service's own CLUSTER HEALTH verdict while the
     **count** stays Docker's running/desired tally, so the two are allowed to
     disagree on purpose — except that a row measured `💀` or `⚠️` by its own
-    replicas keeps that icon: no cluster-level `✅` or `·` can talk a row with
+    replicas keeps that icon: no cluster-level `✅` or `⬜` can talk a row with
     nothing (or not everything) running into looking healthy;
   - under `status-docker`, which runs without the health section, a clustered
-    service's cell falls back to `·` plus Docker's own count instead of a
+    service's cell falls back to `⬜` plus Docker's own count instead of a
     replica-derived `✅` — "five brokers are running" is not the claim this
     column makes — and the same fallback applies when the probe found no
     member of that service on this node, or the kind is not listed in
@@ -81,7 +81,7 @@ out in five tiers:
     recognised either by the [swarm-cronjob](https://github.com/crazy-max/swarm-cronjob)
     labels (`swarm.cronjob.enable=true`) or by Swarm's own job modes
     (`ReplicatedJob`/`GlobalJob`, Docker 20.10+). Its cell reads `⏰ ok 12h`
-    when the last run completed, `💀 ✗ 20h` when it failed, `· never` when
+    when the last run completed, `💀 ✗ 20h` when it failed, `⬜ never` when
     there is no run to measure, and an ordinary `✅ 1/1` while a run is in
     progress. The outcome is taken from the *newest* task, not the most severe
     one: a job that failed yesterday and succeeded this morning is healthy.
@@ -192,7 +192,7 @@ its own entry point — plus the combined command:
 |---------|----------|-----|
 | `status-full` | server + docker + health + traefik | The full panel (default). |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
-| `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `·` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
+| `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `⬜` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
 | `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
 | `status-traefik` | traefik only | Traefik's entrypoint → router → middleware → service wiring, **as configured** — the same block `status-full` shows, without the rest of the panel. |
 
@@ -719,7 +719,7 @@ measure.
 | ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
 | 💀 | measured broken |
 | ⏰ | a scheduled job, resting between successful runs |
-| `·` | not observable / not attempted — see below for where it appears |
+| `⬜` | not observable / not attempted — see below for where it appears |
 | `…` | the check ran out of the shared time budget |
 | `✗` | the check itself failed (a command errored, a connection was refused) |
 | `n/a here` | not applicable — this node runs no member of the service |
@@ -729,13 +729,21 @@ timeout says nothing about the service's health, only that the panel gave up
 waiting for it; a failed check (`✗`) is a statement about the service, or
 about the tool used to ask it.
 
-The neutral dot (`·`) exists because **MongoDB reports its replica-set
+Every icon in the table above occupies **two terminal cells**, and that is a
+requirement rather than a coincidence: a column mixing a one-cell glyph with a
+two-cell one steps left and right down the block. Until 0.10 the not-observable
+marker was a middle dot (`·`), one cell against `✅`'s two, and every cluster
+member list was ragged because of it. The same character still appears in the
+panel as a *separator* — `active · manager · 5 nodes`, and the follow-mode
+status line — which is a different use and unrelated to this vocabulary.
+
+The empty square (`⬜`) exists because **MongoDB reports its replica-set
 members but not their state**: `db.hello()` tells the panel who belongs to
 the set, but only the primary and the member it just ran the command against
 have known state — every other member is genuinely unmeasured, and rendering
 an unearned ✅ for it would be worse than saying nothing. Every other check in
 this section (PostgreSQL's `pg_autoctl` rows, Kafka's quorum voters,
-GlusterFS peers/bricks) reports ✅ or 💀 for each member it lists, never `·`,
+GlusterFS peers/bricks) reports ✅ or 💀 for each member it lists, never `⬜`,
 because those commands do report per-member state. A *service* whose own
 quorum was never established shows no icon at all next to its name, just a
 dim "quorum not reported" note — so "not observable" (the dot) and "never
@@ -767,7 +775,7 @@ DNS check itself always runs, so within a real run this line cannot appear;
 it guards the case where the whole section is missing). All exist for
 the same reason — an empty list from a check that never ran would otherwise
 look identical to "checked, found nothing," which is a false clean bill of
-health. Those lines are also prefixed with the same neutral dot (`·`) as the
+health. Those lines are also prefixed with the same empty square (`⬜`) as the
 MongoDB member case above: a block that never ran carries exactly that claim
 — not observed, nothing more said.
 
@@ -929,7 +937,7 @@ service`, in red. That
 data is collected whenever the `traefik` section runs, including for a bare
 `status-traefik`; the DOCKER INFOS block itself is *not* rendered as a side
 effect. When the Docker daemon gives no answer at all — no client, or an
-unreachable or non-Swarm daemon — the service line shows a neutral `·`
+unreachable or non-Swarm daemon — the service line shows a neutral `⬜`
 rather than claiming the service is missing, since nothing was measured. A
 router naming no
 entrypoint is attached to every entrypoint by Traefik itself, so it appears
@@ -999,7 +1007,7 @@ A router can point at a service defined in the dynamic YAML rather than in
 Swarm — `account-api` → `account-api-placeholder` →
 `http://user-account.internal` is the live example. Those services are read
 along with the routers, and the upstream URL is shown in place of a Docker
-verdict, with a `·`: nothing about that target was measured. Matching them
+verdict, with a `⬜`: nothing about that target was measured. Matching them
 against Swarm service names instead reported `✗ no such service` for something
 that was never supposed to be a Swarm service.
 
@@ -1233,7 +1241,7 @@ together: the Docker Swarm block and the clustered-services health block
 answer different questions (what's scheduled vs. what's actually healthy)
 and both only make sense where the Docker socket is available. Installed
 alone, `--panel docker` collects no health at all, so the **Working** cell of
-every clustered service falls back to Docker's own measurement — `·` only for
+every clustered service falls back to Docker's own measurement — `⬜` only for
 a row Docker itself measured clean (fully staffed or scaled to zero), still
 `💀`/`⚠️` when Docker measured it dead or degraded — honest, but the column
 only earns its cluster icons with `--panel health` beside it.

@@ -362,7 +362,7 @@ def test_a_swarm_service_target_still_matches():
 
 def test_a_global_service_uses_the_reported_node_count_like_docker_infos():
     """`_node_map` swallows a failed node listing, so an empty node list beside
-    a non-zero count is normal. Counting only the list renders `· 0/0` here and
+    a non-zero count is normal. Counting only the list renders `⬜ 0/0` here and
     `💀 0/3` in DOCKER INFOS — two verdicts for one service."""
     swarm = SwarmInfo(
         reachable=True,
