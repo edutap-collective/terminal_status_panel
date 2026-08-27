@@ -91,6 +91,47 @@ def _csv(value: str) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
+def _apply_router_label(router: TraefikRouter, key: str, value: str) -> None:
+    """Set one field of *router* from one label.
+
+    The field name is case-folded for the same reason the pattern is, and the
+    router name never is: `ImageApi` and `image_api` are two routers as far as
+    Traefik is concerned. A key Traefik understands and this panel does not is
+    ignored rather than reported -- the wiring view shows the fields it draws,
+    and a router is not wrong for carrying more.
+    """
+    field = key.lower()
+    if field == "entrypoints":
+        router.entrypoints = _csv(value)
+    elif field == "rule":
+        router.rule = value
+    elif field == "middlewares":
+        router.middlewares = _csv(value)
+    elif field == "service":
+        router.service = value
+    elif field == "tls":
+        router.tls = value.lower() == "true"
+
+
+def _apply_service_label(service: TraefikServiceRef, key: str, value: str) -> None:
+    """Set one field of *service* from one label.
+
+    Matched by suffix because the label carries a load-balancer server index
+    in the middle -- `...loadbalancer.server.port` -- which is not information
+    this view uses.
+    """
+    field = key.lower()
+    if field.endswith("server.port"):
+        try:
+            service.port = int(value)
+        except ValueError:
+            # A port that is not a number is not a port. Rendering nothing is
+            # better than rendering the string: the row means "no port known".
+            service.port = None
+    elif field.endswith("server.scheme"):
+        service.scheme = value
+
+
 def parse_labels(
     labels: dict[str, str], origin: str, docker_name: str | None = None
 ) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware], dict[str, TraefikServiceRef]]:
@@ -119,32 +160,23 @@ def parse_labels(
                 match.group("name"),
                 TraefikRouter(name=match.group("name"), origin=origin),
             )
-            # Case-folded for the same reason the pattern is: only the field
-            # name is folded, never the router name — `ImageApi` and
-            # `image_api` are two routers as far as Traefik is concerned.
-            field = match.group("key").lower()
-            if field == "entrypoints":
-                router.entrypoints = _csv(value)
-            elif field == "rule":
-                router.rule = value
-            elif field == "middlewares":
-                router.middlewares = _csv(value)
-            elif field == "service":
-                router.service = value
-            elif field == "tls":
-                router.tls = value.lower() == "true"
+            _apply_router_label(router, match.group("key"), value)
             continue
 
         match = _MIDDLEWARE.match(key)
         if match:
             name = match.group("name")
-            existing = middlewares.get(name)
-            if existing is None:
-                middlewares[name] = TraefikMiddleware(
+            # First label wins: a middleware is identified here by name and
+            # kind, and the remaining keys of the same middleware only add
+            # detail we do not render.
+            middlewares.setdefault(
+                name,
+                TraefikMiddleware(
                     name=name,
                     kind=match.group("kind"),
                     detail=f"{match.group('key')}={value}",
-                )
+                ),
+            )
             continue
 
         match = _SERVICE.match(key)
@@ -153,14 +185,7 @@ def parse_labels(
             service = services.setdefault(
                 name, TraefikServiceRef(name=name, docker_service=docker_name)
             )
-            field = match.group("key").lower()
-            if field.endswith("server.port"):
-                try:
-                    service.port = int(value)
-                except ValueError:
-                    service.port = None
-            elif field.endswith("server.scheme"):
-                service.scheme = value
+            _apply_service_label(service, match.group("key"), value)
 
     # Traefik defaults a router's service to the router's own name.
     for router in routers.values():
@@ -207,6 +232,19 @@ def _upstreams(spec: object) -> list[str]:
     return urls
 
 
+def _mapping(value: object) -> dict:
+    """*value* if it is a mapping, an empty one otherwise.
+
+    A file-provider config is a document somebody wrote by hand, so every level
+    of it can be the wrong shape -- a list where a table belongs, a string, a
+    null from a key with no value under it. Each of those is "this section
+    declares nothing", not an error worth a line in the panel: a malformed
+    config yields no routers, and the caller already reports a config that
+    yielded none.
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def parse_dynamic_yaml(
     text: str, origin: str
 ) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware], dict[str, TraefikServiceRef]]:
@@ -222,21 +260,13 @@ def parse_dynamic_yaml(
     the panel would report a missing service it had never looked for.
     """
     try:
-        data = yaml.safe_load(text) or {}
+        data = yaml.safe_load(text)
     except Exception:
         return [], {}, {}
-    if not isinstance(data, dict):
-        return [], {}, {}
-    http = data.get("http") or {}
-    if not isinstance(http, dict):
-        return [], {}, {}
 
-    raw_routers = http.get("routers") or {}
-    if not isinstance(raw_routers, dict):
-        raw_routers = {}
-    raw_middlewares = http.get("middlewares") or {}
-    if not isinstance(raw_middlewares, dict):
-        raw_middlewares = {}
+    http = _mapping(_mapping(data).get("http"))
+    raw_routers = _mapping(http.get("routers"))
+    raw_middlewares = _mapping(http.get("middlewares"))
 
     routers: list[TraefikRouter] = []
     for name, spec in sorted(raw_routers.items()):

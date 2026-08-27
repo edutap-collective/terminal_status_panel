@@ -150,8 +150,8 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.ruff.lint]
-# The rule set the sibling packages use.
-select = ["E", "F", "W", "B", "I", "UP", "D", "S"]
+# The rule set the sibling packages use, plus C901.
+select = ["E", "F", "W", "B", "I", "UP", "D", "S", "C901"]
 # D203/D213 contradict the other pydocstyle rules ruff applies, so they are
 # excluded for that reason rather than by preference.
 #
@@ -162,6 +162,18 @@ select = ["E", "F", "W", "B", "I", "UP", "D", "S"]
 # particular, "Return true when the task runs" is the worse sentence. Enforcing
 # it would mean rewriting 49 good docstrings into weaker ones.
 ignore = ["D203", "D213", "D401"]
+
+[tool.ruff.lint.mccabe]
+# Every function in `src/` is under this today, so the limit is a floor that
+# holds rather than a target to work towards. It is here because the code got
+# here the other way round: `collect_traefik` reached 21 and `parse_labels` 16
+# one branch at a time, each addition reasonable on its own, and nothing said
+# anything until a review counted them.
+#
+# 10 is not sacred. A function that genuinely needs more should carry a
+# `# noqa: C901` with the reason -- an argued exception is worth more than a
+# threshold quietly raised for everyone.
+max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
 # `tests/**` rather than `tests/*`: a single star does not cross a directory

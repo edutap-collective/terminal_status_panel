@@ -304,6 +304,32 @@ def _split_timeline(tli_lsn: str) -> tuple[str | None, str]:
     return timeline.strip() or None, lsn.strip()
 
 
+def _pg_diverged(timeline: str | None, primary_timeline: str | None) -> bool:
+    """Whether this member is on a different timeline from the primary.
+
+    Unknown on either side is not divergence: a member whose timeline could not
+    be read says nothing about whether it followed the primary's history.
+    """
+    return primary_timeline is not None and timeline is not None and timeline != primary_timeline
+
+
+def _pg_warning(
+    reported: str, assigned: str, timeline: str | None, primary_timeline: str | None
+) -> str | None:
+    """What is worth saying about this member beyond its role.
+
+    A transition is ordinary and passes; a foreign timeline does not. Both are
+    shown together where both apply: one says the node is cut off, the other
+    that the monitor is already working on it, and neither answers the other's
+    question.
+    """
+    transition = f"→ {assigned}" if reported != assigned else None
+    if not _pg_diverged(timeline, primary_timeline):
+        return transition
+    note = f"TLI {timeline}≠{primary_timeline}"
+    return f"{note} {transition}" if transition else note
+
+
 def parse_pg_state(output: str) -> ClusterService:
     """Parse the fixed-width table of ``pg_autoctl show state``."""
     members: list[ClusterMember] = []
@@ -327,19 +353,8 @@ def parse_pg_state(output: str) -> ClusterService:
         raw.append((name, timeline, lsn, reported, assigned))
 
     for name, timeline, lsn, reported, assigned in raw:
-        # A transition is ordinary and passes; a foreign timeline does not.
-        # Both are shown together where both apply: one says the node is cut
-        # off, the other that the monitor is already working on it, and
-        # neither answers the other's question.
-        transition = f"→ {assigned}" if reported != assigned else None
-        diverged = (
-            primary_timeline is not None and timeline is not None and timeline != primary_timeline
-        )
-        if diverged:
-            note = f"TLI {timeline}≠{primary_timeline}"
-            warning = f"{note} {transition}" if transition else note
-        else:
-            warning = transition
+        diverged = _pg_diverged(timeline, primary_timeline)
+        warning = _pg_warning(reported, assigned, timeline, primary_timeline)
         members.append(
             ClusterMember(
                 name=name,
@@ -490,57 +505,85 @@ def mongo_command(timeout: float) -> list[str]:
     return ["mongosh", "--tls", "--tlsAllowInvalidCertificates", "--quiet", "--eval", script]
 
 
+def _mongo_hosts(data: dict) -> list[str]:
+    """Every configured member, in the order the set reports them.
+
+    ``hello`` reports arbiters and passive (zero-priority) members in their own
+    fields rather than in ``hosts``, so reading ``hosts`` alone shows a set that
+    has them one row short, with nothing saying a vote is missing. The command
+    asks all three; the parser has to accept all three back.
+    """
+    hosts = list(data.get("hosts") or [])
+    for field_name in ("passives", "arbiters"):
+        for host in data.get(field_name) or []:
+            if host not in hosts:
+                hosts.append(host)
+    return hosts
+
+
+def _mongo_measured_states(data: dict) -> dict[str, str]:
+    """The per-member states the fan-out brought back, keyed by host.
+
+    Empty when the deadline cut the loop off before its first member, and when
+    the answer predates the fan-out entirely. Both leave the membership-only
+    reading in ``_mongo_member_role`` to decide, which is what the panel showed
+    before any of this existed.
+    """
+    raw = data.get("members")
+    if not isinstance(raw, list):
+        return {}
+    return {
+        str(entry["host"]): str(entry.get("state") or "other")
+        for entry in raw
+        if isinstance(entry, dict) and entry.get("host")
+    }
+
+
+#: What a measured state means for the panel: the role to show, and whether it
+#: counts as healthy. ``None`` is "reached, answered, and in none of the states
+#: worth a name" -- starting up, rolling back, recovering. Alive, not serving.
+_MONGO_STATES: dict[str, tuple[str, bool | None]] = {
+    # Asked and could not be reached. That is a measurement, and a different
+    # thing from never having asked.
+    "unreachable": ("unreachable", False),
+    "primary": ("primary", True),
+    "secondary": ("secondary", True),
+    "arbiter": ("arbiter", True),
+    "other": ("other", None),
+}
+
+
+def _mongo_member_role(host: str, state: str | None, primary, me) -> tuple[str, bool | None]:
+    """One member's role and health, measured if possible and inferred if not."""
+    if state is not None and state in _MONGO_STATES:
+        return _MONGO_STATES[state]
+    if host == primary:
+        return "primary", True
+    if host == me:
+        # We just executed a command against this member.
+        return "secondary", True
+    # db.hello() lists membership, not state — claim nothing.
+    return "member", None
+
+
 def parse_mongo_hello(output: str) -> ClusterService:
-    """Parse the JSON produced by ``db.hello()``."""
+    """Parse the JSON produced by ``db.hello()`` and the per-member fan-out."""
     line = next((raw for raw in reversed(output.splitlines()) if raw.strip()), "")
     data = json.loads(line)
     primary = data.get("primary")
     me = data.get("me")
-    # `hello` reports arbiters and passive (zero-priority) members in their own
-    # fields rather than in `hosts`, so reading `hosts` alone shows a set that
-    # has them one row short, with nothing saying a vote is missing. The
-    # command already asks all three; the parser has to accept all three back.
-    hosts = list(data.get("hosts") or [])
-    for extra_field in ("passives", "arbiters"):
-        for host in data.get(extra_field) or []:
-            if host not in hosts:
-                hosts.append(host)
+    hosts = _mongo_hosts(data)
     if not hosts and not primary and not data.get("set"):
         # Valid JSON, but nothing we recognise as a replica set: no membership,
         # no primary, no set name. Nothing measured, so nothing claimed.
         return ClusterService(kind="mongodb", reachable=False, quorum_ok=None)
-    # What the fan-out reached, keyed by host. Absent for a member the deadline
-    # cut off, and for the whole answer when the script produced no fan-out at
-    # all -- both fall through to the membership-only reading below.
-    measured = {}
-    raw_members = data.get("members")
-    if isinstance(raw_members, list):
-        for entry in raw_members:
-            if isinstance(entry, dict) and entry.get("host"):
-                measured[str(entry["host"])] = str(entry.get("state") or "other")
 
-    members = []
-    for host in hosts:
-        state = measured.get(host)
-        if state == "unreachable":
-            # Asked and could not be reached. That is a measurement, and a
-            # different thing from never having asked.
-            role, healthy = "unreachable", False
-        elif state in ("primary", "secondary", "arbiter"):
-            role, healthy = state, True
-        elif state == "other":
-            # Reached, answered, and in none of the states worth a name --
-            # starting up, rolling back, recovering. Alive, not serving.
-            role, healthy = "other", None
-        elif host == primary:
-            role, healthy = "primary", True
-        elif host == me:
-            # We just executed a command against this member.
-            role, healthy = "secondary", True
-        else:
-            # db.hello() lists membership, not state — claim nothing.
-            role, healthy = "member", None
-        members.append(ClusterMember(name=host, role=role, healthy=healthy))
+    measured = _mongo_measured_states(data)
+    members = [
+        ClusterMember(name=host, role=role, healthy=healthy)
+        for host in hosts
+        for role, healthy in [_mongo_member_role(host, measured.get(host), primary, me)]
+    ]
     return ClusterService(
         kind="mongodb",
         name=data.get("set"),

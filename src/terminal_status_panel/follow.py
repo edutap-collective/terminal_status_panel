@@ -81,77 +81,54 @@ def crop(lines: list[list[Segment]], height: int) -> tuple[list[list[Segment]], 
     return list(lines[:room]), len(lines) - room
 
 
+def _row(*parts: str | None) -> str:
+    """Join the parts that exist. A part is omitted, not rendered empty."""
+    return " · ".join(part for part in parts if part)
+
+
 def status_line(hidden: int, interval: float, width: int, error: str | None = None) -> str:
     """The bottom row: what is out of sight, the cadence, and how to stop.
 
-    Preserves the stop hint even when space is tight. The error message is
-    the only unbounded part; if necessary it is truncated or omitted to
-    ensure the hint stays visible.
+    A list of candidate rows in order of preference, returning the first that
+    fits. The stop hint is in every one of them and survives to the last:
+    without it a reader who does not know the panel cannot leave it. The error
+    is the only unbounded part, so it is the one that gets shortened, and the
+    hidden-line count is dropped before the cadence because "how often does
+    this refresh" is the more useful of the two once space is scarce.
     """
     stop_hint = "Ctrl-C to stop"
     interval_str = f"every {interval:g}s"
+    hidden_str = f"↓ {hidden} more lines" if hidden > 0 else None
 
-    # Build full row with all components.
-    parts = []
-    if hidden > 0:
-        parts.append(f"↓ {hidden} more lines")
-    parts.append(interval_str)
-    if error:
-        parts.append(error)
-    parts.append(stop_hint)
+    full = _row(hidden_str, interval_str, error, stop_hint)
+    if len(full) <= width:
+        return full
 
-    result = " · ".join(parts)
-    if len(result) <= width:
-        return result
-
-    # Row is too long. Check if the minimal row (interval + hint) fits.
-    parts_minimal = [interval_str, stop_hint]
-    result_minimal = " · ".join(parts_minimal)
-    if len(result_minimal) > width:
-        # Minimal doesn't fit; just return hint truncated to width.
+    minimal = _row(interval_str, stop_hint)
+    if len(minimal) > width:
+        # Not even the cadence and the hint fit. The hint is the part that has
+        # to survive, cut to whatever there is.
         return stop_hint[:width]
 
-    # Minimal fits. Try removing error.
-    if error:
-        parts_no_error = []
-        if hidden > 0:
-            parts_no_error.append(f"↓ {hidden} more lines")
-        parts_no_error.append(interval_str)
-        parts_no_error.append(stop_hint)
+    if not error:
+        # The only part left to drop is the hidden-line count, and what remains
+        # is `minimal`, which was just measured as fitting.
+        return minimal
 
-        result_no_error = " · ".join(parts_no_error)
-        if len(result_no_error) <= width:
-            return result_no_error
+    without_error = _row(hidden_str, interval_str, stop_hint)
+    if len(without_error) <= width:
+        return without_error
 
-        # Try to fit truncated error.
-        if hidden > 0:
-            hidden_str = f"↓ {hidden} more lines"
-            # Calculate space available for error between interval and hint.
-            required = len(" · ".join([hidden_str, interval_str, stop_hint]))
-            available = width - required - 3  # -3 for the " · " separator.
-            if available > 0:
-                truncated = error[:available]
-                return " · ".join([hidden_str, interval_str, truncated, stop_hint])[:width]
-
-        # Try truncated error without hidden.
-        required = len(" · ".join([interval_str, stop_hint]))
-        available = width - required - 3
+    # Keep the error, shortened, for as long as any of it survives -- a
+    # truncated reason still names the failure, where dropping it says nothing
+    # happened. Tried with the hidden-line count first, then without it.
+    for prefix in ([hidden_str] if hidden_str else []) + [None]:
+        kept = _row(prefix, interval_str, stop_hint)
+        available = width - len(kept) - 3  # -3 for the " · " before the error
         if available > 0:
-            truncated = error[:available]
-            return " · ".join([interval_str, truncated, stop_hint])[:width]
+            return _row(prefix, interval_str, error[:available], stop_hint)[:width]
 
-        # No space for truncated error; return without it.
-        return result_no_error[:width]
-
-    # No error but too long. Try removing hidden.
-    if hidden > 0:
-        parts_no_hidden = [interval_str, stop_hint]
-        result_no_hidden = " · ".join(parts_no_hidden)
-        if len(result_no_hidden) <= width:
-            return result_no_hidden
-
-    # Should not reach here (minimal fits), but fallback to hint.
-    return stop_hint[:width]
+    return without_error[:width]
 
 
 def run_follow(

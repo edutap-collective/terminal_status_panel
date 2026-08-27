@@ -60,7 +60,7 @@ def _service_state(
         # Nobody looked at Docker, or the look came back empty-handed: no
         # client (`swarm is None`) or no answer from the daemon
         # (`reachable=False`). Claiming the service does not exist would be
-        # asserting what was never measured — show the neutral dot, no count.
+        # asserting what was never measured — show the unmeasured glyph, no count.
         line.append(f"  {icons.UNKNOWN}", style="dim")
         return icons.UNKNOWN, line
     docker_name = ref.docker_service if ref else None
