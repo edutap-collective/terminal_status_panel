@@ -91,9 +91,18 @@ test = [
     "pytest-cov>=5",
 ]
 typecheck = ["ty>=0.0.70"]
+# Sphinx 8 is the first release that supports Python 3.13, and the docs build
+# runs on whatever interpreter the checkout has. myst-parser 4 is the one that
+# pairs with it.
+docs = [
+    "sphinx>=8",
+    "myst-parser>=4",
+    "sphinx-autobuild>=2024.10",
+]
 dev = [
     {include-group = "test"},
     {include-group = "typecheck"},
+    {include-group = "docs"},
     "pdbp>=1.5",
     "ruff>=0.16,<0.17",
     "pillow>=11",  # only to regenerate bundled logos via tools/generate_logos.py
