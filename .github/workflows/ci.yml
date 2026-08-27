@@ -40,6 +40,62 @@ jobs:
       - run: uv sync --no-default-groups --group test
       - run: uv run --no-sync python -m pytest
 
+  # The matrix above resolves to whatever is current, so it says nothing about
+  # the lower bounds in pyproject.toml. This job installs exactly those bounds
+  # and runs the same suite. It runs on both ends of the supported interpreter
+  # range on purpose: docker 5.0.3 passes everything on 3.11 and cannot be
+  # imported on 3.12+, so a floor checked only against the oldest Python would
+  # publish a compatibility claim the package does not keep.
+  minimum-deps:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      # --resolution lowest-direct: the oldest version each *declared* bound
+      # allows, while transitive dependencies stay current. `lowest` would pin
+      # the whole tree to its oldest resolvable state, which tests other
+      # projects' floors rather than this project's.
+      #
+      # `uv sync` resolves every dependency group at once even when installing
+      # one, so an unbounded *dev* tool lands in this resolution too. That is
+      # how this job first went red: pillow resolved to 1.0, a 2010 release
+      # whose setup.py is Python 2. Every group carries a floor now.
+      #
+      # This depends on no uv.lock being committed (it is git-ignored): a lock
+      # would be reused and `--resolution` quietly ignored. The version check
+      # below is what would catch that, rather than a job that passes while
+      # testing the wrong versions.
+      - run: uv sync --no-default-groups --group test --resolution lowest-direct
+      - name: Show what was actually installed
+        run: uv pip list
+      - name: Assert the declared floors are what got installed
+        run: |
+          uv run --no-sync python - <<'EOF'
+          import importlib.metadata as md
+          expected = {
+              "rich": "12.6.0", "docker": "6.0.0", "psutil": "5.9.8",
+              "distro": "1.5.0", "dnspython": "2.0.0", "PyYAML": "6.0.1",
+              "httpx2": "2.12.0",
+          }
+          wrong = {n: (md.version(n), v) for n, v in expected.items() if md.version(n) != v}
+          if wrong:
+              for name, (got, want) in wrong.items():
+                  print(f"{name}: installed {got}, expected the declared floor {want}")
+              raise SystemExit(
+                  "This job is not testing the floors it claims to test. "
+                  "Either pyproject's lower bounds moved without this list, "
+                  "or the resolution was not lowest-direct."
+              )
+          print("All seven runtime dependencies are at their declared floor.")
+          EOF
+      - run: uv run --no-sync python -m pytest
+
   lint:
     runs-on: ubuntu-latest
     steps:
