@@ -34,6 +34,12 @@ def test_every_column_glyph_occupies_two_cells(glyph):
     one-cell glyph beside a two-cell one shifts every following column on that
     row. `UNKNOWN` was `·` -- one cell against `✅`'s two -- through 0.9, and
     every cluster member list was ragged because of it.
+
+    It also depends on rich, which is why `rich>=15.0` is a floor. Up to 14.1
+    `cell_len("⚠️")` is 1 where a terminal draws two cells, so warning rows
+    were one column out with any older release. The minimum-dependency job is
+    what found that; the version matrix cannot, because it always resolves to
+    a rich that agrees.
     """
     assert cell_len(glyph) == 2, (
         f"{glyph!r} is {cell_len(glyph)} cells wide; a status column needs 2. "
