@@ -21,8 +21,10 @@ a bare ``status-full`` pays for. See ``DEFAULT_SECTIONS`` below.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
+import traceback
 
 from rich.console import Console
 
@@ -248,7 +250,38 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
     parser.add_argument(
         "--processes", type=int, default=None, help="rows per process list; 0 turns the block off"
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="report config problems and any unexpected error on stderr; still exits 0",
+    )
     return parser.parse_args(argv)
+
+
+#: Environment switch for the same thing ``--debug`` does. A login shell runs
+#: the panel from a profile snippet nobody wants to edit to debug it once, and
+#: `TERMINAL_STATUS_PANEL_DEBUG=1 status-full` is a thing you can type in front
+#: of the command you already have.
+DEBUG_ENV_VAR = "TERMINAL_STATUS_PANEL_DEBUG"
+
+_DEBUG_ON = frozenset({"1", "true", "yes", "on"})
+
+
+def _debug_requested(flag: bool) -> bool:
+    """Whether diagnostics were asked for, by flag or by environment."""
+    if flag:
+        return True
+    return os.environ.get(DEBUG_ENV_VAR, "").strip().lower() in _DEBUG_ON
+
+
+def _report(message: str) -> None:
+    """One diagnostic line on stderr.
+
+    stderr rather than the panel: stdout is the panel, and it is often piped
+    into an MOTD file. A diagnostic belongs where it cannot end up in the
+    thing being diagnosed.
+    """
+    print(message, file=sys.stderr)
 
 
 def main(
@@ -257,9 +290,18 @@ def main(
     prog: str = "status-full",
 ) -> int:
     """Render the status panel. Always returns 0 — never fails a login."""
+    debug = _debug_requested(False)
+    stage = "parsing arguments"
     try:
         args = _parse_args(argv, prog)
+        debug = _debug_requested(args.debug)
+        stage = "reading the config"
         cfg = load_config(args.config)
+        if debug:
+            for problem in cfg.problems:
+                _report(f"config: {problem}")
+            if not cfg.problems:
+                _report("config: no problems found")
         # Written onto the config rather than passed along: `collect_all` is
         # also called once per pass by follow mode, which never sees argv, and
         # a flag that survived only the first pass would be worse than none.
@@ -271,12 +313,19 @@ def main(
             )
         width = resolve_width(args.width, cfg)
         console = build_console(width, args.no_color)
+        stage = "collecting the data"
         data = collect_all(cfg, selected)
+        stage = "rendering the panel"
         console.print(build_layout(data, cfg, selected))
-    except Exception:  # noqa: S110
-        # A status panel must never break the login shell. There is nowhere to
-        # log to either: stderr at login is noise in front of the prompt.
-        pass
+    except Exception as exc:
+        # A status panel must never break the login shell, so this still
+        # swallows everything and still returns 0. What changed is that the
+        # silence can be lifted: by default stderr at login is noise in front
+        # of the prompt, but an empty panel with no recoverable reason is not
+        # graceful degradation, it is an invisible failure.
+        if debug:
+            _report(f"failed while {stage}: {type(exc).__name__}: {exc}")
+            traceback.print_exc(file=sys.stderr)
     return 0
 
 
