@@ -118,9 +118,23 @@ def run_with_budget(
             expired.add(name)
 
     abandoned = [thread for _, thread in threads if thread.is_alive()]
-    if abandoned:
-        with _stragglers_lock:
-            _stragglers.extend(abandoned)
+    with _stragglers_lock:
+        # Sweep on every run, not only on one that adds. A thread lands here
+        # because it outlived its deadline, not because it will never end --
+        # most finish a moment later, and once one has, holding its `Thread`
+        # object buys the exit grace period nothing.
+        #
+        # Nothing else empties this list: `_join_stragglers` runs at
+        # interpreter exit, which for a login run is seconds away and for
+        # `--follow` never comes. A node with a permanently slow Docker or DNS
+        # times the same check out on every 20-second pass, so without this the
+        # list grows for as long as the terminal stays open.
+        #
+        # Sweeping unconditionally is what makes "this list holds the abandoned
+        # threads still running" true after every call rather than only after a
+        # timeout. The lock is uncontended and the list is a handful of entries.
+        _stragglers[:] = [thread for thread in _stragglers if thread.is_alive()]
+        _stragglers.extend(abandoned)
 
     with lock:
         truncated = [
