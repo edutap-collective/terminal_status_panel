@@ -15,6 +15,8 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-27
+
 ### Added
 
 - `--debug`, and `TERMINAL_STATUS_PANEL_DEBUG=1`, report configuration values
@@ -29,9 +31,14 @@ guesswork dressed as a record.
   reports them in their own fields rather than in `hosts`, so a set that has
   them was rendering a row short.
 - Documentation moved into `docs/` as a Sphinx site organised by Diataxis, with
-  `make docs`, `make docs-linkcheck` and `make docs-live`.
+  `make docs`, `make docs-linkcheck` and `make docs-live`. The README keeps a
+  quick start and links into it, at 92 lines instead of 1733.
 - A first-run tutorial.
 - This changelog.
+- An explicit statement, in `__init__.py` and in the documentation, that there
+  is **no public Python API before 1.0**. The console scripts and the
+  configuration file are the supported surface; anything importable may change
+  in any release.
 
 ### Changed
 
@@ -83,10 +90,18 @@ guesswork dressed as a record.
   the ones declared. It found the `rich` incompatibility above, which the
   regular matrix cannot see.
 - Status glyphs are asserted to occupy two terminal cells.
+- No function in the package is above McCabe 10 any more; nine were over it,
+  the worst at 21. `C901` is now part of the lint rule set with that limit, so
+  it is a floor that holds rather than a number in a review. `status_line` was
+  rewritten rather than split and checked against the original over 21000
+  input combinations.
+- `model.py` is a package split by domain — system, docker, health, traefik —
+  re-exported so no caller or test changed.
 
 ## [0.9.0] and earlier
 
 See the git history and the release tags.
 
-[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/edutap-collective/terminal_status_panel/releases/tag/v0.9.0
