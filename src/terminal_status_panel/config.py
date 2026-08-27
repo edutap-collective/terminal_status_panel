@@ -195,6 +195,165 @@ class Config:
     #: exec probes -- the Kafka one alone carries roughly 2.6 s of JVM startup
     #: -- so a five-second cadence would keep a JVM starting forever.
     follow_health_interval: float = 20.0
+    #: Values in the config file that could not be used, with what was used
+    #: instead. Empty for a valid file and for a missing one -- absent is not
+    #: malformed. Shown by ``--debug``; the panel itself renders regardless.
+    problems: list[ConfigProblem] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ConfigProblem:
+    """One config value that could not be used, and what was used instead.
+
+    Collected rather than raised. A status panel that refuses to render
+    because one threshold is misspelled is worse than one that renders with
+    the default and says so -- and until this existed, a single bad value
+    made ``load_config`` raise, ``main`` swallow it, and the login shell print
+    nothing whatsoever.
+    """
+
+    #: Dotted path as it appears in the file: ``thresholds.memory.warning``.
+    key: str
+    #: What was found there, as ``repr`` -- quoted, so `"75"` and `75` differ.
+    found: str
+    #: The value used instead, as ``repr``.
+    used: str
+    #: Why it could not be used, in a few words.
+    reason: str
+
+    def __str__(self) -> str:
+        """One line, as ``--debug`` prints it."""
+        return f"{self.key}: {self.reason} (found {self.found}, using {self.used})"
+
+
+#: Strings TOML would have accepted as a boolean if they had not been quoted.
+#: `bool("false")` is `True`, so reading a quoted boolean the way Python does
+#: silently inverts what the file says -- the one misreading worth special
+#: handling rather than a fallback.
+_TRUE_WORDS = frozenset({"true", "yes", "on", "1"})
+_FALSE_WORDS = frozenset({"false", "no", "off", "0"})
+
+
+class _Reader:
+    """Reads typed values out of the parsed TOML, and never raises.
+
+    Every accessor takes the value's dotted path, so a fallback can name
+    itself without the call site repeating the name in a message. Values that
+    are simply absent are not problems -- the defaults are the documented
+    behaviour, and a config file is optional.
+    """
+
+    def __init__(self) -> None:
+        self.problems: list[ConfigProblem] = []
+
+    def _note(self, key: str, found: object, used: object, reason: str) -> None:
+        self.problems.append(
+            ConfigProblem(key=key, found=repr(found), used=repr(used), reason=reason)
+        )
+
+    def note_file(self, path: str, reason: str) -> None:
+        """Record an unreadable or unparseable file as a problem in its own right."""
+        self.problems.append(
+            ConfigProblem(key=path, found="unreadable", used="built-in defaults", reason=reason)
+        )
+
+    def number(
+        self,
+        section: dict,
+        key: str,
+        default: float,
+        *,
+        minimum: float | None = None,
+    ) -> float:
+        """A float, falling back on anything that is not one.
+
+        ``minimum`` rejects rather than clamps: a timeout of 0 is not a small
+        timeout, it is a value nobody can have meant, and clamping it to the
+        smallest legal one would hide the typo behind plausible behaviour.
+        """
+        name = key.rsplit(".", 1)[-1]
+        if name not in section:
+            return default
+        raw = section[name]
+        if isinstance(raw, bool):
+            # `True` is an int in Python, and would silently become 1.0.
+            self._note(key, raw, default, "expected a number, found a boolean")
+            return default
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            self._note(key, raw, default, "expected a number")
+            return default
+        if value != value or value in (float("inf"), float("-inf")):
+            self._note(key, raw, default, "not a finite number")
+            return default
+        if minimum is not None and value < minimum:
+            self._note(key, raw, default, f"must be at least {minimum}")
+            return default
+        return value
+
+    def integer(
+        self,
+        section: dict,
+        key: str,
+        default: int,
+        *,
+        minimum: int | None = None,
+        clamp_to: int | None = None,
+    ) -> int:
+        """A whole number.
+
+        ``clamp_to`` is for the documented case: README says a negative
+        ``top_processes`` means zero. That is the file being read as written,
+        not a misreading, so it is applied silently. ``minimum`` is the other
+        case -- a value outside the range falls back and is reported.
+        """
+        name = key.rsplit(".", 1)[-1]
+        if name not in section:
+            return default
+        raw = section[name]
+        if isinstance(raw, bool):
+            self._note(key, raw, default, "expected a whole number, found a boolean")
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            self._note(key, raw, default, "expected a whole number")
+            return default
+        if clamp_to is not None and value < clamp_to:
+            return clamp_to
+        if minimum is not None and value < minimum:
+            self._note(key, raw, default, f"must be at least {minimum}")
+            return default
+        return value
+
+    def flag(self, section: dict, key: str, default: bool) -> bool:
+        """A boolean, forgiving the quoted spellings TOML would have accepted."""
+        name = key.rsplit(".", 1)[-1]
+        if name not in section:
+            return default
+        raw = section[name]
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str):
+            word = raw.strip().lower()
+            if word in _TRUE_WORDS:
+                return True
+            if word in _FALSE_WORDS:
+                return False
+        self._note(key, raw, default, "expected true or false")
+        return default
+
+    def text(self, section: dict, key: str, default: str) -> str:
+        """A string. A number here is a mistake, not something to stringify."""
+        name = key.rsplit(".", 1)[-1]
+        if name not in section:
+            return default
+        raw = section[name]
+        if isinstance(raw, str):
+            return raw
+        self._note(key, raw, default, "expected a string")
+        return default
 
 
 def _section(data: dict, *keys: str) -> dict:
@@ -227,22 +386,22 @@ def _list_setting(value: object, default: list) -> list:
     return list(default)
 
 
-def _health_config(data: dict) -> HealthConfig:
+def _health_config(data: dict, reader: _Reader) -> HealthConfig:
     """Parse the [health] block. A malformed value falls back to its default."""
     health = _section(data, "health")
     defaults = HealthConfig()
 
-    try:
-        budget = float(health.get("budget", defaults.budget))
-    except (TypeError, ValueError):
-        budget = defaults.budget
+    budget = reader.number(health, "health.budget", defaults.budget, minimum=0.1)
 
     timeouts = dict(DEFAULT_HEALTH_TIMEOUTS)
-    for key, value in _section(data, "health", "timeout").items():
-        try:
-            timeouts[key] = float(value)
-        except (TypeError, ValueError):
-            continue
+    timeout_section = _section(data, "health", "timeout")
+    for key in timeout_section:
+        timeouts[key] = reader.number(
+            timeout_section,
+            f"health.timeout.{key}",
+            DEFAULT_HEALTH_TIMEOUTS.get(key, defaults.budget),
+            minimum=0.0,
+        )
 
     enabled = health.get("enabled")
     kinds = list(enabled) if isinstance(enabled, list) else list(DEFAULT_HEALTH_KINDS)
@@ -270,11 +429,19 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     Never raises on a missing or unreadable file — falls back to defaults.
     """
     target = os.fspath(path) if path is not None else DEFAULT_CONFIG_PATH
+    reader = _Reader()
     try:
         with open(target, "rb") as fh:
             data = tomllib.load(fh)
-    except (FileNotFoundError, PermissionError, tomllib.TOMLDecodeError, OSError):
+    except FileNotFoundError:
+        # Absent is the normal case: the config file is optional and the
+        # defaults are the documented behaviour. Not a problem to report.
         return Config()
+    except (PermissionError, tomllib.TOMLDecodeError, OSError) as exc:
+        # Present but unusable is a different thing entirely, and the one a
+        # reader needs told: the file they edited is having no effect.
+        reader.note_file(target, f"{type(exc).__name__}: {exc}")
+        return Config(problems=reader.problems)
 
     t = Thresholds()
     mem = _section(data, "thresholds", "memory")
@@ -282,13 +449,15 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     fs = _section(data, "thresholds", "filesystem")
     load = _section(data, "thresholds", "load")
     thresholds = Thresholds(
-        memory_warning=float(mem.get("warning", t.memory_warning)),
-        memory_critical=float(mem.get("critical", t.memory_critical)),
-        swap_warning=float(swap.get("warning", t.swap_warning)),
-        filesystem_warning=float(fs.get("warning", t.filesystem_warning)),
-        filesystem_critical=float(fs.get("critical", t.filesystem_critical)),
-        load_warning=float(load.get("warning", t.load_warning)),
-        load_critical=float(load.get("critical", t.load_critical)),
+        memory_warning=reader.number(mem, "thresholds.memory.warning", t.memory_warning),
+        memory_critical=reader.number(mem, "thresholds.memory.critical", t.memory_critical),
+        swap_warning=reader.number(swap, "thresholds.swap.warning", t.swap_warning),
+        filesystem_warning=reader.number(fs, "thresholds.filesystem.warning", t.filesystem_warning),
+        filesystem_critical=reader.number(
+            fs, "thresholds.filesystem.critical", t.filesystem_critical
+        ),
+        load_warning=reader.number(load, "thresholds.load.warning", t.load_warning),
+        load_critical=reader.number(load, "thresholds.load.critical", t.load_critical),
     )
     docker = _section(data, "docker")
     services = _section(data, "services")
@@ -298,14 +467,10 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     # Presence, not truthiness: an explicit [] means "hide nothing" and must not
     # be replaced by the platform defaults it was written to override.
     ignore = resources.get("ignore_mountpoints", None)
-    try:
-        process_sample = float(resources.get("process_sample", 0.3))
-    except (TypeError, ValueError):
-        process_sample = 0.3
-    try:
-        top_processes = max(0, int(resources.get("top_processes", 5)))
-    except (TypeError, ValueError):
-        top_processes = 5
+    process_sample = reader.number(resources, "resources.process_sample", 0.3)
+    # clamp_to rather than minimum: README documents a negative value as
+    # meaning 0, so that is the file read as written, not a misreading.
+    top_processes = reader.integer(resources, "resources.top_processes", 5, clamp_to=0)
     traefik_section = _section(data, "traefik")
     links: dict[str, str] = {}
     for name, value in _section(data, "traefik", "links").items():
@@ -336,31 +501,34 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         ca=traefik_section.get("ca") or None,
         links=links,
     )
+    health_config = _health_config(data, reader)
     follow_section = _section(data, "follow")
-    try:
-        follow_interval = float(follow_section.get("interval", 5.0))
-    except (TypeError, ValueError):
-        follow_interval = 5.0
-    try:
-        follow_health_interval = float(follow_section.get("health_interval", 20.0))
-    except (TypeError, ValueError):
-        follow_health_interval = 20.0
+    follow_interval = reader.number(follow_section, "follow.interval", 5.0, minimum=0.1)
+    follow_health_interval = reader.number(
+        follow_section, "follow.health_interval", 20.0, minimum=0.1
+    )
     return Config(
-        width=int(data.get("width", 80)),
-        docker_timeout=float(docker.get("timeout", 1.5)),
-        docker_df_timeout=float(docker.get("df_timeout", 4.0)),
+        # A width below 20 leaves no room for a single column of content, and
+        # a timeout of 0 aborts every call before it starts: both are values
+        # nobody can have meant, so they fall back and say so.
+        width=reader.integer(data, "width", 80, minimum=20),
+        docker_timeout=reader.number(docker, "docker.timeout", 1.5, minimum=0.1),
+        docker_df_timeout=reader.number(docker, "docker.df_timeout", 4.0, minimum=0.1),
         critical_services=_list_setting(services.get("critical"), []),
-        description_label=str(docker.get("description_label", DEFAULT_DESCRIPTION_LABEL)),
-        group_label=str(docker.get("group_label", DEFAULT_GROUP_LABEL)),
-        show_image=bool(docker.get("show_image", True)),
+        description_label=reader.text(
+            docker, "docker.description_label", DEFAULT_DESCRIPTION_LABEL
+        ),
+        group_label=reader.text(docker, "docker.group_label", DEFAULT_GROUP_LABEL),
+        show_image=reader.flag(docker, "docker.show_image", True),
         infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),
         ignore_mountpoints=_list_setting(ignore, platform_defaults.ignore_mountpoints()),
         thresholds=thresholds,
-        health=_health_config(data),
+        health=health_config,
         traefik=traefik,
         process_sample=process_sample,
         top_processes=top_processes,
         follow_interval=follow_interval,
         follow_health_interval=follow_health_interval,
+        problems=reader.problems,
     )
