@@ -29,7 +29,12 @@ dependencies = [
     "distro",
     "dnspython",  # query resolvers directly: getaddrinfo would hide /etc/hosts divergence
     "pyyaml",  # parse the Traefik file-provider config (api and ping-router routers)
-    "httpx",  # the optional cross-check against Traefik's own /api/rawdata
+    # The optional cross-check against Traefik's own /api/rawdata. httpx2 is
+    # the maintained continuation of httpx (github.com/pydantic/httpx2); the
+    # sibling packages use it, and it verifies against the system trust store
+    # by default rather than certifi's bundle -- which is the behaviour a
+    # privately signed endpoint on these servers needs.
+    "httpx2",
 ]
 
 # Development tooling lives in dependency groups (PEP 735), not in extras.

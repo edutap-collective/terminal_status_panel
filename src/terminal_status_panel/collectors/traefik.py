@@ -15,7 +15,7 @@ import base64
 import ssl
 from contextlib import contextmanager
 
-import httpx
+import httpx2
 import yaml
 
 from ..model import TraefikInfo, TraefikRouter
@@ -347,19 +347,25 @@ def _is_readable_rawdata(payload) -> bool:
 
 
 def _ssl_context(api) -> ssl.SSLContext:
-    """The configured client certificate, as a context httpx can use.
+    """The configured client certificate, as a context httpx2 can use.
 
-    httpx dropped ``cert=`` from its top-level API in 0.28, so the material is
-    loaded into an ``SSLContext`` instead. ``load_cert_chain`` takes the key
-    separately or reads it from the certificate file when it is bundled there,
-    which mirrors what the configuration allows.
+    Neither httpx (since 0.28) nor httpx2 takes ``cert=`` at the top level, so
+    the material is loaded into an ``SSLContext`` instead. ``load_cert_chain``
+    takes the key separately or reads it from the certificate file when it is
+    bundled there, which mirrors what the configuration allows.
+
+    Building the context here also opts out of httpx2's default, which is
+    ``truststore`` over the system trust store. That default is the better one
+    for a plain request, but a client certificate has to be loaded into a
+    context either way, and ``api.ca`` is the knob that says which roots to
+    trust for this endpoint.
     """
     context = ssl.create_default_context(cafile=api.ca) if api.ca else ssl.create_default_context()
     context.load_cert_chain(api.cert, api.key)
     return context
 
 
-def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | None:
+def fetch_accepted(cfg, *, client: httpx2.Client | None = None) -> set[str] | None:
     """Ask Traefik what it accepted, or None when that could not be learned.
 
     ``None`` covers every way of not learning it: not configured, unreachable,
@@ -367,7 +373,7 @@ def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | Non
     in the expected shape produces a set — an empty one included, since
     "Traefik holds no routers" is a real answer.
 
-    ``client`` is a private testing seam: pass an ``httpx.Client`` built on a
+    ``client`` is a private testing seam: pass an ``httpx2.Client`` built on a
     ``MockTransport`` to exercise this against a recorded response without a
     real socket. Production code never sets it — the default builds a plain
     request with the configured mTLS material.
@@ -379,7 +385,7 @@ def fetch_accepted(cfg, *, client: httpx.Client | None = None) -> set[str] | Non
         if client is not None:
             response = client.get(api.url, timeout=5.0)
         else:
-            response = httpx.get(api.url, verify=_ssl_context(api), timeout=5.0)
+            response = httpx2.get(api.url, verify=_ssl_context(api), timeout=5.0)
         response.raise_for_status()
         payload = response.json()
         if not _is_readable_rawdata(payload):

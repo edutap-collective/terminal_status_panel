@@ -2,7 +2,7 @@ import inspect
 import ssl
 from datetime import UTC
 
-import httpx
+import httpx2
 import pytest
 
 from terminal_status_panel.collectors import traefik as collector
@@ -569,9 +569,9 @@ def test_fetch_accepted_returns_none_and_makes_no_request_when_not_configured():
 
     def handler(request):
         calls.append(request)
-        return httpx.Response(200, json={"routers": {}})
+        return httpx2.Response(200, json={"routers": {}})
 
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
         result = collector.fetch_accepted(Config(), client=client)
 
     assert result is None
@@ -580,9 +580,9 @@ def test_fetch_accepted_returns_none_and_makes_no_request_when_not_configured():
 
 def test_fetch_accepted_returns_none_not_empty_set_when_unreachable():
     def handler(request):
-        raise httpx.ConnectError("connection refused", request=request)
+        raise httpx2.ConnectError("connection refused", request=request)
 
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
         result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
 
     assert result is None
@@ -597,9 +597,9 @@ def test_fetch_accepted_parses_a_successful_response():
     }
 
     def handler(request):
-        return httpx.Response(200, json=payload)
+        return httpx2.Response(200, json=payload)
 
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
         result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
 
     assert result == {"kafbat-ui"}
@@ -620,9 +620,9 @@ def test_fetch_accepted_returns_none_when_the_payload_cannot_be_read():
     for payload in shapes:
 
         def handler(request, payload=payload):
-            return httpx.Response(200, json=payload)
+            return httpx2.Response(200, json=payload)
 
-        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
             result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
 
         assert result is None, payload
@@ -634,10 +634,10 @@ def test_an_unreadable_payload_leaves_every_router_unconsulted():
     from terminal_status_panel.model import TraefikInfo
 
     def handler(request):
-        return httpx.Response(200, json={"routers": ["kafbat-ui@swarm"]})
+        return httpx2.Response(200, json={"routers": ["kafbat-ui@swarm"]})
 
     info = TraefikInfo(routers=[TraefikRouter(name="a"), TraefikRouter(name="b")])
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
         accepted = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
     if accepted is not None:  # what cli.collect_all does
         collector.mark_rejected(info, accepted)
@@ -653,10 +653,10 @@ def test_an_empty_router_list_is_a_readable_answer_and_rejects_everything():
     from terminal_status_panel.model import TraefikInfo
 
     def handler(request):
-        return httpx.Response(200, json={"routers": {}})
+        return httpx2.Response(200, json={"routers": {}})
 
     info = TraefikInfo(routers=[TraefikRouter(name="a")])
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
         accepted = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
     assert accepted == set()
     collector.mark_rejected(info, accepted)
@@ -665,9 +665,9 @@ def test_an_empty_router_list_is_a_readable_answer_and_rejects_everything():
 
 def test_fetch_accepted_returns_none_on_a_server_error_like_unreachable():
     def handler(request):
-        return httpx.Response(500)
+        return httpx2.Response(500)
 
-    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+    with httpx2.Client(transport=httpx2.MockTransport(handler)) as client:
         result = collector.fetch_accepted(Config(traefik=_API_CFG), client=client)
 
     assert result is None
@@ -732,32 +732,34 @@ def test_no_configs_at_all_is_not_reported_as_a_gap():
 # builds the real request. That branch was therefore never executed by the
 # suite -- and it was broken: httpx removed `cert` from its top-level API in
 # 0.28, so the call raised TypeError and the mTLS cross-check failed silently.
+# httpx2 has no such parameter either, so the same test still guards the same
+# mistake -- now against the signature the package actually calls.
 # --------------------------------------------------------------------------- #
 
 
-def test_the_production_path_passes_arguments_httpx_accepts(monkeypatch, tmp_path):
-    """The regression test for a call httpx would reject.
+def test_the_production_path_passes_arguments_httpx2_accepts(monkeypatch, tmp_path):
+    """The regression test for a call httpx2 would reject.
 
     Binding against the real signature is the point: a plain mock accepts any
     keyword, so it would have recorded `cert=...` happily and proved nothing.
     """
     monkeypatch.setattr(collector, "_ssl_context", lambda api: ssl.create_default_context())
-    signature = inspect.signature(httpx.get)
+    signature = inspect.signature(httpx2.get)
     seen = {}
 
     def recording_get(url, **kwargs):
-        signature.bind(url, **kwargs)  # TypeError if httpx would not accept these
+        signature.bind(url, **kwargs)  # TypeError if httpx2 would not accept these
         seen.update(kwargs)
         # `request=` is required: raise_for_status refuses to work without it.
-        return httpx.Response(200, json={"routers": {}}, request=httpx.Request("GET", url))
+        return httpx2.Response(200, json={"routers": {}}, request=httpx2.Request("GET", url))
 
-    monkeypatch.setattr(collector.httpx, "get", recording_get)
+    monkeypatch.setattr(collector.httpx2, "get", recording_get)
     cfg = Config(traefik=TraefikApiConfig(url="https://example.invalid/api", cert="/unused.pem"))
 
     result = collector.fetch_accepted(cfg)
 
     assert result == set()
-    assert "cert" not in seen  # httpx has no such parameter any more
+    assert "cert" not in seen  # httpx2 has no such parameter either
 
 
 def _self_signed(tmp_path, *, split_key: bool):
@@ -812,3 +814,63 @@ def test_the_client_certificate_is_actually_loadable(tmp_path, split_key):
     context = collector._ssl_context(api)
 
     assert isinstance(context, ssl.SSLContext)
+
+
+def test_without_a_configured_ca_the_system_trust_store_is_used(tmp_path):
+    """`traefik.ca` unset means OpenSSL's default paths, not a vendored bundle.
+
+    This is worth pinning because the README claimed the opposite for two
+    releases: that the HTTP library would fall back to certifi's bundle and
+    miss a corporate CA in `/etc/ssl/certs`. The library never gets to decide.
+    `fetch_accepted` only runs when a client certificate is configured, so
+    `_ssl_context` always runs too and always passes an explicit context --
+    and `ssl.create_default_context()` loads from
+    `ssl.get_default_verify_paths()`, which is the system store.
+    """
+    cert, key = _self_signed(tmp_path, split_key=True)
+    api = TraefikApiConfig(url="https://example.invalid/api", cert=cert, key=key)
+
+    context = collector._ssl_context(api)
+
+    system_default = ssl.create_default_context()
+    loaded = system_default.cert_store_stats()["x509"]
+    assert loaded > 0, "no system roots on this host -- the assertion below would prove nothing"
+    assert context.cert_store_stats()["x509"] == loaded
+
+
+def test_a_configured_ca_replaces_the_system_roots(tmp_path):
+    """`traefik.ca` is for an endpoint the system store does not know."""
+    cert, key = _self_signed(tmp_path, split_key=True)
+    api = TraefikApiConfig(url="https://example.invalid/api", cert=cert, key=key, ca=cert)
+
+    context = collector._ssl_context(api)
+
+    # Exactly the one certificate handed in, and none of the system's set.
+    # Counted under `x509` rather than `x509_ca`: the fixture is a self-signed
+    # leaf with no basicConstraints, so OpenSSL does not file it as a CA -- an
+    # accurate trust store for a test, and not what a real `traefik.ca` holds.
+    assert context.cert_store_stats()["x509"] == 1
+    assert ssl.create_default_context().cert_store_stats()["x509"] > 1
+
+
+def test_the_request_never_leaves_the_trust_decision_to_the_library(monkeypatch, tmp_path):
+    """`verify=` is always an explicit context, so no library default applies.
+
+    httpx2 verifies against the system store via `truststore` by default and
+    httpx used certifi; neither default is ever reached from here. Pinning it
+    keeps a future reader from re-deriving the trust path from the library's
+    documentation instead of from this call.
+    """
+    cert, key = _self_signed(tmp_path, split_key=True)
+    seen = {}
+
+    def recording_get(url, **kwargs):
+        seen.update(kwargs)
+        return httpx2.Response(200, json={"routers": {}}, request=httpx2.Request("GET", url))
+
+    monkeypatch.setattr(collector.httpx2, "get", recording_get)
+    cfg = Config(traefik=TraefikApiConfig(url="https://example.invalid/api", cert=cert, key=key))
+
+    collector.fetch_accepted(cfg)
+
+    assert isinstance(seen["verify"], ssl.SSLContext)
