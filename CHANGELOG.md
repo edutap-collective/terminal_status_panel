@@ -15,6 +15,23 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Added
+
+- The panel's own version in the footer, beside the timestamp. Read from the
+  installed distribution metadata; a checkout that was never installed reports
+  `dev` rather than a number matching no release.
+- A **MANAGED** block under UPDATES, naming the tool that configures the
+  machine, optionally linking the repository its configuration lives in, and
+  carrying one line of local detail. Configured under `[managed]` and rendered
+  only where `managed.by` is set, so nothing changes for an installation that
+  has not asked for it.
+
+  It exists to make one fact hard to miss at a login prompt: a change made
+  here by hand is gone at the next run. That rule is known and forgotten, so
+  the panel states it where people are already looking, set heavier than the
+  rows beside it. Beside a rendered OS logo it costs no vertical space at all,
+  because the left column is the taller one.
+
 ## [0.10.0] - 2026-08-27
 
 ### Added
