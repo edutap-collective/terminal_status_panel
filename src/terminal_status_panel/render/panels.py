@@ -196,10 +196,42 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
 # System status (load + memory/swap + filesystem)
 # --------------------------------------------------------------------------- #
 
+
 #: Fixed width of the RAM/SWAP bars in the MEMORY & SWAP block. The
 #: filesystem bar reuses this as its upper bound (see ``_FilesystemBody``) so
 #: the two blocks, which sit side by side, carry equal visual weight instead
 #: of the filesystem bar sprawling to whatever space happens to be left over.
+def managed_panel(managed) -> RenderableType | None:
+    """The MANAGED block, or ``None`` where no tool is named.
+
+    ``None`` rather than an empty `Group`: a `Group` with no children is a
+    truthy object, so a caller writing `if managed_panel(...)` would stack a
+    separator above nothing and push every installation that has not
+    configured this down by a line. The absence has to be representable.
+
+    Set heavier than the rows beside it on purpose. A terminal cannot make text
+    larger, so "unmissable" is bold on a filled background: the point of this
+    block is that somebody logging in to fix something quickly reads it before
+    they start, and a line that blends into the key/value rows above would be
+    read at exactly the wrong moment, which is to say afterwards.
+    """
+    if not getattr(managed, "by", None):
+        return None
+
+    body = Table.grid(padding=(0, 1))
+    body.add_column()
+    body.add_row(Text(f" {_WARN} {managed.by.upper()} ", style="bold black on yellow"))
+    if managed.repository:
+        # The last path segment, linked to the whole URL. A repository address
+        # is some sixty characters and this column is the narrow one; the full
+        # URL is still one click away, and still visible on hover.
+        label = managed.repository.rstrip("/").rsplit("/", 1)[-1] or managed.repository
+        body.add_row(Text(label, style=f"cyan link {managed.repository}"))
+    if managed.detail:
+        body.add_row(Text(managed.detail, style="dim"))
+    return section("MANAGED", body)
+
+
 _MEMORY_BAR_WIDTH = 44
 
 

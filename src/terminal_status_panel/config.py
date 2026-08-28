@@ -172,6 +172,30 @@ class TraefikApiConfig:
 
 
 @dataclass
+class ManagedConfig:
+    """Who configures this machine, stated so a reader cannot miss it.
+
+    Empty by default and rendered only where ``by`` is set: an installation
+    that has not asked for this sees no change at all.
+
+    Deliberately not hard-wired to any one tool. The panel is a public package
+    and Puppet, Salt and Chef are the same case; what matters to a reader at a
+    login prompt is that *something* owns this host's configuration and a
+    change made here by hand will not survive.
+    """
+
+    #: The tool's name, as it should appear. ``None`` hides the whole block.
+    by: str | None = None
+    #: Where the configuration lives, as a full URL. Rendered as its last path
+    #: segment and linked to in full -- a repository URL is some sixty
+    #: characters and would break the column it sits in.
+    repository: str | None = None
+    #: One short line under the name. What it should say is a local decision:
+    #: "no local changes", "changes via MR only", a ticket queue.
+    detail: str | None = None
+
+
+@dataclass
 class Config:
     """Everything the panel reads from its config file, with defaults."""
 
@@ -199,6 +223,7 @@ class Config:
     thresholds: Thresholds = field(default_factory=Thresholds)
     health: HealthConfig = field(default_factory=HealthConfig)
     traefik: TraefikApiConfig = field(default_factory=TraefikApiConfig)
+    managed: ManagedConfig = field(default_factory=ManagedConfig)
     #: Seconds to sample process CPU over. Cost on a login path, hence a dial:
     #: 0.3 s over roughly 400 processes measures at about 0.32 s wall clock.
     #: Zero or less disables the CPU ranking entirely.
@@ -404,6 +429,53 @@ def _list_setting(value: object, default: list) -> list:
     return list(default)
 
 
+def _web_url(value: object) -> str | None:
+    """*value* as a base URL something can be joined onto, or ``None``.
+
+    One rule for every URL this file accepts. A link that goes somewhere
+    plausible but wrong is worse than no link, because the reader cannot tell
+    until they click it -- so anything not clearly usable becomes nothing.
+
+    Rejected: a non-string, a scheme other than http/https, a scheme with no
+    host behind it (``http://``, ``http://:8080``), and a query or fragment --
+    callers only ever append a path, so `https://x.de?q=1` + `/a` would give
+    `https://x.de?q=1/a`, which is not where anyone meant to go.
+    """
+    if not isinstance(value, str):
+        return None
+    url = value.strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        return None
+    parsed = urlsplit(url)
+    if not parsed.hostname or parsed.query or parsed.fragment:
+        return None
+    return url
+
+
+def _managed_config(data: dict, reader: _Reader) -> ManagedConfig:
+    """Parse the ``[managed]`` block. Absent means the block is not rendered."""
+    managed = _section(data, "managed")
+    if not managed:
+        return ManagedConfig()
+
+    by = reader.text(managed, "managed.by", "") or None
+    detail = reader.text(managed, "managed.detail", "") or None
+
+    repository = None
+    if "repository" in managed:
+        repository = _web_url(reader.text(managed, "managed.repository", ""))
+        if repository is None:
+            reader.problems.append(
+                ConfigProblem(
+                    key="managed.repository",
+                    found=repr(managed["repository"]),
+                    used="no link",
+                    reason="expected an http:// or https:// URL with a host",
+                )
+            )
+    return ManagedConfig(by=by, repository=repository, detail=detail)
+
+
 def _health_config(data: dict, reader: _Reader) -> HealthConfig:
     """Parse the [health] block. A malformed value falls back to its default."""
     health = _section(data, "health")
@@ -496,22 +568,9 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         # this file must never fail a login. An entrypoint whose base is
         # unusable gets no links, which is the same state as not configuring
         # it -- and better than a link nobody can trust.
-        if not isinstance(value, str):
-            continue
-        url = value.strip().rstrip("/")
-        if not url.startswith(("http://", "https://")):
-            continue
-        parsed = urlsplit(url)
-        if not parsed.hostname:
-            # A scheme with nothing to reach -- `http://`, `http://:8080` --
-            # is not a base anything can be joined onto.
-            continue
-        if parsed.query or parsed.fragment:
-            # `link_for` only ever appends a path, so a query or fragment on
-            # the base would land inside the joined URL instead of where it
-            # was written: `https://x.de?q=1` + `/a` -> `https://x.de?q=1/a`.
-            continue
-        links[str(name)] = url
+        url = _web_url(value)
+        if url is not None:
+            links[str(name)] = url
     traefik = TraefikApiConfig(
         url=traefik_section.get("url") or None,
         cert=traefik_section.get("cert") or None,
@@ -544,6 +603,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         thresholds=thresholds,
         health=health_config,
         traefik=traefik,
+        managed=_managed_config(data, reader),
         process_sample=process_sample,
         top_processes=top_processes,
         follow_interval=follow_interval,

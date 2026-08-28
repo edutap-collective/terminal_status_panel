@@ -33,6 +33,9 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see {doc}`Traefik wiring </explanation/traefik-wiring>` for why it cannot work on today's app servers. |
 | `traefik.cert` / `traefik.key` | *(unset)* | Client certificate/key for that endpoint (mTLS). Both `url` and `cert` must be set for the cross-check to run at all. |
 | `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate. Unset, the **system trust store** applies — `ssl.create_default_context()` loads OpenSSL's default paths, so a corporate CA installed in `/etc/ssl/certs` *is* picked up, and `SSL_CERT_FILE`/`SSL_CERT_DIR` override them as usual. Set this only for a CA the system does not know; doing so replaces the system roots rather than adding to them. The HTTP library's own default never applies here — the cross-check requires `traefik.cert`, so the request always carries an explicitly built `SSLContext`. |
+| `managed.by` | *(unset)* | The name of the tool that configures this machine, e.g. `Ansible`. Setting it renders the **MANAGED** block under UPDATES; leaving it unset renders nothing at all, which is the default for every installation. Not tied to any one tool — Puppet, Salt and Chef are the same case. |
+| `managed.repository` | *(unset)* | Where that configuration lives, as a full `http://` or `https://` URL. Rendered as its last path segment and linked to in full, because a repository URL is some sixty characters and the column is the narrow one. Validated like `traefik.links`: a value that is not a usable web address is dropped and reported by `--debug`, rather than shown as a link that goes somewhere wrong. Without `managed.by` it renders nothing. |
+| `managed.detail` | *(unset)* | One short line under the tool name. What it says is a local decision — `no local changes`, `changes via merge request only`, a ticket queue. |
 | `traefik.links` | `{}` | Table mapping an entrypoint **name** to the `http://` or `https://` base URL it is actually reached at, e.g. `login_example_de = "https://login.example.de"`. Independent of `traefik.url`/`cert`/`key`/`ca` above — it needs no connection to Traefik at all. See {doc}`Traefik wiring </explanation/traefik-wiring>` for why this has to be configured rather than derived. A value that is not a string, or does not start with `http://`/`https://`, is dropped; that entrypoint then simply has no links, the same as leaving it out. |
 
 ## Full example
@@ -83,6 +86,11 @@ dns = 2.5
 [[health.dns.expect]]
 name = "login.example.net"
 addresses = ["10.9.9.9"]
+
+[managed]
+by = "Ansible"
+repository = "https://gitlab.example.de/group/ansible-app-server"
+detail = "no local changes"
 
 [traefik.links]
 login_example_de = "https://login.example.de"

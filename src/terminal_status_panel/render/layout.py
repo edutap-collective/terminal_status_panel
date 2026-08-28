@@ -18,6 +18,7 @@ never the list of its neighbours.
 
 from __future__ import annotations
 
+import importlib.metadata
 from datetime import datetime
 
 from rich.console import Group, RenderableType
@@ -28,10 +29,32 @@ from rich.text import Text
 from ..config import Config
 from ..model import PanelData
 from .health import health_section
-from .panels import services_section, system_overview, system_status, updates_panel
+from .panels import (
+    managed_panel,
+    services_section,
+    system_overview,
+    system_status,
+    updates_panel,
+)
 from .traefik import traefik_section
 
 SECTIONS: tuple[str, ...] = ("server", "docker", "health", "traefik")
+
+
+def panel_version() -> str:
+    """The installed version, or ``dev`` when the package is not installed.
+
+    Read from the distribution metadata rather than from a constant in the
+    source: a second copy is a second thing to forget at release time. Running
+    from a checkout without installing is a real case -- `python -m
+    terminal_status_panel.cli` during development -- and `dev` is the honest
+    answer there. Inventing a number would put a version on screen that
+    matches no release.
+    """
+    try:
+        return importlib.metadata.version("terminal-status-panel")
+    except importlib.metadata.PackageNotFoundError:
+        return "dev"
 
 
 def _footer() -> Table:
@@ -40,7 +63,10 @@ def _footer() -> Table:
     grid.add_column(justify="right")
     grid.add_row(
         Text("Tip: Run 'htop' for detailed process view", style="dim cyan"),
-        Text(f"Last check: {datetime.now():%Y-%m-%d %H:%M:%S}", style="dim cyan"),
+        Text(
+            f"v{panel_version()} · Last check: {datetime.now():%Y-%m-%d %H:%M:%S}",
+            style="dim cyan",
+        ),
     )
     return grid
 
@@ -50,7 +76,15 @@ def server_section(data: PanelData, cfg: Config) -> RenderableType:
     top = Table.grid(expand=True, padding=(0, 3))
     top.add_column(ratio=3)
     top.add_column(ratio=2)
-    top.add_row(system_overview(data.system), updates_panel(data.updates))
+    # The right column carries UPDATES and, where a tool is configured, the
+    # MANAGED block beneath it. Stacked rather than given a row of its own:
+    # it belongs to the same "what is this machine" reading as the two blocks
+    # above it, and a full-width banner would push the panel down by four
+    # lines on every login for a fact that does not change.
+    updates = updates_panel(data.updates)
+    managed = managed_panel(cfg.managed)
+    right = updates if managed is None else Group(updates, Text(""), managed)
+    top.add_row(system_overview(data.system), right)
     # The origin map comes from the Docker section when it ran. Without it the
     # process rows show container ids, which is what `status-server` alone can
     # honestly say.
