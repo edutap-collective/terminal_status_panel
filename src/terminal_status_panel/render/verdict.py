@@ -27,6 +27,7 @@ _STYLES = {
     icons.FAILED: "red",
     icons.UNKNOWN: "dim",
     icons.JOB: "",
+    icons.PAUSED: "dim",
 }
 
 # How much each icon claims, from least to most. "Not observable" ranks *above*
@@ -39,6 +40,11 @@ _SEVERITY = {
     # measured, and what was measured is fine.
     icons.JOB: 0,
     icons.UNKNOWN: 1,
+    # Below "not observable" on purpose, and only just above OK: a service
+    # deliberately running nothing is a healthy state of affairs, but it is
+    # worth seeing, and a row that mixes it with a real ✅ should show the
+    # pause rather than swallow it.
+    icons.PAUSED: 1,
     icons.WARN: 2,
     icons.DEAD: 3,
     icons.FAILED: 4,
@@ -73,8 +79,11 @@ def _counts(services: list[ServiceStatus], node_count: int) -> tuple[int, int]:
 def _replica_icon(running: int, desired: int, starting: int = 0) -> str:
     if desired == 0:
         # Scaled to zero is a decision, not an outage. Rendering it as broken
-        # would train people to ignore this column.
-        return icons.UNKNOWN
+        # would train people to ignore this column -- and rendering it as
+        # unmeasured, which is what this did until 0.12, hid the decision
+        # behind a shrug: `0/0` *is* a measurement, and it says somebody chose
+        # this.
+        return icons.PAUSED
     if running == 0:
         # Nothing runs -- but a task on its way up has not been measured
         # broken, and a deploy in progress must not read like an outage.

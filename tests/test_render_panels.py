@@ -715,7 +715,13 @@ def test_a_service_wanting_replicas_and_having_none_is_marked_dead():
     assert f"{icons.DEAD} 0/3" in out
 
 
-def test_a_service_scaled_to_zero_is_not_marked_dead():
+def test_a_service_scaled_to_zero_is_paused_not_dead_and_not_unmeasured():
+    """`0/0` is a measurement, and it says somebody chose it.
+
+    Two wrong readings to keep out: `💀`, which would train people to ignore
+    this column, and `⬜`, which claims nothing was observed when in fact the
+    daemon answered clearly.
+    """
     swarm = SwarmInfo(
         reachable=True,
         enabled=True,
@@ -725,8 +731,9 @@ def test_a_service_scaled_to_zero_is_not_marked_dead():
         services=[ServiceStatus("app_paused", 0, 0, stack="app")],
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
-    assert f"{icons.UNKNOWN} 0/0" in out
+    assert f"{icons.PAUSED} 0/0" in out
     assert f"{icons.DEAD} 0/0" not in out
+    assert f"{icons.UNKNOWN} 0/0" not in out
 
 
 def test_the_kafka_row_follows_the_cluster_verdict_not_the_replicas():

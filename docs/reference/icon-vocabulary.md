@@ -9,6 +9,7 @@ measure.
 | ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
 | 💀 | measured broken |
 | ⏰ | a scheduled job, resting between successful runs |
+| ⏸️ | measured, and deliberately running nothing — a service scaled to zero |
 | `⬜` | not observable / not attempted — see below for where it appears |
 | `…` | the check ran out of the shared time budget |
 | `✗` | the check itself failed (a command errored, a connection was refused) |
@@ -18,6 +19,19 @@ measure.
 timeout says nothing about the service's health, only that the panel gave up
 waiting for it; a failed check (`✗`) is a statement about the service, or
 about the tool used to ask it.
+
+`⏸️` and `⬜` are the pair worth keeping apart. `⬜` is an absence of
+knowledge: nobody asked, or the answer did not arrive in time. `⏸️` is
+knowledge — a service scaled to zero replicas *was* measured, and what was
+measured is that somebody decided it should run nothing. Until 0.12 both were
+`⬜`, which hid a decision behind a shrug and made the marker unreadable by
+meaning too many things at once.
+
+The rule that separates them holds for the whole table: an icon says what was
+**found**, never how the panel feels about it. A yellow line reporting a
+measured finding therefore takes `⚠️` even where nothing is broken yet — the
+WireGuard endpoint-family warning did not, and read as "nothing was observed"
+in front of a sentence describing an observation.
 
 Every icon in the table above occupies **two terminal cells**, and that is a
 requirement rather than a coincidence: a column mixing a one-cell glyph with a

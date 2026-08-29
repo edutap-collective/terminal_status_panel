@@ -7,6 +7,7 @@ from terminal_status_panel.render import health, icons, panels
 def test_every_status_glyph_is_defined_once():
     assert (icons.OK, icons.WARN, icons.DEAD) == ("✅", "⚠️", "💀")
     assert (icons.UNKNOWN, icons.TRUNCATED, icons.FAILED) == ("⬜", "…", "✗")
+    assert icons.PAUSED == "⏸️"
 
 
 def test_both_renderers_use_the_shared_glyphs():
@@ -23,7 +24,7 @@ def test_both_renderers_use_the_shared_glyphs():
 #: The status glyphs, as they appear beside one another in a column. `…` and
 #: `✗` are excluded: they are used inline in a sentence, never as a column of
 #: their own, so their width is not part of this invariant.
-COLUMN_GLYPHS = [icons.OK, icons.WARN, icons.DEAD, icons.JOB, icons.UNKNOWN]
+COLUMN_GLYPHS = [icons.OK, icons.WARN, icons.DEAD, icons.JOB, icons.UNKNOWN, icons.PAUSED]
 
 
 @pytest.mark.parametrize("glyph", COLUMN_GLYPHS, ids=COLUMN_GLYPHS)

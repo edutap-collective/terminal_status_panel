@@ -15,6 +15,25 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Added
+
+- `⏸️` for a service **deliberately running nothing** — scaled to zero
+  replicas. That is a measurement and a decision, and it rendered as `⬜`
+  until now, which claimed nothing had been observed.
+
+### Fixed
+
+- The WireGuard *mixed endpoint families* line carries `⚠️` instead of `⬜`.
+  It reports a measured finding on an already-yellow row; the unmeasured
+  marker contradicted both the colour and the sentence.
+
+  Both of these were wrong before `·` became `⬜` in 0.10. `·` read as a
+  neutral bullet, so the contradiction was invisible; giving the marker a
+  meaning made it visible. Three remaining uses of `⬜` — a job with no run
+  history, a cluster with no quorum reading, a check that never ran — are
+  genuinely unmeasured and unchanged. There is now one test per meaning, so
+  the five cases cannot quietly collapse into one glyph again.
+
 ## [0.11.0] - 2026-08-28
 
 ### Added
