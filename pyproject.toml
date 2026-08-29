@@ -1,6 +1,6 @@
 [project]
 name = "terminal-status-panel"
-version = "0.11.0"
+version = "0.12.0"
 description = "Colorful login status panel for servers: system, resources, and Docker Swarm health"
 readme = "README.md"
 requires-python = ">=3.11"
