@@ -207,7 +207,11 @@ def _peers_body(health: HealthInfo) -> RenderableType:
     spread = ", ".join(f"{count}× {family}" for family, count in sorted(families.items()))
     return Group(
         table,
-        Text(f"{UNKNOWN} mixed endpoint families: {spread}", style="yellow"),
+        # WARN, not the unmeasured glyph: this was measured, and it is the
+        # finding the line exists to report. The row is already yellow; a
+        # marker saying "nothing was observed" in front of it contradicted the
+        # colour and the sentence both.
+        Text(f"{WARN} mixed endpoint families: {spread}", style="yellow"),
     )
 
 

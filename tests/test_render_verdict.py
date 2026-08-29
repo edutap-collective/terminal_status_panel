@@ -25,7 +25,9 @@ def _cell(services, kind=None, cluster=None, node_count=5):
         (3, 3, f"{icons.OK} 3/3"),  # fully staffed
         (2, 5, f"{icons.WARN} 2/5"),  # serving, degraded
         (0, 3, f"{icons.DEAD} 0/3"),  # wants replicas, has none
-        (0, 0, f"{icons.UNKNOWN} 0/0"),  # scaled to zero on purpose
+        # Scaled to zero is measured, and it is a decision. It gets the pause
+        # glyph, never the unmeasured one and never the dead one.
+        (0, 0, f"{icons.PAUSED} 0/0"),
     ],
 )
 def test_replica_states(running, desired, expected):

@@ -54,6 +54,7 @@ Every one of them takes `--width`, `--no-color`, `--config`, `--follow`,
 | ⚠️ | degraded, but serving |
 | 💀 | measured broken |
 | ⏰ | a scheduled job, resting between successful runs |
+| ⏸️ | measured, and deliberately running nothing — a service scaled to zero |
 | ⬜ | not observable, or not attempted |
 | `…` | the check ran out of the shared time budget |
 | `✗` | the check itself failed |
