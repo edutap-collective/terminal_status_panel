@@ -15,6 +15,8 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-30
+
 ### Added
 
 - `⏸️` for a service **deliberately running nothing** — scaled to zero
@@ -140,7 +142,8 @@ guesswork dressed as a record.
 
 See the git history and the release tags.
 
-[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/edutap-collective/terminal_status_panel/releases/tag/v0.9.0
