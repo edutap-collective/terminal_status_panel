@@ -78,6 +78,9 @@ def test_every_column_glyph_is_wide_by_unicode_not_by_opinion(glyph):
     the whole variation-selector range (U+FE00..U+FE0F and the supplementary
     block, all category Mn) and the zero-width joiner that builds emoji
     sequences (U+200D, category Cf), not just the one selector that bit.
+    The second rejects East Asian Width `A`: ambiguous characters are one
+    cell in most terminals and two in a CJK locale that treats ambiguous
+    width as wide, which is the same disagreement by another route.
     `cell_len` above still guards the layout rich produces; this test guards
     that the terminal will agree with it.
     """
@@ -87,6 +90,12 @@ def test_every_column_glyph_is_wide_by_unicode_not_by_opinion(glyph):
         f"character has no cell of its own, and a variation selector or zero-width "
         f"joiner makes the width ambiguous between rich and the terminal. Use a wide "
         f"code point or pad a narrow one."
+    )
+    ambiguous = [c for c in glyph if unicodedata.east_asian_width(c) == "A"]
+    assert not ambiguous, (
+        f"{glyph!r} carries {[f'U+{ord(c):04X}' for c in ambiguous]} of East Asian Width "
+        f"'A': one cell in most terminals, two in a CJK locale that treats ambiguous "
+        f"width as wide. Use a code point of width W, N or Na."
     )
     assert _cells_by_unicode(glyph) == 2, (
         f"{glyph!r} is {_cells_by_unicode(glyph)} cells by East Asian Width; "
