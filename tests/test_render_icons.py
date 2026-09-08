@@ -95,7 +95,7 @@ def test_every_column_glyph_is_wide_by_unicode_not_by_opinion(glyph):
     assert not ambiguous, (
         f"{glyph!r} carries {[f'U+{ord(c):04X}' for c in ambiguous]} of East Asian Width "
         f"'A': one cell in most terminals, two in a CJK locale that treats ambiguous "
-        f"width as wide. Use a code point of width W, N or Na."
+        f"width as wide. Use a code point of width W or F (two cells) or N, Na or H (one)."
     )
     assert _cells_by_unicode(glyph) == 2, (
         f"{glyph!r} is {_cells_by_unicode(glyph)} cells by East Asian Width; "
