@@ -6,10 +6,10 @@ measure.
 | Icon | Meaning |
 |------|---------|
 | ✅ | measured healthy |
-| ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
+| ⚠ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
 | 💀 | measured broken |
 | ⏰ | a scheduled job, resting between successful runs |
-| ⏸️ | measured, and deliberately running nothing — a service scaled to zero |
+| 💤 | measured, and deliberately running nothing — a service scaled to zero |
 | `⬜` | not observable / not attempted — see below for where it appears |
 | `…` | the check ran out of the shared time budget |
 | `✗` | the check itself failed (a command errored, a connection was refused) |
@@ -20,16 +20,39 @@ timeout says nothing about the service's health, only that the panel gave up
 waiting for it; a failed check (`✗`) is a statement about the service, or
 about the tool used to ask it.
 
-`⏸️` and `⬜` are the pair worth keeping apart. `⬜` is an absence of
-knowledge: nobody asked, or the answer did not arrive in time. `⏸️` is
+`💤` and `⬜` are the pair worth keeping apart. `⬜` is an absence of
+knowledge: nobody asked, or the answer did not arrive in time. `💤` is
 knowledge — a service scaled to zero replicas *was* measured, and what was
 measured is that somebody decided it should run nothing. Until 0.12 both were
 `⬜`, which hid a decision behind a shrug and made the marker unreadable by
 meaning too many things at once.
 
-The rule that separates them holds for the whole table: an icon says what was
+Three rules hold for every icon in the table.
+
+**Two cells, everywhere.** A column mixing a one-cell icon with a two-cell one
+steps left and right down the block, so every status icon occupies two cells —
+and it has to do so in every terminal, not only in the one the panel was
+written in. Only two constructions deliver that: a single code point with
+East Asian Width `W` (✅ 💀 ⬜ ⏰ 💤), or a one-cell character padded to two
+inside the value itself — the warning icon is literally `"⚠ "`, warning sign
+plus space, which is why it sits one cell further from the text that follows
+it. Until 0.13 the warning and paused icons were `⚠️` and `⏸️`: a
+text-presentation character plus the emoji variation selector U+FE0F. That
+sequence has no agreed width. rich pads it as two cells, a terminal following
+wcwidth advances the cursor by one, and the glyph is drawn over the space that
+should have followed it — so every column to the right of a warning or paused
+icon stepped one cell left, on exactly the rows a reader was meant to look at.
+
+**Shape, not colour.** An icon must stay unambiguous for a reader who cannot
+see colour, and without the colour of its row: a tick, a skull, a triangle, a
+clock. A coloured dot fails this — 🟡 beside 🟢 is one shape twice — which is
+why the warning sign stayed the warning sign rather than becoming an amber
+light. It may render small and monochrome in some fonts; the shape is the
+message.
+
+**One icon, one meaning.** The rule that separates `💤` from `⬜` holds for the whole table: an icon says what was
 **found**, never how the panel feels about it. A yellow line reporting a
-measured finding therefore takes `⚠️` even where nothing is broken yet — the
+measured finding therefore takes `⚠` even where nothing is broken yet — the
 WireGuard endpoint-family warning did not, and read as "nothing was observed"
 in front of a sentence describing an observation.
 

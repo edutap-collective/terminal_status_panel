@@ -114,7 +114,7 @@ def test_paused_and_unknown_are_different_glyphs():
 def test_paused_is_gentler_than_a_warning_but_visible():
     """Ranked so a paused service neither raises an alarm nor disappears.
 
-    In a row mixing states the more severe one wins, and `⏸️` must lose to a
+    In a row mixing states the more severe one wins, and `💤` must lose to a
     real warning while still outranking a plain ✅ -- a reader scanning a
     column should notice that something is deliberately off.
     """

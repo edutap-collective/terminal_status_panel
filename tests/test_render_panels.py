@@ -398,7 +398,7 @@ def _mixed_availability_swarm() -> SwarmInfo:
 def test_drained_node_is_not_rendered_as_healthy():
     out = _text(panels.services_section(_mixed_availability_swarm(), Config()), width=170)
     nodes_line = next(line for line in out.splitlines() if "srv-02" in line)
-    assert "⚠" in nodes_line and "drain" in nodes_line
+    assert icons.WARN in nodes_line and "drain" in nodes_line
     assert "srv-02 ✅" not in nodes_line
     # The healthy and the dead node keep their existing markers.
     assert "srv-01 ✅" in nodes_line
@@ -439,7 +439,7 @@ def test_node_with_empty_availability_falls_back_to_unavailable():
     )
     out = _text(panels.services_section(swarm, Config()), width=170)
     nodes_line = next(line for line in out.splitlines() if "srv-09" in line)
-    assert "⚠" in nodes_line and "unavailable" in nodes_line
+    assert icons.WARN in nodes_line and "unavailable" in nodes_line
     assert "(1 unavailable)" in out
 
 
@@ -992,7 +992,7 @@ def test_bugsink_is_infrastructure():
 def test_a_single_starting_task_renders_as_degraded_not_dead():
     """It is on its way up. 💀 would say we measured it broken."""
     services = [ServiceStatus("s", 0, 1, tasks=[ServiceTask("srv-01", "preparing")])]
-    assert "⚠️" in panels._node_cell(services, "srv-01").plain
+    assert icons.WARN in panels._node_cell(services, "srv-01").plain
 
 
 def test_a_single_failed_task_still_renders_as_dead():

@@ -53,7 +53,7 @@ Whatever the two commands showed you, the icons mean one thing each:
 | Icon | Meaning |
 |------|---------|
 | ✅ | measured healthy |
-| ⚠️ | degraded, but serving |
+| ⚠ | degraded, but serving |
 | 💀 | measured broken |
 | ⬜ | not measured |
 
