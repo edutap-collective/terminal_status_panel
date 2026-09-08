@@ -49,7 +49,7 @@ Three things are dropped on the way to the cell, and each for a reason:
 Where one row stands for several services — the per-node replicas of a stack —
 they can disagree, and a stalled rolling update is exactly when they do. The
 cell then names the image the **most running replicas** carry and marks it:
-`kafka:⚠ 4.0.0` when only the tag differs, `⚠ traefik:v3.3` when the
+`kafka:⚠  4.0.0` when only the tag differs, `⚠  traefik:v3.3` when the
 repositories do. Ranked by running replicas rather than by service count,
 because a tag nothing runs any more is what the marker points away from — and
 never by "newest", because the panel cannot order tags. `v3.10` sorts below
@@ -75,8 +75,8 @@ Nodes  swarm01-mgr-01 ✅  swarm01-mgr-02 ✅  swarm01-mgr-03 ✅ (leader)  swar
 ```
 
 ```
-Swarm  active · manager · 5 nodes · 60 services · 18 stacks · Docker 28.5.2 ⚠ 2 versions
-Nodes  swarm01-mgr-01 ✅  swarm01-mgr-02 ✅  swarm01-wrk-01 ⚠ 27.3.1  swarm01-mgr-03 ✅ (leader)
+Swarm  active · manager · 5 nodes · 60 services · 18 stacks · Docker 28.5.2 ⚠  2 versions
+Nodes  swarm01-mgr-01 ✅  swarm01-mgr-02 ✅  swarm01-wrk-01 ⚠  27.3.1  swarm01-mgr-03 ✅ (leader)
 ```
 
 Uniform is the normal case, so uniform is one number. Five identical strings
@@ -96,8 +96,8 @@ swarm.
 Reachability appears only when it is missing:
 
 ```
-Nodes  swarm01-mgr-01 ✅  swarm01-mgr-02 ✅  swarm01-mgr-03 ⚠ unreachable (leader)
-       ⚠ 2/3 managers reachable — one more failure locks the swarm
+Nodes  swarm01-mgr-01 ✅  swarm01-mgr-02 ✅  swarm01-mgr-03 ⚠  unreachable (leader)
+       ⚠  2/3 managers reachable — one more failure locks the swarm
 ```
 
 This is a different question from the node state beside it. The orchestrator

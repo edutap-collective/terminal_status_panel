@@ -3,7 +3,7 @@
 The cell carries an icon and a count. They can come from different places: for
 a clustered service the icon is the cluster's own verdict while the count stays
 Docker's, so RustFS at ``3/5 live`` — a minority of members measured unhealthy
-while the majority quorum still holds — renders ``⚠ 5/5``: every container is
+while the majority quorum still holds — renders ``⚠  5/5``: every container is
 up as a Docker task, which is the case where a replica count on its own lies.
 
 The reconciliation runs the other way too. See ``_combined_icon``: a replica
@@ -167,7 +167,7 @@ def _combined_icon(replica: str, cluster: str) -> str:
     r"""Reconcile two independent measurements of the same row.
 
     The cluster verdict is the more specific statement and normally wins — it
-    is what makes ``⚠ 5/5`` and ``· 5/5`` possible at all. But ``💀``/``⚠``
+    is what makes ``⚠  5/5`` and ``· 5/5`` possible at all. But ``💀``/``⚠``
     from the replica count are measurements of *this* Docker service, and the
     join key is a substring match: a service that merely shares a cluster's
     stack can pick up its verdict. So a degraded replica state wins whenever
