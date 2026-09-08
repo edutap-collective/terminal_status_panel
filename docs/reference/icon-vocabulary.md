@@ -36,7 +36,7 @@ written in. Only two constructions deliver that: a single code point with
 East Asian Width `W` (✅ 💀 ⬜ ⏰ 💤), or a one-cell character padded to two
 inside the value itself — the warning icon is literally `"⚠ "`, warning sign
 plus space, which is why it sits one cell further from the text that follows
-it. Until 0.13 the warning and paused icons were `⚠️` and `⏸️`: a
+it. Until 0.12.1 the warning and paused icons were `⚠️` and `⏸️`: a
 text-presentation character plus the emoji variation selector U+FE0F. That
 sequence has no agreed width. rich pads it as two cells, a terminal following
 wcwidth advances the cursor by one, and the glyph is drawn over the space that

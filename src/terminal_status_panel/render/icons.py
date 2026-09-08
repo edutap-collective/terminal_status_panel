@@ -26,7 +26,7 @@ that: a single code point whose East Asian Width is ``W`` (``✅`` ``💀`` ``�
 ``⏰`` ``💤``), or a one-cell character with the second cell padded into the
 value itself -- ``WARN`` is ``"⚠ "``, warning sign plus space. What does not
 deliver it is a text-presentation character followed by U+FE0F, the emoji
-variation selector, which is what ``⚠️`` and ``⏸️`` were until 0.13. That
+variation selector, which is what ``⚠️`` and ``⏸️`` were until 0.12.1. That
 sequence has no agreed width: rich counts two cells and pads for two, while a
 terminal following wcwidth advances the cursor by one and draws the glyph
 over the padding. The space after the icon vanished, and every column to its
