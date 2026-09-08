@@ -73,13 +73,20 @@ def test_every_column_glyph_is_wide_by_unicode_not_by_opinion(glyph):
 
     Two constructions are safe: a single code point of width `W`, or a
     one-cell character padded to two inside the value (`"⚠ "`). Both add up
-    to two by the Unicode tables alone, with no selector to disagree about.
+    to two by the Unicode tables alone, with nothing to disagree about -- so
+    the first assertion rejects every character that has no cell of its own:
+    the whole variation-selector range (U+FE00..U+FE0F and the supplementary
+    block, all category Mn) and the zero-width joiner that builds emoji
+    sequences (U+200D, category Cf), not just the one selector that bit.
     `cell_len` above still guards the layout rich produces; this test guards
     that the terminal will agree with it.
     """
-    assert "\ufe0f" not in glyph, (
-        f"{glyph!r} carries U+FE0F; a variation selector makes the width ambiguous "
-        f"between rich and the terminal. Use a wide code point or pad a narrow one."
+    invisible = [c for c in glyph if unicodedata.category(c) in ("Mn", "Me", "Cf")]
+    assert not invisible, (
+        f"{glyph!r} carries {[f'U+{ord(c):04X}' for c in invisible]}: a mark or format "
+        f"character has no cell of its own, and a variation selector or zero-width "
+        f"joiner makes the width ambiguous between rich and the terminal. Use a wide "
+        f"code point or pad a narrow one."
     )
     assert _cells_by_unicode(glyph) == 2, (
         f"{glyph!r} is {_cells_by_unicode(glyph)} cells by East Asian Width; "
