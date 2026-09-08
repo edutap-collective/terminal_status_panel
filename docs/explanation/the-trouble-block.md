@@ -11,8 +11,8 @@ TROUBLE  (last 12 h)
 💀  mystack_builder      —                    —    —  no suitable node (insufficient memory on 3 nodes)
 💀  mystack_model        swarm01-wrk-01    ↻ 3×    —  OOMKilled · exit 137
 💀  mystack_search_2     swarm01-wrk-02   ↻ ≥5×    —  exit 1 · "Could not load conf for core"
-⚠️  mystack_thumbnailer  swarm01-wrk-01    ↻ 2×    —  exit 137
-⚠️  registry             swarm01-mgr-01    ↻ 2×  47s  —
+⚠  mystack_thumbnailer  swarm01-wrk-01    ↻ 2×    —  exit 137
+⚠  registry             swarm01-mgr-01    ↻ 2×  47s  —
 ```
 
 **It does not exist when there is nothing to report.** That is the normal

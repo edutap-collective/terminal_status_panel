@@ -111,9 +111,9 @@ primary, and the difference between them is the difference between "wait" and
 "act":
 
 ```
-✅ node-b  secondary  ⚠️ lag 952.0 B
-✅ node-c  secondary  ⚠️ lag 101.1 MB
-💀 node-d  secondary  ⚠️ TLI 4≠5 → report_lsn
+✅ node-b  secondary  ⚠ lag 952.0 B
+✅ node-c  secondary  ⚠ lag 101.1 MB
+💀 node-d  secondary  ⚠ TLI 4≠5 → report_lsn
 ```
 
 **`lag <size>`** means the member trails the primary by that many bytes. It

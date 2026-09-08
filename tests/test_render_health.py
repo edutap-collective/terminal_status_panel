@@ -186,7 +186,7 @@ def test_dns_warning_renders_as_warning_not_failure():
         dns=[DnsCheck(label="/etc/hosts", ok=None, detail="diverges: a")],
     )
     output = _render(health)
-    assert "⚠" in output
+    assert icons.WARN in output
     assert "💀" not in output
 
 

@@ -226,7 +226,7 @@ def test_a_service_whose_tasks_are_all_starting_is_degraded_not_dead():
     outage. The count stays honest either way."""
     tasks = [ServiceTask(f"srv-0{i}", "preparing") for i in (1, 2, 3)]
     services = [ServiceStatus("s", 0, 3, tasks=tasks)]
-    assert service_verdict(services).plain == "⚠️ 0/3"
+    assert service_verdict(services).plain == f"{icons.WARN} 0/3"
 
 
 def test_a_service_whose_tasks_failed_is_still_dead():

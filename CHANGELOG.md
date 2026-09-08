@@ -15,6 +15,28 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Changed
+
+- `💤` for a service **deliberately running nothing** replaces `⏸️`, for the
+  reason under *Fixed* below: the pause sign only existed as a text character
+  plus the emoji variation selector, and that sequence has no agreed width.
+- The icon vocabulary states its three rules in one place: one icon, one
+  meaning; two cells in every terminal; and shape before colour — an icon
+  must stay unambiguous for a reader who cannot see colour, or the colour of
+  its row. See [Icon vocabulary](docs/reference/icon-vocabulary.md).
+
+### Fixed
+
+- Warning and paused rows were one cell out: the space after `⚠️` and `⏸️`
+  vanished and every column to its right stepped left, on exactly the rows a
+  reader was meant to look at. Both glyphs were a text-presentation character
+  plus U+FE0F, the emoji variation selector — a sequence rich pads as two
+  cells while a terminal following wcwidth advances by one and draws the
+  glyph over the padding. The warning icon is now the bare warning sign with
+  its second cell padded into the value (`"⚠ "`), which adds up to two by the
+  Unicode tables alone; a test pins that property for the whole column
+  vocabulary instead of trusting rich's `cell_len`.
+
 ## [0.12.0] - 2026-08-30
 
 ### Added

@@ -2,7 +2,7 @@
 
 Icon vocabulary, extending the panel's existing scheme:
 
-  ✅ measured healthy      ⚠️ warning        💀 measured broken
+  ✅ measured healthy      ⚠ warning        💀 measured broken
   ⬜ not observable        … out of budget   n/a not applicable
   ✗  check failed
 
