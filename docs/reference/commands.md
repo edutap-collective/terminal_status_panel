@@ -7,7 +7,7 @@ its own entry point — plus the combined command:
 |---------|----------|-----|
 | `status-full` | server + docker + health + traefik | The full panel (default). |
 | `status-server` | server only | System overview, updates, load/mem/fs. |
-| `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `⬜` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
+| `status-docker` | docker only | The Docker Swarm block. Collects no health, so a clustered service's **Working** cell falls back to Docker's own measurement — `⬜` only when Docker itself has nothing stronger to say (fully staffed or scaled to zero), still `💀`/`⚠️` for a row Docker measured dead or degraded — pair it with `status-health` to get the cluster verdicts. |
 | `status-health` | health only | Clustered infrastructure services, WireGuard peers, DNS. |
 | `status-traefik` | traefik only | Traefik's entrypoint → router → middleware → service wiring, **as configured** — the same block `status-full` shows, without the rest of the panel. |
 

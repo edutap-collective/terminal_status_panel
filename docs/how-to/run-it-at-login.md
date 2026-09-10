@@ -64,7 +64,7 @@ and both only make sense where the Docker socket is available. Installed
 alone, `--panel docker` collects no health at all, so the **Working** cell of
 every clustered service falls back to Docker's own measurement — `⬜` only for
 a row Docker itself measured clean (fully staffed or scaled to zero), still
-`💀`/`⚠` when Docker measured it dead or degraded — honest, but the column
+`💀`/`⚠️` when Docker measured it dead or degraded — honest, but the column
 only earns its cluster icons with `--panel health` beside it.
 
 Options:

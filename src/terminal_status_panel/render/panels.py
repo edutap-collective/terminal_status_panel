@@ -811,7 +811,7 @@ def _memory_cell(services) -> Text:
 
 
 def _node_health(node) -> Text:
-    """✅ ready and active · ⚠ drained/paused or unreachable · 💀 down."""
+    """✅ ready and active · ⚠️ drained/paused or unreachable · 💀 down."""
     if not node.reachable:
         return Text(f"{_DEAD} {node.state or 'down'}", style="red")
     if not node.operational:

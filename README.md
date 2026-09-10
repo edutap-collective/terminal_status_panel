@@ -51,7 +51,7 @@ Every one of them takes `--width`, `--no-color`, `--config`, `--follow`,
 | Icon | Meaning |
 |------|---------|
 | ✅ | measured healthy |
-| ⚠ | degraded, but serving |
+| ⚠️ | degraded, but serving |
 | 💀 | measured broken |
 | ⏰ | a scheduled job, resting between successful runs |
 | 💤 | measured, and deliberately running nothing — a service scaled to zero |
