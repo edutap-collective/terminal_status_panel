@@ -15,6 +15,8 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-10
+
 ### Changed
 
 - The warning icon is the emoji warning sign again, with a pad cell inside
@@ -184,7 +186,8 @@ guesswork dressed as a record.
 
 See the git history and the release tags.
 
-[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.10.0...v0.11.0
