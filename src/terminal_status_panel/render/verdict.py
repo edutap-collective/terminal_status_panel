@@ -3,11 +3,11 @@
 The cell carries an icon and a count. They can come from different places: for
 a clustered service the icon is the cluster's own verdict while the count stays
 Docker's, so RustFS at ``3/5 live`` — a minority of members measured unhealthy
-while the majority quorum still holds — renders ``⚠  5/5``: every container is
+while the majority quorum still holds — renders ``⚠️  5/5``: every container is
 up as a Docker task, which is the case where a replica count on its own lies.
 
 The reconciliation runs the other way too. See ``_combined_icon``: a replica
-state measured ``💀`` or ``⚠`` is a fact about *this* Docker service and is
+state measured ``💀`` or ``⚠️`` is a fact about *this* Docker service and is
 never softened by a cluster-level ``✅`` or ``⬜``.
 
 Pure: no Rich layout, no I/O, so the table of cases is testable directly.
@@ -167,17 +167,17 @@ def _combined_icon(replica: str, cluster: str) -> str:
     r"""Reconcile two independent measurements of the same row.
 
     The cluster verdict is the more specific statement and normally wins — it
-    is what makes ``⚠  5/5`` and ``· 5/5`` possible at all. But ``💀``/``⚠``
+    is what makes ``⚠️  5/5`` and ``· 5/5`` possible at all. But ``💀``/``⚠️``
     from the replica count are measurements of *this* Docker service, and the
     join key is a substring match: a service that merely shares a cluster's
     stack can pick up its verdict. So a degraded replica state wins whenever
     it is strictly more severe than the cluster's, and a row with nothing to
     say (``✅`` fully staffed, ``·`` scaled to zero) never overrides anything:
 
-        replica \\ cluster   ✅    ·     ⚠    💀    ✗
-        ✅ (n/n)             ✅    ·     ⚠    💀    ✗
-        · (0/0)              ✅    ·     ⚠    💀    ✗
-        ⚠ (0/n or 1..n-1/n) ⚠    ⚠    ⚠    💀    ✗
+        replica \\ cluster   ✅    ·     ⚠️    💀    ✗
+        ✅ (n/n)             ✅    ·     ⚠️    💀    ✗
+        · (0/0)              ✅    ·     ⚠️    💀    ✗
+        ⚠️ (0/n or 1..n-1/n) ⚠️    ⚠️    ⚠️    💀    ✗
         💀 (0/n not starting)💀    💀    💀    💀    ✗
     """
     if replica in (icons.DEAD, icons.WARN) and _SEVERITY[replica] > _SEVERITY[cluster]:

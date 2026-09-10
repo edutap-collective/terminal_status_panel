@@ -15,6 +15,24 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Changed
+
+- The warning icon is the emoji warning sign again, with a pad cell inside
+  the value: `icons.WARN` is `"⚠️ "`. The text after it sits one cell further
+  right than after `✅`; that is the price of the pad and it is intended.
+
+### Fixed
+
+- 0.12.1's diagnosis was wrong, and its documentation with it. Measured on
+  2026-09-10 in iTerm2 and in VS Code's terminal: both advance the cursor by
+  two cells for `⚠️`, exactly as rich 15 counts — the columns were never out
+  of line. What vanished was the space after the icon, painted over by VS
+  Code's terminal, which draws the emoji glyph wider than its two cells. The
+  pad cell absorbs that; iTerm2 shows it as a second space. The docstring,
+  the reference page and the tests no longer claim a cursor-advance
+  mismatch, and the bare text sign — small and monochrome in most fonts —
+  is gone again.
+
 ## [0.12.1] - 2026-09-08
 
 ### Changed

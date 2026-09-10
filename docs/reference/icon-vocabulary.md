@@ -6,7 +6,7 @@ measure.
 | Icon | Meaning |
 |------|---------|
 | ✅ | measured healthy |
-| ⚠ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
+| ⚠️ | warning (e.g. a lagging PostgreSQL replica, a diverging DNS entry) |
 | 💀 | measured broken |
 | ⏰ | a scheduled job, resting between successful runs |
 | 💤 | measured, and deliberately running nothing — a service scaled to zero |
@@ -29,30 +29,35 @@ meaning too many things at once.
 
 Three rules hold for every icon in the table.
 
-**Two cells, everywhere.** A column mixing a one-cell icon with a two-cell one
-steps left and right down the block, so every status icon occupies two cells —
-and it has to do so in every terminal, not only in the one the panel was
-written in. Only two constructions deliver that: a single code point with
-East Asian Width `W` (✅ 💀 ⬜ ⏰ 💤), or a one-cell character padded to two
-inside the value itself — the warning icon is literally `"⚠ "`, warning sign
-plus space, which is why it sits one cell further from the text that follows
-it. Until 0.12.1 the warning and paused icons were `⚠️` and `⏸️`: a
-text-presentation character plus the emoji variation selector U+FE0F. That
-sequence has no agreed width. rich pads it as two cells, a terminal following
-wcwidth advances the cursor by one, and the glyph is drawn over the space that
-should have followed it — so every column to the right of a warning or paused
-icon stepped one cell left, on exactly the rows a reader was meant to look at.
+**One width per icon, in every terminal.** A column mixing widths steps left
+and right down the block, so every icon has one width that rich and the
+terminal agree on: two cells for a single code point with East Asian Width
+`W` (✅ 💀 ⬜ ⏰ 💤), and three for the warning sign, because it is literally
+`"⚠️ "` — the emoji plus a pad cell inside the value. That is why the text
+after a warning icon sits one cell further right than after ✅. The pad has a
+measured reason: VS Code's terminal draws the emoji glyph wider than its two
+cells and paints over the space that follows it, so `⚠️ 2/5` read as `⚠️2/5`
+there. The pad cell absorbs the overdraw; iTerm2, which draws the glyph within
+its cells, shows it as a second space. Measured 2026-09-10 in both terminals,
+which both advance the cursor by two cells for the sequence, exactly as rich
+15 counts it — a statement about what those terminals did that day, not
+about what any terminal guarantees.
+
+0.12.1 diagnosed this as a cursor-advance mismatch and replaced the emoji with
+the bare text sign `⚠`, which most fonts draw small and monochrome. The
+columns had never been out of line; only the space had been painted over.
+0.12.2 restored the emoji and kept the pad.
 
 **Shape, not colour.** An icon must stay unambiguous for a reader who cannot
 see colour, and without the colour of its row: a tick, a skull, a triangle, a
 clock. A coloured dot fails this — 🟡 beside 🟢 is one shape twice — which is
 why the warning sign stayed the warning sign rather than becoming an amber
-light. It may render small and monochrome in some fonts; the shape is the
-message.
+light — and why 0.12.1's small monochrome text sign did not last: the shape
+is the message, and the emoji carries it at full size.
 
 **One icon, one meaning.** The rule that separates `💤` from `⬜` holds for the whole table: an icon says what was
 **found**, never how the panel feels about it. A yellow line reporting a
-measured finding therefore takes `⚠` even where nothing is broken yet — the
+measured finding therefore takes `⚠️` even where nothing is broken yet — the
 WireGuard endpoint-family warning did not, and read as "nothing was observed"
 in front of a sentence describing an observation.
 

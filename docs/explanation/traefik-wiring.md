@@ -272,12 +272,12 @@ completely silent about it.
 `TaskTemplate.ContainerSpec.Args`, a piece of the Docker API that only a
 Swarm *service* carries. A container-hosted Traefik has no such spec, so
 `info.entrypoints` comes back empty — and the section says so plainly: a
-yellow `⚠  no entrypoints found — the tree cannot be drawn, the routers
+yellow `⚠️  no entrypoints found — the tree cannot be drawn, the routers
 below could not be placed` banner opens the section whenever this happens,
 so the *cause* is never quiet. What the banner does not spell out is its
 second-order effect: with no entrypoint list, every router — however it was
 declared — falls into the **ORPHANED ROUTERS** block instead of the tree,
-where it reads, in yellow, ``⚠  … entrypoint `https` — no entrypoint could
+where it reads, in yellow, ``⚠️  … entrypoint `https` — no entrypoint could
 be read``, never the red ``✗ … entrypoint `https` does not exist`` a router
 with a genuinely missing entrypoint gets: with no entrypoint list to check
 against, the code cannot tell "not on this one" from "nothing was read" and
