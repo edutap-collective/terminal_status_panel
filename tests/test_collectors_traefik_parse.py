@@ -296,14 +296,14 @@ tls:
 
 
 def test_file_routers_are_marked_as_coming_from_the_file_provider():
-    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="traefik_dynamic_yml_v2")
+    routers, _, _ = parse.parse_dynamic(DYNAMIC_YML, origin="traefik_dynamic_yml_v2")
     assert {r.name for r in routers} == {"api", "ping-router"}
     assert all(r.source == "file" for r in routers)
     assert all(r.origin == "traefik_dynamic_yml_v2" for r in routers)
 
 
 def test_a_single_entrypoint_string_becomes_a_list():
-    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    routers, _, _ = parse.parse_dynamic(DYNAMIC_YML, origin="x")
     api = [r for r in routers if r.name == "api"][0]
     assert api.entrypoints == ["dashboard"]
     assert api.service == "api@internal"
@@ -312,7 +312,7 @@ def test_a_single_entrypoint_string_becomes_a_list():
 def test_the_capitalised_entrypoints_key_is_also_read():
     """The file provider accepts entryPoints as well as entrypoints, and this
     fixture uses both — one per router."""
-    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    routers, _, _ = parse.parse_dynamic(DYNAMIC_YML, origin="x")
     ping = [r for r in routers if r.name == "ping-router"][0]
     assert ping.entrypoints == [
         "login_example_net",
@@ -325,27 +325,27 @@ def test_the_capitalised_entrypoints_key_is_also_read():
 
 
 def test_a_quoted_tls_string_counts_as_true():
-    routers, _, _ = parse.parse_dynamic_yaml(DYNAMIC_YML, origin="x")
+    routers, _, _ = parse.parse_dynamic(DYNAMIC_YML, origin="x")
     assert all(r.tls for r in routers)
 
 
 def test_malformed_yaml_yields_nothing_rather_than_raising():
-    assert parse.parse_dynamic_yaml("http: [unclosed", origin="x") == ([], {}, {})
+    assert parse.parse_dynamic("http: [unclosed", origin="x") == ([], {}, {})
 
 
 def test_yaml_without_an_http_section_yields_nothing():
-    assert parse.parse_dynamic_yaml("tls:\n  stores: {}\n", origin="x") == ([], {}, {})
+    assert parse.parse_dynamic("tls:\n  stores: {}\n", origin="x") == ([], {}, {})
 
 
 def test_routers_as_a_list_instead_of_a_mapping_yields_nothing():
     """http.routers is documented as a mapping of name -> spec. If it comes
     back as a list instead, .items() must not be called on it."""
-    assert parse.parse_dynamic_yaml("http:\n  routers:\n  - a\n  - b\n", origin="x") == ([], {}, {})
+    assert parse.parse_dynamic("http:\n  routers:\n  - a\n  - b\n", origin="x") == ([], {}, {})
 
 
 def test_middlewares_as_a_list_instead_of_a_mapping_yields_nothing():
     """Same shape problem as routers, but for http.middlewares."""
-    routers, middlewares, _ = parse.parse_dynamic_yaml(
+    routers, middlewares, _ = parse.parse_dynamic(
         "http:\n  middlewares:\n  - a\n  - b\n", origin="x"
     )
     assert (routers, middlewares) == ([], {})
@@ -364,19 +364,19 @@ http:
 
 
 def test_a_middleware_keeps_its_name_and_first_configured_key_as_kind():
-    _, middlewares, _ = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    _, middlewares, _ = parse.parse_dynamic(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
     mw = middlewares["image_api_stripprefix"]
     assert mw.name == "image_api_stripprefix"
     assert mw.kind == "stripprefix"
 
 
 def test_a_middleware_with_an_empty_spec_has_no_kind_rather_than_crashing():
-    _, middlewares, _ = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    _, middlewares, _ = parse.parse_dynamic(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
     assert middlewares["empty_middleware"].kind is None
 
 
 def test_a_middleware_with_a_null_spec_has_no_kind_rather_than_crashing():
-    _, middlewares, _ = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
+    _, middlewares, _ = parse.parse_dynamic(DYNAMIC_YML_WITH_MIDDLEWARES, origin="x")
     assert middlewares["null_middleware"].kind is None
 
 
@@ -453,7 +453,7 @@ def test_file_provider_services_are_read_with_their_upstreams():
     """`account-api-placeholder` exists only here, never in Swarm. Read from
     labels alone the router looks like it points at nothing, and the panel
     reports a missing service it never looked for."""
-    _, _, services = parse.parse_dynamic_yaml(DYNAMIC_YML_WITH_SERVICES, origin="x")
+    _, _, services = parse.parse_dynamic(DYNAMIC_YML_WITH_SERVICES, origin="x")
     ref = services["account-api-placeholder"]
     assert ref.source == "file"
     assert ref.upstreams == ["http://user-account.internal"]
@@ -462,10 +462,42 @@ def test_file_provider_services_are_read_with_their_upstreams():
 
 def test_a_service_without_a_load_balancer_still_parses():
     text = "http:\n  services:\n    s:\n      weighted: {}\n"
-    _, _, services = parse.parse_dynamic_yaml(text, origin="x")
+    _, _, services = parse.parse_dynamic(text, origin="x")
     assert services["s"].upstreams == []
 
 
 def test_services_as_a_list_instead_of_a_mapping_yields_nothing():
     text = "http:\n  services:\n  - a\n  - b\n"
-    assert parse.parse_dynamic_yaml(text, origin="x") == ([], {}, {})
+    assert parse.parse_dynamic(text, origin="x") == ([], {}, {})
+
+
+DYNAMIC_TOML = """\
+[http.routers.dashboard]
+entryPoints = ["https"]
+rule = "PathPrefix(`/traefik`)"
+service = "api@internal"
+middlewares = ["tools-auth"]
+
+[http.middlewares.tools-auth.basicAuth]
+usersFile = "/run/secrets/htpasswd"
+"""
+
+
+def test_a_toml_dynamic_file_yields_the_same_shapes():
+    routers, middlewares, _ = parse.parse_dynamic(DYNAMIC_TOML, origin="/d/x.toml", fmt="toml")
+
+    assert [(r.name, r.entrypoints, r.source) for r in routers] == [
+        ("dashboard", ["https"], "file")
+    ]
+    assert middlewares["tools-auth"].kind == "basicAuth"
+
+
+def test_an_unparseable_toml_file_yields_nothing_and_says_why():
+    assert parse.parse_dynamic("x = = y", origin="o", fmt="toml") == ([], {}, {})
+    assert parse.parse_error("x = = y", "toml").startswith("TOMLDecodeError")
+    assert parse.parse_error("http: {}\n", "yaml") is None
+
+
+def test_a_template_is_recognised_by_its_delimiters():
+    assert parse.is_templated('rule: Host(`{{ env "HOST" }}`)') is True
+    assert parse.is_templated("rule: Host(`example.net`)") is False

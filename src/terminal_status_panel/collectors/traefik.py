@@ -16,14 +16,14 @@ import ssl
 from contextlib import contextmanager
 
 import httpx2
-import yaml
 
 from ..model import TraefikInfo, TraefikRouter
 from ._labels import SWARM_SERVICE_LABEL, compose_identity, container_labels
 from .traefik_parse import (
     parse_api_rawdata,
-    parse_dynamic_yaml,
+    parse_dynamic,
     parse_entrypoints,
+    parse_error,
     parse_labels,
     parse_ping_entrypoint,
 )
@@ -99,20 +99,6 @@ def _config_text(config) -> str | None:
         return base64.b64decode(data).decode("utf-8", "replace")
     except Exception:
         return None
-
-
-def _yaml_error(text: str) -> str | None:
-    """Why this config parsed to nothing, when the reason is broken YAML.
-
-    Only consulted for a config that yielded neither router nor middleware:
-    valid YAML with no ``http`` section is a real, empty answer, and must not
-    be reported as a read failure.
-    """
-    try:
-        yaml.safe_load(text)
-    except Exception as exc:
-        return f"{type(exc).__name__}: {exc}"
-    return None
 
 
 def _note_file_provider_error(info: TraefikInfo, message: str) -> None:
@@ -302,14 +288,14 @@ def _absorb_config(info: TraefikInfo, config) -> None:
         return
     if not text.strip():
         # An empty body decodes cleanly and parses cleanly to nothing, so
-        # neither the guard above nor `_yaml_error` below sees it -- but a
+        # neither the guard above nor `parse_error` below sees it -- but a
         # dynamic config with no content is a read that came back empty, not a
         # file provider that declares no routers.
         _note_file_provider_error(info, f"{name}: config data is empty")
         return
-    routers, middlewares, refs = parse_dynamic_yaml(text, origin=name)
+    routers, middlewares, refs = parse_dynamic(text, origin=name)
     if not routers and not middlewares and not refs:
-        error = _yaml_error(text)
+        error = parse_error(text, "yaml")
         if error is not None:
             _note_file_provider_error(info, f"{name}: {error}")
     info.routers.extend(routers)
