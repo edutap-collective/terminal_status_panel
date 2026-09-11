@@ -18,7 +18,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `resources.process_sample` | `0.3` | Seconds to sample process CPU usage over for the TOP CPU row (see {doc}`Top processes </explanation/top-processes>`). `0` or less disables the CPU ranking; TOP RAM is unaffected. |
 | `resources.top_processes` | `5` | Rows per process table in the TOP CPU / TOP RAM row (see {doc}`Top processes </explanation/top-processes>`). `--processes N` on the command line wins over this. A value that cannot be read as a whole number falls back to `5`; a negative value means `0`. `0` removes the whole row, and with it the `process_sample` sampling wait — a different switch from `process_sample`, which only removes the CPU ranking and leaves TOP RAM in place. |
 | `docker.infrastructure_stacks` | `["postgresql", "postgres", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry", "minio", "redis", "valkey", "mariadb", "mysql", "elasticsearch", "bugsink", "swarm-cronjob", "swarm_cronjob"]` | Case-insensitive substrings. A **stack** (or Compose project) whose name matches goes into that origin's **Infrastructure** table; every other stack goes into **Service**. An entry with no stack at all is never classified this way — it has no project to be filed under, so `docker run -d redis` lands in **Standalone containers** like any other stackless entry, however infrastructural its name. |
-| `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastructure** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. |
+| `docker.infra_ui_services` | `["kafbat-ui", "kafka-ui", "kafdrop", "cloudbeaver", "pgadmin", "adminer", "mongo-express", "mongo-gui", "rustfs-console", "rustfs-ui", "s3-browser", "s3browser", "redisinsight", "redis-commander", "portainer", "dozzle", "kibana"]` | Case-insensitive substrings matched against the stack name **and** the service name. Matching services leave their own stack and are collected as sub-rows of the pseudo stack **`infra-uis`**, shown first in the **Infrastructure** block. On a name matching both lists, this one wins. A sidecar pulled in only because its *stack* name matched (e.g. `portainer_agent`) is labelled `stack/service` so it stays attributable once detached. Also excluded from every cluster health match — an admin UI sharing its cluster's stack name is never probed. |
 | `services.critical` | `[]` | Service names flagged as critical (parsed and available on the data model; not visually emphasised in the current matrix view). |
 | `thresholds.memory.warning` / `.critical` | `75` / `90` | RAM usage % thresholds (yellow / red). |
 | `thresholds.swap.warning` | platform-dependent | Swap usage % above which SWAP turns yellow. Defaults to `80` on macOS, which allocates swap continuously by design, and to `1` elsewhere. An explicit value overrides both. |
@@ -28,6 +28,10 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `health.timeout.*` | postgres `1.5`, mongodb `6.0`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See {doc}`How the timeouts are enforced </explanation/cluster-health>`. |
 | `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
+| `health.postgres.match` / `health.mongodb.match` / `health.kafka.match` / `health.rustfs.match` | `["_pg-"]` / `["mongodb"]` / `["kafka_kafka-"]` / `["rustfs_rustfs"]` | Case-insensitive substrings of a container (and Swarm service) name that identify a member of that kind. Replaces the default rather than extending it. A bare string is one pattern; `[]` means no member of that kind on this host (it renders `n/a here`); an empty string is dropped and reported by `--debug`, because it would match every container. Names containing an entry of `docker.infra_ui_services` never count as members. |
+| `health.postgres.mode` | `"pg_auto_failover"` | `"pg_auto_failover"` runs `pg_autoctl show state` and reports every member. `"standalone"` runs `pg_isready` and reports one server: whether it accepts connections, nothing about replication. |
+| `health.kafka.command_config` | `"/client.properties"` | Client config passed to `kafka-metadata-quorum.sh` as `--command-config`. `""` omits the option — upstream `apache/kafka` images carry no such file. |
+| `health.rustfs.scheme` | `"https"` | Scheme of the local-instance endpoint (`localhost:9000`), used when `RUSTFS_VOLUMES` holds a path rather than URLs. URL-form endpoints keep their own scheme. |
 | `follow.interval` | `5.0` | Refresh interval in seconds for `--follow` when the `health` section is **not** among those requested (see {doc}`Follow mode </explanation/follow-mode>`). |
 | `follow.health_interval` | `20.0` | Refresh interval in seconds for `--follow` when the `health` section **is** among those requested. |
 | `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see {doc}`Traefik wiring </explanation/traefik-wiring>` for why it cannot work on today's app servers. |
@@ -86,6 +90,19 @@ dns = 2.5
 [[health.dns.expect]]
 name = "login.example.net"
 addresses = ["10.9.9.9"]
+
+# A host running plain upstream images, one of each:
+[health.postgres]
+match = ["myapp_postgres"]
+mode = "standalone"
+
+[health.kafka]
+match = ["myapp_kafka"]
+command_config = ""
+
+[health.rustfs]
+match = ["myapp_rustfs"]
+scheme = "http"
 
 [managed]
 by = "Ansible"

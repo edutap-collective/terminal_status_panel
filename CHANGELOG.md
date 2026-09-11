@@ -15,6 +15,21 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Added
+
+- `[health.postgres]`, `[health.mongodb]`, `[health.kafka]`, `[health.rustfs]`:
+  per-kind `match` patterns, `postgres.mode = "standalone"` (`pg_isready`),
+  `kafka.command_config` (`""` omits it) and `rustfs.scheme`. Every default is
+  the behaviour of 0.12.2. Unknown keys and tables under `[health]` are
+  reported by `--debug`.
+
+### Changed
+
+- `docker.infra_ui_services` now keeps admin UIs out of every cluster health
+  match — the probe's container search and the crash-loop check as well as the
+  DOCKER INFOS join — and the join reads the configured list instead of the
+  built-in one.
+
 ## [0.12.2] - 2026-09-10
 
 ### Changed
