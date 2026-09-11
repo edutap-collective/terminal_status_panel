@@ -100,9 +100,16 @@ def _config_text(config) -> str | None:
 
 
 def _note_file_provider_error(info: TraefikInfo, message: str) -> None:
-    """Record the first read failure; the field holds one line, not a list."""
-    if info.file_provider_error is None:
-        info.file_provider_error = message
+    """Record a file-provider failure: the field shows the first, and how many more.
+
+    The field is one line in the panel, so it cannot hold them all; counting
+    the rest keeps a later failure from vanishing without a trace. Every note
+    is kept in ``file_provider_notes``.
+    """
+    info.file_provider_notes.append(message)
+    first = info.file_provider_notes[0]
+    more = len(info.file_provider_notes) - 1
+    info.file_provider_error = first if more == 0 else f"{first} (+{more} more)"
 
 
 def _combined_listing_error(service_error: str | None, container_error: str | None) -> str:
@@ -161,7 +168,9 @@ def _socket_timeout(client, timeout: float):
 
 
 def _matches(name: str, match: tuple[str, ...]) -> bool:
-    return any(pattern in name for pattern in match)
+    """Whether *name* contains one of *match* -- case-insensitively, as documented."""
+    folded = name.casefold()
+    return any(pattern.casefold() in folded for pattern in match)
 
 
 def _absorb_swarm_services(client, info: TraefikInfo, match: tuple[str, ...]) -> Any:
@@ -459,7 +468,7 @@ def _list_configs(client, info: TraefikInfo) -> list:
         # The file provider is optional, but a read failure is not the same as
         # "no dynamic config exists" — the caller must be able to tell them
         # apart, since api@internal and ping-router live only there.
-        info.file_provider_error = f"{type(exc).__name__}: {exc}"
+        _note_file_provider_error(info, f"{type(exc).__name__}: {exc}")
         return []
 
 
@@ -535,6 +544,11 @@ def _absorb_config(info: TraefikInfo, config) -> None:
         # could decode yields no router, which would read as "no such router"
         # instead of "not read".
         _note_file_provider_error(info, f"{name}: config data is not decodable")
+        return
+    if is_templated(text):
+        # Traefik runs every dynamic file through Go's text/template; the panel
+        # cannot, here as on the provider-path branch.
+        _note_file_provider_error(info, f"{name}: templated — not evaluated")
         return
     _absorb_text(info, text, name, "yaml")
 
@@ -658,9 +672,14 @@ def collect_traefik(
     Traefik itself would use, and the file provider by the path that
     configuration names.
 
+    An empty *match* states that there is no Traefik to read on this host:
+    nothing is asked of Docker at all.
+
     Never raises.
     """
     info = TraefikInfo()
+    if not match:
+        return info
     with _socket_timeout(client, timeout):
         service = _absorb_swarm_services(client, info, match)
         containers = _list_containers(client, info)
@@ -671,7 +690,11 @@ def collect_traefik(
             return info
         _absorb_containers(info, containers)
         container = _traefik_container(containers, match) if service is None else None
-        configs = _list_configs(client, info)
+        # Swarm configs exist only on a Swarm daemon. When the services listing
+        # failed, asking for configs fails the same way and would blame the
+        # file provider for a Compose-only host; on a Swarm daemon nothing
+        # changes.
+        configs = _list_configs(client, info) if info.service_error is None else []
         # The file reads happen inside the timeout too: where Traefik runs is
         # a Docker call, and host files are bounded by the mount resolver's
         # own size and count limits.

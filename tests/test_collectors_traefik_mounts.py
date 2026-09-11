@@ -918,3 +918,112 @@ def test_container_mount_entries_with_non_string_fields_are_dropped():
     workload = mounts.workload_from_container(container)
 
     assert workload.mounts == [mounts.Mount("bind", "/ok", "/srv/ok")]
+
+
+# --- Copilot round 1 (#41) ----------------------------------------------------
+
+
+def test_a_file_swapped_for_a_symlink_after_resolution_is_not_followed(tmp_path, monkeypatch):
+    root = tmp_path / "dyn"
+    root.mkdir()
+    (root / "a.yml").write_text("REAL\n")
+    secret = tmp_path / "secret.yml"
+    secret.write_text("SECRET\n")
+    resolve = mounts._resolved_below_root
+
+    def swap_after_resolving(path, source):
+        parts = resolve(path, source)
+        (root / "a.yml").unlink()
+        (root / "a.yml").symlink_to(secret)
+        return parts
+
+    monkeypatch.setattr(mounts, "_resolved_below_root", swap_after_resolving)
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root))), "/d/a.yml")
+
+    with pytest.raises(mounts.Unreadable) as caught:
+        mounts.read_located(located, configs={}, placement=HERE)
+
+    assert str(caught.value).startswith(f"{root / 'a.yml'}: ")
+
+
+def test_a_directory_swapped_for_a_symlink_after_resolution_is_not_followed(tmp_path, monkeypatch):
+    root = tmp_path / "dyn"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "a.yml").write_text("REAL\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "a.yml").write_text("SECRET\n")
+    resolve = mounts._resolved_below_root
+
+    def swap_after_resolving(path, source):
+        parts = resolve(path, source)
+        (root / "sub" / "a.yml").unlink()
+        (root / "sub").rmdir()
+        (root / "sub").symlink_to(elsewhere)
+        return parts
+
+    monkeypatch.setattr(mounts, "_resolved_below_root", swap_after_resolving)
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root))), "/d/sub/a.yml")
+
+    with pytest.raises(mounts.Unreadable) as caught:
+        mounts.read_located(located, configs={}, placement=HERE)
+
+    assert str(caught.value).startswith(f"{root / 'sub' / 'a.yml'}: ")
+
+
+def test_the_walk_stops_once_more_files_are_known_than_are_read(tmp_path, monkeypatch):
+    for name in ("a", "b", "c"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "1.yml").write_text("")
+        (tmp_path / name / "2.yml").write_text("")
+    monkeypatch.setattr(mounts, "MAX_PROVIDER_FILES", 2)
+    scanned = []
+    real_scandir = os.scandir
+
+    def recording_scandir(path):
+        scanned.append(os.fspath(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(mounts.os, "scandir", recording_scandir)
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/a/1.yml", "/dyn/a/2.yml"]
+    assert listing.notes == ["more than 2 files under /dyn — the rest not read"]
+    assert str(tmp_path / "c") not in scanned
+
+
+def test_the_walk_stops_at_the_scan_budget_and_says_where(tmp_path, monkeypatch):
+    for number in range(8):
+        (tmp_path / f"{number}.txt").write_text("")
+    monkeypatch.setattr(mounts, "MAX_SCANNED_ENTRIES", 5)
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes == ["/dyn: more than 5 directory entries — the rest not scanned"]
+
+
+@pytest.mark.parametrize(
+    "mount,note",
+    [
+        (
+            mounts.Mount("volume", "/dyn/extra", "extra_vol"),
+            "/dyn/extra is on volume extra_vol — not readable",
+        ),
+        (
+            mounts.Mount("tmpfs", "/dyn/scratch", ""),
+            "/dyn/scratch is on a tmpfs mount — not readable",
+        ),
+    ],
+)
+def test_a_nested_volume_or_tmpfs_is_a_note_beside_the_files_found(tmp_path, mount, note):
+    (tmp_path / "a.yml").write_text("")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)), mount)
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/a.yml"]
+    assert listing.notes == [note]

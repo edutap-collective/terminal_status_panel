@@ -263,9 +263,12 @@ otherwise vanish from the panel silently. Instead it gets its own
 refers to that do not exist, its rule, and the service it would have pointed
 at.
 
-When the Docker configs backing the file provider could not be listed at
-all, a `file provider unreadable: …` warning appears above the tree — a
-partial-read failure, distinct from the routers simply being empty. Because
+When the file provider could not be read — the Docker configs backing it
+could not be listed, or a file under it could not be read, parsed or
+evaluated — a `file provider unreadable: …` warning appears above the tree:
+a partial-read failure, distinct from the routers simply being empty. It
+names the first failure and counts the others, `(+N more)`, rather than
+dropping them; `TraefikInfo.file_provider_notes` holds every one. Because
 `api` and `ping-router` live only in the file provider, this warning is the
 signal that their absence below is a read failure, not a finding.
 
@@ -331,7 +334,10 @@ container). Reading one reads a host file as the panel's own login user,
 resolved component by component below the bind source the way the kernel
 would resolve it inside the container — an absolute symlink is never
 followed, no step may climb back out of the bind source, symlink loops are
-bounded — and only a plain regular file is read, at most 1 MiB.
+bounded. The file is then opened one path component at a time from the bind
+source, none of them through a symlink, so a component swapped for a link
+after that check fails to open rather than being followed. Only a plain
+regular file is read, at most 1 MiB.
 
 **The file provider, once its path is known.** `providers.file.directory` or
 `.filename` — read from the same source as the entrypoints, `directory`
@@ -341,18 +347,24 @@ under it, recursively, from Docker configs and bind mounts alike, matched by
 Traefik's own directory walk does not skip them
 ([`file.go` L406-427](https://github.com/traefik/traefik/blob/v3.7.13/pkg/provider/file/file.go#L406-L427)).
 A file that a more specific mount also covers belongs to that mount, and is
-read once. A directory yields at most 64 files — sorted by path, with a note
-naming how many were left unread past that — and each file is capped at 1
-MiB, the same limit a bind-mounted static file has. A file containing `{{` is
-noted as templated and not evaluated — Traefik runs every dynamic file
-through Go's `text/template`
+read once. A directory yields at most 64 files: once more are known the walk
+stops, a note says the rest are not read, and the 64 read are the first by
+path among those found. The walk also stops after 10,000 directory entries,
+with a note naming the directory it stopped in, so a misconfigured path
+costs a bounded amount of work at login. A volume, tmpfs or other mount
+nested inside the provider directory is named in a note — Traefik reads the
+files in it, the panel cannot — rather than left out as if it were not
+there. Each file is capped at 1 MiB, the same limit a bind-mounted static
+file has. A file containing `{{` is noted as templated and not evaluated —
+Traefik runs every dynamic file through Go's `text/template`
 ([`file.go` L125-156](https://github.com/traefik/traefik/blob/v3.7.13/pkg/provider/file/file.go#L125-L156)),
 which the panel cannot do without presenting a guess as configuration.
 
 **Without a known provider path**, dynamic-file reading falls back to the rule
 0.12.2 already used: Docker configs named `*traefik_dynamic*` that the
 service actually mounts — the file-provider path just described applies only
-once the static configuration is known and names one.
+once the static configuration is known and names one. The same `{{` check
+applies to those configs.
 
 ### When the tree cannot be drawn at all
 
@@ -407,3 +419,9 @@ reader to stop reading it. The section only shows the notice when Swarm
 reports itself active and the services listing still failed — a Swarm
 manager or worker that genuinely could not be queried, which is worth a
 line precisely because it is not supposed to happen.
+
+For the same reason, Docker configs are not asked for at all when the
+services listing failed. They exist only on a Swarm daemon, and on a
+Compose-only host the same answer would otherwise read as an unreadable file
+provider — although the bind-mounted files Traefik actually reads there were
+read fine. On a Swarm daemon configs are listed as before.

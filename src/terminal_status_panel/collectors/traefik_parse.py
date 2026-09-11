@@ -42,9 +42,9 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
     the port number: a deployment's automation typically lists its baseline
     entrypoints — such as ``dashboard``, ``ping``, ``default``, ``https`` —
     before appending its own per-vhost ones, so that grouping survives into
-    the panel. Sorting by port would interleave them (a high-numbered
-    entrypoint like ``https`` at 443 first, a low-numbered one like
-    ``dashboard`` at 8082 last) and scatter what belongs together.
+    the panel. Sorting by port would interleave them (``https``, on the low
+    port 443, first; ``dashboard``, on the high port 8082, last) and scatter
+    what belongs together.
     """
     found: list[TraefikEntrypoint] = []
     seen: set[str] = set()

@@ -292,11 +292,9 @@ def traefik_section(
     stays full width below them: its lines are the longest in the section, and
     it holds the findings.
     """
-    data = info or TraefikInfo()
-    if data.error:
-        return section("TRAEFIK WIRING", Text(f"{icons.FAILED} {data.error}", style="red"))
-    if not data.reachable:
-        return section("TRAEFIK WIRING", Text("not checked", style="dim"))
+    # First, before any collection status: with an empty match nothing is
+    # collected at all, so an error or "not checked" would describe a read
+    # that was never meant to happen.
     if not cfg.traefik.match:
         return section(
             "TRAEFIK WIRING",
@@ -305,6 +303,11 @@ def traefik_section(
                 style="dim",
             ),
         )
+    data = info or TraefikInfo()
+    if data.error:
+        return section("TRAEFIK WIRING", Text(f"{icons.FAILED} {data.error}", style="red"))
+    if not data.reachable:
+        return section("TRAEFIK WIRING", Text("not checked", style="dim"))
 
     parts: list[RenderableType] = []
     if not data.entrypoints:

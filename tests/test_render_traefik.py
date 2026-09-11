@@ -1128,3 +1128,28 @@ def test_traefik_match_empty_disables_reading():
     assert "traefik.match is empty" in out
     assert "ORPHANED" not in out
     assert "no Traefik service" not in out
+
+
+def _render_for_match(info, match, width=120):
+    cfg = Config()
+    cfg.traefik.match = match
+    console = Console(width=width, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(info, cfg))
+    return capture.get()
+
+
+def test_an_empty_match_is_reported_when_nothing_was_collected():
+    out = _render_for_match(None, ())
+
+    assert "traefik.match is empty" in out
+    assert "not checked" not in out
+
+
+def test_an_empty_match_wins_over_a_collection_error():
+    info = TraefikInfo(error="services: gone; containers: gone")
+
+    out = _render_for_match(info, ())
+
+    assert "traefik.match is empty" in out
+    assert "services: gone" not in out

@@ -435,3 +435,30 @@ def test_collect_all_passes_the_configured_match_to_the_traefik_collector(isolat
     cli.collect_all(cfg, sections=("traefik",))
 
     assert seen["match"] == ("demo_traefik",)
+
+
+def test_an_empty_traefik_match_skips_every_traefik_read(isolated_cli):
+    called = []
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: called.append("docker"))
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append("traefik"))
+    isolated_cli.setattr(cli, "fetch_accepted", lambda *a, **k: called.append("api"))
+    cfg = Config()
+    cfg.traefik.match = ()
+
+    data = cli.collect_all(cfg, sections=("traefik",))
+
+    assert called == []
+    assert data.traefik is None
+
+
+def test_an_empty_traefik_match_leaves_the_docker_section_alone(isolated_cli):
+    called = []
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: called.append("docker"))
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append("traefik"))
+    isolated_cli.setattr(cli, "fetch_accepted", lambda *a, **k: called.append("api"))
+    cfg = Config()
+    cfg.traefik.match = ()
+
+    cli.collect_all(cfg, sections=("docker", "traefik"))
+
+    assert called == ["docker"]

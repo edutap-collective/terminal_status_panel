@@ -1416,3 +1416,138 @@ def test_a_matching_service_wins_over_a_matching_container():
     )
 
     assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+# --------------------------------------------------------------------------- #
+# Copilot round 1 (#41)
+# --------------------------------------------------------------------------- #
+
+
+def test_traefik_match_ignores_case_for_a_service():
+    service = _SpecService("Demo_Traefik", {"Args": ["--entrypoints.web.address=:80"]})
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+def test_traefik_match_ignores_case_for_a_container():
+    container = _FakeContainer("Demo-Traefik-1")
+    container.attrs["Args"] = ["--entrypoints.web.address=:80"]
+
+    info = collector.collect_traefik(_FakeClient(containers=[container]), match=("DEMO-traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+def test_a_templated_config_generation_is_noted_and_not_parsed():
+    client = _FakeClient(
+        services=[_FakeService("traefik_traefik", args=[], configs=["traefik_dynamic_yml_v2"])],
+        configs=[
+            _FakeConfig(
+                "traefik_dynamic_yml_v2",
+                'http:\n  routers:\n    r:\n      rule: Host(`{{ env "H" }}`)\n',
+            )
+        ],
+    )
+
+    info = collector.collect_traefik(client)
+
+    assert info.routers == []
+    assert info.file_provider_error == "traefik_dynamic_yml_v2: templated — not evaluated"
+
+
+def test_a_daemon_without_swarm_lists_no_configs_and_blames_nothing_on_them(tmp_path):
+    """Swarm configs exist only on a Swarm daemon. Asking a Compose-only one
+    records its "not a swarm manager" answer as an unreadable file provider,
+    although the bind-mounted files it actually reads were read fine."""
+    calls = []
+
+    class _ComposeOnly(_FakeClient):
+        @property
+        def services(self):
+            raise RuntimeError("This node is not a swarm manager")
+
+        @property
+        def configs(self):
+            calls.append("configs")
+            raise RuntimeError("This node is not a swarm manager")
+
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    dynamic_file = tmp_path / "dynamic.yaml"
+    dynamic_file.write_text(DYNAMIC_MIDDLEWARES)
+    container = _FakeContainer("demo-traefik-1")
+    container.attrs.update(
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yaml"],
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Destination": "/etc/traefik/traefik.yaml",
+                },
+                {
+                    "Type": "bind",
+                    "Source": str(dynamic_file),
+                    "Destination": "/etc/traefik/dynamic/dynamic.yaml",
+                },
+            ],
+        }
+    )
+
+    info = collector.collect_traefik(_ComposeOnly(containers=[container]), match=("demo-traefik",))
+
+    assert calls == []
+    assert info.file_provider_error is None
+    assert "tools-auth" in info.middlewares
+
+
+def test_an_empty_match_makes_no_docker_call_at_all():
+    class _Untouchable:
+        def __getattr__(self, name):
+            raise AssertionError(f"Docker was asked for {name}")
+
+    info = collector.collect_traefik(_Untouchable(), match=())
+
+    assert info.reachable is False
+    assert info.entrypoints == []
+    assert info.routers == []
+
+
+def test_more_than_one_file_provider_failure_is_counted_not_dropped(tmp_path):
+    from rich.console import Console
+
+    from terminal_status_panel.render.traefik import traefik_section
+
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    dynamic_dir = tmp_path / "dynamic"
+    dynamic_dir.mkdir()
+    templated = 'http:\n  routers:\n    r:\n      rule: Host(`{{ env "H" }}`)\n'
+    (dynamic_dir / "a.yml").write_text(templated)
+    (dynamic_dir / "b.yml").write_text(templated)
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yaml"],
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Target": "/etc/traefik/traefik.yaml",
+                },
+                {"Type": "bind", "Source": str(dynamic_dir), "Target": "/etc/traefik/dynamic"},
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.file_provider_error == (
+        f"{dynamic_dir / 'a.yml'}: templated — not evaluated (+1 more)"
+    )
+    console = Console(width=400, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(info, Config()))
+    assert "templated — not evaluated (+1 more)" in capture.get()

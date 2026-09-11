@@ -112,7 +112,10 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     server = "server" in sections
     docker_section = "docker" in sections
     health = "health" in sections
-    traefik = "traefik" in sections
+    # `traefik.match = []` states that this host has no Traefik to read: the
+    # section then only says so, and nothing is collected for it -- not the
+    # wiring, not the API cross-check, not the Swarm data below.
+    traefik = "traefik" in sections and bool(cfg.traefik.match)
 
     # The traefik section needs this data too, though it renders no DOCKER
     # INFOS block: every router's service line is resolved against the Swarm

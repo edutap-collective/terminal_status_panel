@@ -22,13 +22,17 @@ guesswork dressed as a record.
   `kafka.command_config` (`""` omits it) and `rustfs.scheme`. Every default is
   the behaviour of 0.12.2. Unknown keys and tables under `[health]` are
   reported by `--debug`.
-- `traefik.match`: the Traefik workload is found by configurable name
-  patterns, as a Swarm service or as a plain container.
+- `traefik.match`: the Traefik workload is found by configurable,
+  case-insensitive name patterns, as a Swarm service or as a plain container.
+  An empty list reads nothing on the host: no Docker call, no API cross-check.
 - Traefik's static configuration is read from the source Traefik itself uses —
   a file (`--configFile` or a default location), else the command-line flags,
   else `TRAEFIK_*` variables — and the file provider by the path that
   configuration names. Files come from Docker configs or, on the node the
-  Traefik task runs on, from bind mounts. YAML and TOML.
+  Traefik task runs on, from bind mounts. YAML and TOML. A bind-mounted file
+  is opened component by component, never through a symlink below the bind
+  source; a provider directory walk stops after 64 files or 10,000 directory
+  entries, with a note.
 
 ### Changed
 
@@ -38,6 +42,16 @@ guesswork dressed as a record.
   built-in one.
 - When no entrypoints can be read, the banner names the reason instead of
   "no entrypoints found".
+- A Docker config read under the config-generation rule that contains `{{` is
+  noted as templated and no longer parsed, as on the file-provider path.
+- The file-provider warning counts further failures, `(+N more)`, instead of
+  showing only the first.
+
+### Fixed
+
+- On a host without Swarm, the file provider is no longer reported unreadable
+  because Docker configs — a Swarm-only object — could not be listed; they
+  are not asked for there.
 
 ## [0.12.2] - 2026-09-10
 

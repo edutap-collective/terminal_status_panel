@@ -74,7 +74,8 @@ queried on the host via `sudo -n` and is skipped when that is unavailable.
 To draw Traefik's wiring it reads Traefik's static and dynamic configuration:
 Docker configs through the API, and **files bind-mounted into the Traefik
 container**, from the host, as the logged-in user — only on the node the
-Traefik task runs on, at most 1 MiB per file and 64 files per directory.
+Traefik task runs on, at most 1 MiB per file and 64 files per directory, and
+never more than 10,000 directory entries scanned.
 
 ## Documentation
 

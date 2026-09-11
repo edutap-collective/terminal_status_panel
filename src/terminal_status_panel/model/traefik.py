@@ -78,8 +78,12 @@ class TraefikInfo:
     # one failing alone is a partial read, recorded below instead.
     error: str | None = None
     # A partial failure: the labels were read but the file provider was not.
-    # Distinct from `error`, which means nothing could be read at all.
+    # Distinct from `error`, which means nothing could be read at all. One
+    # line: the first failure, and "(+N more)" when there were others.
     file_provider_error: str | None = None
+    #: Every file-provider failure, in the order met -- the ones
+    #: ``file_provider_error`` only counts.
+    file_provider_notes: list[str] = field(default_factory=list)
     # Labels were read from services but not from containers. Distinct from
     # `error`, which means nothing could be read at all.
     container_error: str | None = None
