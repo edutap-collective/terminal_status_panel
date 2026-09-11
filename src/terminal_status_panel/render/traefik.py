@@ -217,6 +217,19 @@ def _entrypoint_block(
     return lines
 
 
+def _render_static_notes(notes: list[str]) -> list[RenderableType]:
+    """The static configuration findings that leave the tree intact."""
+    if not notes:
+        return []
+    parts: list[RenderableType] = []
+    for note in notes:
+        # Findings that leave the tree intact: flags Traefik ignores because
+        # a static file was found. A real mistake, and invisible otherwise.
+        parts.append(Text(f"{icons.WARN} {note}", style="dim"))
+    parts.append(Text(""))
+    return parts
+
+
 def _orphan_block(info: TraefikInfo, swarm: SwarmInfo | None) -> Group | None:
     known = {ep.name for ep in info.entrypoints}
     orphans: list[tuple[TraefikRouter, list[str]]] = []
@@ -283,22 +296,33 @@ def traefik_section(
         return section("TRAEFIK WIRING", Text(f"{icons.FAILED} {data.error}", style="red"))
     if not data.reachable:
         return section("TRAEFIK WIRING", Text("not checked", style="dim"))
+    if not cfg.traefik.match:
+        return section(
+            "TRAEFIK WIRING",
+            Text(
+                "traefik.match is empty — Traefik's wiring is not read on this host",
+                style="dim",
+            ),
+        )
 
     parts: list[RenderableType] = []
     if not data.entrypoints:
-        # A coverage gap, not an empty configuration: the Traefik service may
-        # carry a different name than TRAEFIK_SERVICE_PATTERNS matches, or
-        # declare its entrypoints in static YAML rather than in Args. The tree
-        # below cannot be drawn, but the routers are still known — they follow
-        # in the orphan block, which in this state holds every one of them.
+        # A coverage gap, not an empty configuration. The collector records
+        # why -- no workload matched traefik.match, the static file is on
+        # another node or in a volume, --configFile is not mounted -- and the
+        # banner says exactly that. The old wording stays for an info nobody
+        # recorded a reason on. Either way the routers are still known and
+        # follow in the orphan block, which in this state holds all of them.
+        reason = data.static_problem or "no entrypoints found"
         parts.append(
             Text(
-                f"{icons.WARN} no entrypoints found — the tree cannot be drawn,"
+                f"{icons.WARN} {reason} — the tree cannot be drawn,"
                 " the routers below could not be placed",
                 style="yellow",
             )
         )
         parts.append(Text(""))
+    parts.extend(_render_static_notes(data.static_notes))
     if data.file_provider_error:
         # api@internal and ping-router live only in the file provider. Without
         # this line their absence from the tree below reads as a finding

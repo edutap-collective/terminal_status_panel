@@ -1,5 +1,6 @@
 import re
 
+import pytest
 from rich.console import Console, Group
 from rich.text import Text
 
@@ -1061,3 +1062,69 @@ def test_an_entrypoint_with_no_routers_is_still_linked():
     assert linked_spans, "expected the entrypoint head to be linked"
     for span in linked_spans:
         assert "no router" not in span
+
+
+def _flat(out: str) -> str:
+    """The rendered text with line wrapping undone, for width-independent asserts."""
+    return " ".join(out.split())
+
+
+def _orphaned(**fields):
+    return TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="demo_service", entrypoints=["https"], origin="demo_service")],
+        **fields,
+    )
+
+
+@pytest.mark.parametrize("width", [80, 215])
+def test_the_banner_states_the_actual_reason(width):
+    info = _orphaned(
+        static_problem="entrypoints are configured in /etc/traefik/traefik.yaml, a bind mount of"
+        " /srv/traefik.yaml — not readable on this node (Traefik runs on swarm01-wrk-02)"
+    )
+
+    out = _flat(_render(info, width=width))
+
+    assert "not readable on this node (Traefik runs on swarm01-wrk-02)" in out
+    assert "the tree cannot be drawn, the routers below could not be placed" in out
+    assert "no entrypoints found" not in out
+
+
+def test_without_a_recorded_reason_the_old_banner_stays():
+    out = _flat(_render(_orphaned()))
+
+    assert "no entrypoints found — the tree cannot be drawn" in out
+
+
+@pytest.mark.parametrize("width", [80, 215])
+def test_a_static_note_is_rendered_beside_a_drawn_tree(width):
+    info = _wired()
+    info.static_notes = [
+        "static configuration from /etc/traefik/traefik.yaml; "
+        "Traefik ignores 2 other command-line flags"
+    ]
+
+    out = _flat(_render(info, width=width))
+
+    assert "Traefik ignores 2 other command-line flags" in out
+    assert "portalmgmt" in out  # the tree is still drawn
+
+
+def test_traefik_match_empty_disables_reading():
+    cfg = Config()
+    cfg.traefik.match = ()
+    info = TraefikInfo(
+        reachable=True,
+        routers=[TraefikRouter(name="r", entrypoints=["https"])],
+        static_problem="no Traefik service or container matches traefik.match ()",
+    )
+
+    console = Console(width=120, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(info, cfg))
+    out = capture.get()
+
+    assert "traefik.match is empty" in out
+    assert "ORPHANED" not in out
+    assert "no Traefik service" not in out
