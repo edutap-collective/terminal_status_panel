@@ -564,10 +564,10 @@ def mongo_command(timeout: float) -> list[str]:
     """The mongosh invocation, with the fan-out deadline compiled in.
 
     ``db.hello()`` is answered before authentication, which is what makes any
-    of this possible without credentials -- the Ansible role's own healthcheck
-    already relies on an unauthenticated ping. It reports the set's membership
-    but state only for the primary and for the node answering, so the script
-    then asks each member the same question directly.
+    of this possible without credentials -- the image's own healthcheck
+    conventionally relies on an unauthenticated ping as well. It reports the
+    set's membership but state only for the primary and for the node
+    answering, so the script then asks each member the same question directly.
 
     ``replSetGetStatus`` would answer all of it in one round trip, including
     replication lag. It is not an option here: measured against the real set it
@@ -719,12 +719,10 @@ def probe_mongodb(
     return service
 
 
-# The Kafka tools are NOT on $PATH in the image — the absolute path is required.
-# /client.properties is mounted by the kafka Ansible role explicitly for
-# "manuelle Abfragen per docker exec" and uses the broker certificate.
 #: The Kafka tools are not on $PATH in the upstream image -- the absolute path
 #: is required. ``--command-config`` names a client config some deployments
-#: mount for manual queries; upstream images carry none, so it is optional.
+#: mount for manual queries, e.g. one carrying the broker certificate; upstream
+#: images carry none, so it is optional.
 KAFKA_QUORUM_SCRIPT = "/opt/kafka/bin/kafka-metadata-quorum.sh"
 
 
