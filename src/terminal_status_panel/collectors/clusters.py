@@ -36,6 +36,7 @@ from ..config import (
     RustfsProbe,
 )
 from ..model import ClusterMember, ClusterService
+from ._labels import SWARM_SERVICE_LABEL, container_labels
 
 _PG_NAME_PREFIX = re.compile(r"^pg\d*-")
 
@@ -476,6 +477,36 @@ def parse_pg_state(output: str) -> ClusterService:
     )
 
 
+def _service_name(container) -> str:
+    """The Swarm service a task container belongs to, else the container's own name."""
+    return container_labels(container).get(SWARM_SERVICE_LABEL) or container_name(container)
+
+
+def _probe_postgres_standalone(container, extras: int) -> ClusterService:
+    """``pg_isready``: whether the one server accepts connections.
+
+    No role and no password -- it asks the server's own socket -- so the
+    config names nothing host-specific. It says nothing about replication,
+    and neither does the verdict: no leader, no members, no quorum arithmetic
+    over a topology nobody looked at. A non-zero exit carries pg_isready's
+    own words ("no response", "rejecting connections") as the error.
+    """
+    try:
+        output = exec_text(container, ["pg_isready"])
+    except Exception as exc:
+        return ClusterService(kind="postgres", error=str(exc))
+    reply = output.strip().rsplit(" - ", 1)[-1] or "accepting connections"
+    service = ClusterService(
+        kind="postgres",
+        name=_service_name(container) or None,
+        reachable=True,
+        quorum_ok=True,
+        detail=f"standalone, {reply}",
+    )
+    _note_extra_containers(service, extras)
+    return service
+
+
 def probe_postgres(index: ContainerIndex, settings: ProbeSettings | None = None) -> ClusterService:
     """``pg_autoctl show state`` — works from any data node, not only the monitor."""
     settings = settings or ProbeSettings()
@@ -484,6 +515,8 @@ def probe_postgres(index: ContainerIndex, settings: ProbeSettings | None = None)
     )
     if verdict is not None:
         return verdict
+    if settings.postgres.mode == "standalone":
+        return _probe_postgres_standalone(container, extras)
     try:
         output = exec_text(container, ["pg_autoctl", "show", "state"])
     except Exception as exc:
@@ -689,15 +722,18 @@ def probe_mongodb(
 # The Kafka tools are NOT on $PATH in the image — the absolute path is required.
 # /client.properties is mounted by the kafka Ansible role explicitly for
 # "manuelle Abfragen per docker exec" and uses the broker certificate.
-KAFKA_COMMAND = [
-    "/opt/kafka/bin/kafka-metadata-quorum.sh",
-    "--bootstrap-server",
-    "localhost:9092",
-    "--command-config",
-    "/client.properties",
-    "describe",
-    "--status",
-]
+#: The Kafka tools are not on $PATH in the upstream image -- the absolute path
+#: is required. ``--command-config`` names a client config some deployments
+#: mount for manual queries; upstream images carry none, so it is optional.
+KAFKA_QUORUM_SCRIPT = "/opt/kafka/bin/kafka-metadata-quorum.sh"
+
+
+def kafka_command(probe: KafkaProbe) -> list[str]:
+    """The quorum query, with the client config only where one is configured."""
+    command = [KAFKA_QUORUM_SCRIPT, "--bootstrap-server", "localhost:9092"]
+    if probe.command_config:
+        command += ["--command-config", probe.command_config]
+    return [*command, "describe", "--status"]
 
 
 def _kafka_endpoint_host(entry: dict) -> str:
@@ -776,7 +812,7 @@ def probe_kafka(index: ContainerIndex, settings: ProbeSettings | None = None) ->
     if verdict is not None:
         return verdict
     try:
-        service = parse_kafka_quorum(exec_text(container, KAFKA_COMMAND))
+        service = parse_kafka_quorum(exec_text(container, kafka_command(settings.kafka)))
     except Exception as exc:
         return ClusterService(kind="kafka", error=str(exc))
     _note_extra_containers(service, extras)
@@ -929,10 +965,10 @@ def kind_for_service(name: str, settings: ProbeSettings | None = None) -> str | 
     return None
 
 
-RUSTFS_FALLBACK_ENDPOINT = "https://localhost:9000"
+RUSTFS_LOCAL_ADDRESS = "localhost:9000"
 
 
-def rustfs_endpoints(container) -> tuple[list[str], bool]:
+def rustfs_endpoints(container, scheme: str = "https") -> tuple[list[str], bool]:
     """Endpoints to probe, derived from RUSTFS_VOLUMES in the container env.
 
     Read from the container rather than from configuration so the check stays
@@ -943,8 +979,11 @@ def rustfs_endpoints(container) -> tuple[list[str], bool]:
     absent or unreadable and the localhost endpoint is therefore an assumption,
     not a reading — a five-node cluster must never render as "1/1 live" just
     because the variable was renamed. A plain path in RUSTFS_VOLUMES is not a
-    guess: it says, readably, that this is a single local instance.
+    guess: it says, readably, that this is a single local instance. *scheme*
+    applies to the local-instance endpoint only; URL-form endpoints carry their
+    own.
     """
+    local = f"{scheme}://{RUSTFS_LOCAL_ADDRESS}"
     environment = ((getattr(container, "attrs", {}) or {}).get("Config") or {}).get("Env") or []
     raw = None
     for entry in environment:
@@ -953,15 +992,15 @@ def rustfs_endpoints(container) -> tuple[list[str], bool]:
             raw = value
             break
     if raw is None:
-        return [RUSTFS_FALLBACK_ENDPOINT], True
+        return [local], True
     endpoints = []
     for token in raw.split():
         if "://" not in token:
             continue  # a plain path: one local instance
-        scheme, _, rest = token.partition("://")
+        scheme_part, _, rest = token.partition("://")
         host_port = rest.split("/", 1)[0]
-        endpoints.append(f"{scheme}://{host_port}")
-    return endpoints or [RUSTFS_FALLBACK_ENDPOINT], False
+        endpoints.append(f"{scheme_part}://{host_port}")
+    return endpoints or [local], False
 
 
 def _load_full_attributes(container) -> None:
@@ -1011,7 +1050,7 @@ def probe_rustfs(
     if verdict is not None:
         return verdict
     _load_full_attributes(container)
-    endpoints, guessed = rustfs_endpoints(container)
+    endpoints, guessed = rustfs_endpoints(container, settings.rustfs.scheme)
     per_endpoint = max(MIN_ENDPOINT_TIMEOUT, timeout / max(1, len(endpoints)))
     members: list[ClusterMember] = []
     for endpoint in endpoints:

@@ -1367,3 +1367,133 @@ def test_probe_settings_come_from_the_config():
 
     assert settings.rustfs.scheme == "http"
     assert settings.exclude == ("my-console",)
+
+
+# --- probe variants ---------------------------------------------------------
+
+
+def _standalone():
+    return clusters.ProbeSettings(
+        postgres=PostgresProbe(match=("demo_postgres",), mode="standalone")
+    )
+
+
+def test_standalone_postgres_asks_pg_isready_and_nothing_else():
+    container = _FakeContainer(
+        "demo_postgres.1.abc",
+        exec_result=(0, b"/var/run/postgresql:5432 - accepting connections\n"),
+    )
+
+    clusters.probe_postgres(_index([container]), _standalone())
+
+    assert container.commands == [["pg_isready"]]
+
+
+def test_standalone_postgres_reports_what_it_measured_and_no_topology():
+    container = _FakeContainer(
+        "demo_postgres.1.abc",
+        exec_result=(0, b"/var/run/postgresql:5432 - accepting connections\n"),
+    )
+    container.attrs["Labels"] = {"com.docker.swarm.service.name": "demo_postgres"}
+
+    service = clusters.probe_postgres(_index([container]), _standalone())
+
+    assert service.reachable is True
+    assert service.quorum_ok is True
+    assert service.name == "demo_postgres"
+    assert service.detail == "standalone, accepting connections"
+    assert service.leader is None
+    assert service.members == []
+
+
+def test_standalone_postgres_without_a_swarm_label_is_named_after_its_container():
+    container = _FakeContainer(
+        "demo-postgres-1", exec_result=(0, b"/var/run/postgresql:5432 - accepting connections\n")
+    )
+    settings = clusters.ProbeSettings(
+        postgres=PostgresProbe(match=("demo-postgres",), mode="standalone")
+    )
+
+    assert clusters.probe_postgres(_index([container]), settings).name == "demo-postgres-1"
+
+
+def test_standalone_postgres_that_does_not_accept_is_an_error_with_its_own_words():
+    container = _FakeContainer(
+        "demo_postgres.1.abc", exec_result=(2, b"/var/run/postgresql:5432 - no response\n")
+    )
+
+    service = clusters.probe_postgres(_index([container]), _standalone())
+
+    assert "no response" in service.error
+
+
+def test_the_default_postgres_mode_still_asks_pg_autoctl():
+    container = _FakeContainer("PostgreSQL-18_pg-a.1.x", exec_result=(0, PG_STATE.encode()))
+
+    clusters.probe_postgres(_index([container]))
+
+    assert container.commands == [["pg_autoctl", "show", "state"]]
+
+
+def test_the_default_kafka_command_is_the_old_one():
+    assert clusters.kafka_command(KafkaProbe()) == [
+        "/opt/kafka/bin/kafka-metadata-quorum.sh",
+        "--bootstrap-server",
+        "localhost:9092",
+        "--command-config",
+        "/client.properties",
+        "describe",
+        "--status",
+    ]
+
+
+def test_an_empty_command_config_drops_the_option_and_its_value():
+    assert clusters.kafka_command(KafkaProbe(command_config="")) == [
+        "/opt/kafka/bin/kafka-metadata-quorum.sh",
+        "--bootstrap-server",
+        "localhost:9092",
+        "describe",
+        "--status",
+    ]
+
+
+def test_the_kafka_probe_runs_the_configured_command():
+    broker = _FakeContainer("demo_kafka.1.abc", exec_result=(0, KAFKA_QUORUM.encode()))
+    settings = clusters.ProbeSettings(kafka=KafkaProbe(match=("demo_kafka",), command_config=""))
+
+    clusters.probe_kafka(_index([broker]), settings)
+
+    assert "--command-config" not in broker.commands[0]
+
+
+def test_the_rustfs_scheme_changes_only_the_local_endpoint():
+    local = _FakeContainer("demo_rustfs.1.a", env=["RUSTFS_VOLUMES=/data"])
+    remote = _FakeContainer(
+        "demo_rustfs.1.b",
+        env=["RUSTFS_VOLUMES=https://rustfs-a:9000/data https://rustfs-b:9000/data"],
+    )
+
+    assert clusters.rustfs_endpoints(local, "http") == (["http://localhost:9000"], False)
+    assert clusters.rustfs_endpoints(remote, "http") == (
+        ["https://rustfs-a:9000", "https://rustfs-b:9000"],
+        False,
+    )
+
+
+def test_an_absent_rustfs_volumes_is_still_a_guess_whatever_the_scheme():
+    assert clusters.rustfs_endpoints(_FakeContainer("demo_rustfs.1.a"), "http") == (
+        ["http://localhost:9000"],
+        True,
+    )
+
+
+def test_the_rustfs_probe_curls_the_configured_scheme():
+    member = _FakeContainer(
+        "demo_rustfs.1.a", exec_result=(0, b"200"), env=["RUSTFS_VOLUMES=/data"]
+    )
+    settings = clusters.ProbeSettings(rustfs=RustfsProbe(match=("demo_rustfs",), scheme="http"))
+
+    service = clusters.probe_rustfs(_index([member]), 2.0, settings)
+
+    assert member.commands[0][-1] == "http://localhost:9000/health"
+    assert service.detail == "1/1 live"
