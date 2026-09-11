@@ -254,11 +254,26 @@ def _resolve_below_root(path: str, root: str) -> str:
     resolves against a different root and names a different file.
 
     Raises ``Unreadable`` for an absolute symlink (at any hop), a symlink
-    loop, a climb above *root*, or a component that could not even be
-    inspected -- except a missing *final* component, which is left for the
-    ordinary "no such file" failure that follows this call, in its usual
-    wording.
+    loop, a climb above *root*, a component that could not even be
+    inspected, or a link that changed while it was being resolved -- except
+    a missing *final* component, which is left for the ordinary "no such
+    file" failure that follows this call, in its usual wording. Nothing else
+    escapes: every caller turns ``Unreadable`` into a reason, never a crash.
     """
+    if not path:
+        # Only a bind mount whose Source is empty gets here with no path at
+        # all; relpath() would fail with a message that names nothing.
+        raise Unreadable("a bind mount with an empty source — not read")
+    try:
+        return _resolve_components(path, root)
+    except (OSError, ValueError) as exc:
+        # readlink() after lstat() races a link being removed or replaced in
+        # between; relpath() rejects what it cannot compare.
+        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
+
+
+def _resolve_components(path: str, root: str) -> str:
+    """The body of ``_resolve_below_root``, free to raise ``OSError``/``ValueError``."""
     relative = os.path.relpath(path, root)
     if relative in (os.curdir, ""):
         return root
@@ -403,12 +418,16 @@ def _walk(
                 relative = name if relative_dir == "." else f"{relative_dir}/{name}"
                 container_path = posixpath.join(start, relative)
                 host_file = os.path.join(current, name)
-                # Resolve the same way read_located would, so a walked entry
-                # and a directly-read one agree: an entry whose last leg is
-                # an absolute symlink, a loop, or an escaping "..", is a
-                # note here rather than an ``Unreadable`` there.
+                # Resolve the same way read_located would -- against the
+                # bind source, not *host_root*: inside the container a link
+                # may climb out of the provider directory and still land in
+                # the mount, and a link between the source and *host_root*
+                # counts too. A walked entry and a directly-read one then
+                # agree: an absolute symlink, a loop, an escaping "..", or a
+                # link that changed mid-walk is a note for this entry here
+                # rather than an ``Unreadable`` there.
                 try:
-                    resolved_file = _resolve_below_root(host_file, host_root)
+                    resolved_file = _resolve_below_root(host_file, mount.source)
                 except Unreadable as exc:
                     listing.notes.append(f"{container_path}: {exc}")
                     continue

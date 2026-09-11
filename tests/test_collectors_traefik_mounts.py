@@ -643,3 +643,112 @@ def test_a_symlink_loop_at_an_intermediate_component_is_refused_without_hanging(
 
     with pytest.raises(mounts.Unreadable, match="too many levels"):
         mounts.read_located(located, configs={}, placement=HERE)
+
+
+# --- Fix round 4 -------------------------------------------------------
+
+
+def _read(workload, path):
+    return mounts.read_located(mounts.locate(workload, path), configs={}, placement=HERE)
+
+
+def test_a_walked_link_climbing_out_of_the_provider_directory_but_not_the_mount_is_listed(
+    tmp_path,
+):
+    # Inside the container, /dyn/sub/x.yml -> ../shared.yml is /dyn/shared.yml:
+    # still inside the bind mount, so Traefik loads it.
+    (tmp_path / "shared.yml").write_text("SHARED\n")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "own.yml").write_text("OWN\n")
+    (tmp_path / "sub" / "x.yml").symlink_to("../shared.yml")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn/sub"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/sub/own.yml", "/dyn/sub/x.yml"]
+    assert listing.notes == []
+    assert _read(workload, "/dyn/sub/x.yml") == "SHARED\n"
+
+
+def test_a_provider_directory_that_is_a_relative_link_to_a_sibling_is_listed(tmp_path):
+    (tmp_path / "shared.yml").write_text("SHARED\n")
+    (tmp_path / "sibling").mkdir()
+    (tmp_path / "sibling" / "own.yml").write_text("OWN\n")
+    (tmp_path / "sibling" / "x.yml").symlink_to("../shared.yml")
+    (tmp_path / "sub").symlink_to("sibling")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn/sub"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/sub/own.yml", "/dyn/sub/x.yml"]
+    assert listing.notes == []
+    assert _read(workload, "/dyn/sub/own.yml") == "OWN\n"
+    assert _read(workload, "/dyn/sub/x.yml") == "SHARED\n"
+
+
+def test_the_walk_and_a_read_agree_on_an_absolute_link_above_the_provider_directory(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "t.yml").write_text("REAL\n")
+    (tmp_path / "sub").symlink_to(real_dir)
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn/sub"), placement=HERE)
+
+    assert listing.files == []
+    assert len(listing.notes) == 1
+    assert listing.notes[0].startswith("/dyn/sub/t.yml: ")
+    assert "absolute symlink" in listing.notes[0]
+    with pytest.raises(mounts.Unreadable, match="absolute symlink"):
+        _read(workload, "/dyn/sub/t.yml")
+
+
+def test_a_walked_entry_that_cannot_be_resolved_is_a_note_and_the_rest_is_listed(tmp_path):
+    (tmp_path / "a.yml").write_text("")
+    (tmp_path / "loop.yml").symlink_to("loop.yml")
+    (tmp_path / "z.yml").write_text("")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/a.yml", "/dyn/z.yml"]
+    assert len(listing.notes) == 1
+    assert listing.notes[0].startswith("/dyn/loop.yml: ")
+    assert "too many levels of symbolic links" in listing.notes[0]
+
+
+def _vanished(path, *args, **kwargs):
+    """``os.readlink`` as it fails when the link disappears right after ``lstat``."""
+    raise FileNotFoundError(2, "No such file or directory", path)
+
+
+def test_a_link_that_vanishes_during_a_read_is_unreadable_not_an_os_error(tmp_path, monkeypatch):
+    (tmp_path / "t.yml").write_text("")
+    (tmp_path / "rel.yml").symlink_to("t.yml")
+    workload = _workload(mounts.Mount("bind", "/d", str(tmp_path)))
+    monkeypatch.setattr(os, "readlink", _vanished)
+
+    with pytest.raises(mounts.Unreadable, match="No such file or directory"):
+        _read(workload, "/d/rel.yml")
+
+
+def test_a_link_that_vanishes_during_the_walk_is_a_note_for_that_entry_only(tmp_path, monkeypatch):
+    (tmp_path / "a.yml").write_text("")
+    (tmp_path / "rel.yml").symlink_to("a.yml")
+    (tmp_path / "z.yml").write_text("")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+    monkeypatch.setattr(os, "readlink", _vanished)
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/a.yml", "/dyn/z.yml"]
+    assert len(listing.notes) == 1
+    assert listing.notes[0].startswith("/dyn/rel.yml: ")
+    assert "No such file or directory" in listing.notes[0]
+
+
+def test_a_bind_mount_with_an_empty_source_is_unreadable_not_a_value_error():
+    workload = _workload(mounts.Mount("bind", "/d", ""))
+
+    with pytest.raises(mounts.Unreadable, match="empty source"):
+        _read(workload, "/d")
