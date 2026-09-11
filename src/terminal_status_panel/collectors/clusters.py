@@ -23,18 +23,75 @@ import re
 import subprocess
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 from xml.etree import ElementTree
 
-from ..config import DEFAULT_INFRA_UI_SERVICES
+from ..config import (
+    DEFAULT_INFRA_UI_SERVICES,
+    Config,
+    KafkaProbe,
+    MongoProbe,
+    PostgresProbe,
+    RustfsProbe,
+)
 from ..model import ClusterMember, ClusterService
 
-# Container name substrings, matched case-insensitively. Deliberately narrow:
-# "_pg-" rather than "pg-", and "kafka_kafka-" rather than "kafka", so the
-# admin UIs (kafbat-ui, kafka-ui, pgadmin) can never be mistaken for a member.
-POSTGRES_PATTERNS = ("_pg-",)
-
 _PG_NAME_PREFIX = re.compile(r"^pg\d*-")
+
+
+@dataclass(frozen=True)
+class ProbeSettings:
+    """Everything the probes read from the config, in one object.
+
+    The same patterns decide three things -- which container a probe execs
+    into, whether Swarm wants a member on this node, and which DOCKER INFOS row
+    gets a cluster verdict. Read from three places, they drifted apart once
+    already; read from here they cannot.
+
+    ``exclude`` is ``docker.infra_ui_services``. An admin UI usually shares its
+    cluster's stack name -- ``demo_kafka`` and ``demo_kafka-ui`` -- and no
+    substring of the first avoids the second, so a pattern alone cannot keep
+    the probe out of the UI. Handing a UI the replica set's verdict, or
+    exec'ing a quorum check in it, would state a measurement about something
+    that was never probed.
+    """
+
+    postgres: PostgresProbe = field(default_factory=PostgresProbe)
+    mongodb: MongoProbe = field(default_factory=MongoProbe)
+    kafka: KafkaProbe = field(default_factory=KafkaProbe)
+    rustfs: RustfsProbe = field(default_factory=RustfsProbe)
+    exclude: tuple[str, ...] = tuple(DEFAULT_INFRA_UI_SERVICES)
+
+    @classmethod
+    def from_config(cls, cfg: Config) -> ProbeSettings:
+        """The settings one panel run probes with."""
+        health = cfg.health
+        return cls(
+            postgres=health.postgres,
+            mongodb=health.mongodb,
+            kafka=health.kafka,
+            rustfs=health.rustfs,
+            exclude=tuple(cfg.infra_ui_services),
+        )
+
+    def kinds(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Kind and patterns, for the join with DOCKER INFOS.
+
+        GlusterFS is absent on purpose: it runs on the host, not as a Docker
+        service.
+        """
+        return (
+            ("postgres", self.postgres.match),
+            ("mongodb", self.mongodb.match),
+            ("kafka", self.kafka.match),
+            ("rustfs", self.rustfs.match),
+        )
+
+
+def _excluded(names: list[str], exclude: tuple[str, ...]) -> bool:
+    """Whether any of *names* (lower-cased) contains an excluded entry."""
+    return any(entry.lower() in name for entry in exclude for name in names)
 
 
 class ContainerIndex:
@@ -122,19 +179,26 @@ def container_name(container) -> str:
     return names[0] if names else ""
 
 
-def find_containers(index: ContainerIndex, patterns: tuple[str, ...]) -> list:
-    """Every locally running container whose name contains one of *patterns*."""
+def find_containers(
+    index: ContainerIndex, patterns: tuple[str, ...], exclude: tuple[str, ...] = ()
+) -> list:
+    """Every locally running container whose name contains one of *patterns*.
+
+    Containers whose name contains an *exclude* entry are skipped first.
+    """
     matches = []
     for container in index.containers():
         names = [name.lower() for name in container_names(container)]
+        if _excluded(names, exclude):
+            continue
         if any(pattern.lower() in name for pattern in patterns for name in names):
             matches.append(container)
     return matches
 
 
-def find_container(index: ContainerIndex, patterns: tuple[str, ...]):
+def find_container(index: ContainerIndex, patterns: tuple[str, ...], exclude: tuple[str, ...] = ()):
     """First locally running container whose name contains one of *patterns*."""
-    matches = find_containers(index, patterns)
+    matches = find_containers(index, patterns, exclude)
     return matches[0] if matches else None
 
 
@@ -194,7 +258,9 @@ def _pinned_to_hostname(service, hostname: str) -> bool:
     return False
 
 
-def _wanted_on_this_node(index: ContainerIndex, patterns: tuple[str, ...]) -> bool:
+def _wanted_on_this_node(
+    index: ContainerIndex, patterns: tuple[str, ...], exclude: tuple[str, ...] = ()
+) -> bool:
     """True when Swarm's service *spec* wants this service running on this node.
 
     Called only when no local container was found — which on a typical app
@@ -219,6 +285,8 @@ def _wanted_on_this_node(index: ContainerIndex, patterns: tuple[str, ...]) -> bo
         return False
     for service in index.services():
         name = (getattr(service, "name", "") or "").lower()
+        if _excluded([name], exclude):
+            continue
         if not any(pattern.lower() in name for pattern in patterns):
             continue
         mode = ((service.attrs or {}).get("Spec") or {}).get("Mode") or {}
@@ -230,7 +298,9 @@ def _wanted_on_this_node(index: ContainerIndex, patterns: tuple[str, ...]) -> bo
     return False
 
 
-def locate_member(index: ContainerIndex, kind: str, patterns: tuple[str, ...]):
+def locate_member(
+    index: ContainerIndex, kind: str, patterns: tuple[str, ...], exclude: tuple[str, ...] = ()
+):
     """Find the local container for *kind*.
 
     Returns ``(container, None, extras)`` when one is running, otherwise
@@ -241,13 +311,13 @@ def locate_member(index: ContainerIndex, kind: str, patterns: tuple[str, ...]):
     will not look at, so the caller can make that narrowing visible.
     """
     try:
-        matches = find_containers(index, patterns)
+        matches = find_containers(index, patterns, exclude)
     except Exception as exc:
         return None, ClusterService(kind=kind, error=str(exc)), 0
     if matches:
         return matches[0], None, len(matches) - 1
     try:
-        wanted = _wanted_on_this_node(index, patterns)
+        wanted = _wanted_on_this_node(index, patterns, exclude)
     except Exception:
         wanted = False  # cannot ask Swarm: fall back to the weaker claim
     if wanted:
@@ -406,9 +476,12 @@ def parse_pg_state(output: str) -> ClusterService:
     )
 
 
-def probe_postgres(index: ContainerIndex) -> ClusterService:
+def probe_postgres(index: ContainerIndex, settings: ProbeSettings | None = None) -> ClusterService:
     """``pg_autoctl show state`` — works from any data node, not only the monitor."""
-    container, verdict, extras = locate_member(index, "postgres", POSTGRES_PATTERNS)
+    settings = settings or ProbeSettings()
+    container, verdict, extras = locate_member(
+        index, "postgres", settings.postgres.match, settings.exclude
+    )
     if verdict is not None:
         return verdict
     try:
@@ -425,8 +498,6 @@ def probe_postgres(index: ContainerIndex) -> ClusterService:
 #: Fallback deadline for one cluster kind, used where the caller names none.
 #: The configured per-kind timeouts in `HealthConfig` are what normally apply.
 DEFAULT_KIND_TIMEOUT = 2.0
-
-MONGODB_PATTERNS = ("mongodb",)
 
 #: Wall-clock a `docker exec mongosh` spends before the first line of the
 #: script runs. Measured on a cluster node over five runs: 0.97 s to 1.50 s,
@@ -595,9 +666,16 @@ def parse_mongo_hello(output: str) -> ClusterService:
     )
 
 
-def probe_mongodb(index: ContainerIndex, timeout: float = DEFAULT_KIND_TIMEOUT) -> ClusterService:
+def probe_mongodb(
+    index: ContainerIndex,
+    timeout: float = DEFAULT_KIND_TIMEOUT,
+    settings: ProbeSettings | None = None,
+) -> ClusterService:
     """``db.hello()`` through mongosh, for the set and for each member."""
-    container, verdict, extras = locate_member(index, "mongodb", MONGODB_PATTERNS)
+    settings = settings or ProbeSettings()
+    container, verdict, extras = locate_member(
+        index, "mongodb", settings.mongodb.match, settings.exclude
+    )
     if verdict is not None:
         return verdict
     try:
@@ -607,8 +685,6 @@ def probe_mongodb(index: ContainerIndex, timeout: float = DEFAULT_KIND_TIMEOUT) 
     _note_extra_containers(service, extras)
     return service
 
-
-KAFKA_PATTERNS = ("kafka_kafka-",)
 
 # The Kafka tools are NOT on $PATH in the image — the absolute path is required.
 # /client.properties is mounted by the kafka Ansible role explicitly for
@@ -691,9 +767,12 @@ def parse_kafka_quorum(output: str) -> ClusterService:
     )
 
 
-def probe_kafka(index: ContainerIndex) -> ClusterService:
+def probe_kafka(index: ContainerIndex, settings: ProbeSettings | None = None) -> ClusterService:
     """KRaft controller quorum. Costs ~2.6 s — JVM startup, not optimisable."""
-    container, verdict, extras = locate_member(index, "kafka", KAFKA_PATTERNS)
+    settings = settings or ProbeSettings()
+    container, verdict, extras = locate_member(
+        index, "kafka", settings.kafka.match, settings.exclude
+    )
     if verdict is not None:
         return verdict
     try:
@@ -838,35 +917,13 @@ def probe_glusterfs(timeout: float = GLUSTER_TIMEOUT) -> ClusterService:
         return ClusterService(kind="glusterfs", error=str(exc))
 
 
-RUSTFS_PATTERNS = ("rustfs_rustfs",)
-
-# The join key between DOCKER INFOS and CLUSTER HEALTH. Built from the same
-# patterns the probes match containers with, so the identifier lives in exactly
-# one place — a second copy is how the crash-loop detection broke once already.
-# GlusterFS is absent on purpose: it runs on the host, not as a Docker service.
-_KIND_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("postgres", POSTGRES_PATTERNS),
-    ("mongodb", MONGODB_PATTERNS),
-    ("kafka", KAFKA_PATTERNS),
-    ("rustfs", RUSTFS_PATTERNS),
-)
-
-
-# Names that must never resolve to a kind, however well they match. This is the
-# join's own, narrower key: ``MONGODB_PATTERNS`` has to stay the bare word so
-# ``probe_mongodb`` finds the local container, but as a join key it also matches
-# every sidecar that merely shares the ``mongodb`` stack — an admin UI such as
-# ``mongodb_mongo-express``. Handing such a service the replica set's verdict
-# would state a health measurement about something that was never probed.
-_NEVER_A_MEMBER: tuple[str, ...] = tuple(name.lower() for name in DEFAULT_INFRA_UI_SERVICES)
-
-
-def kind_for_service(name: str) -> str | None:
+def kind_for_service(name: str, settings: ProbeSettings | None = None) -> str | None:
     """The cluster kind a Docker service name belongs to, or None."""
+    settings = settings or ProbeSettings()
     lowered = (name or "").lower()
-    if any(ui in lowered for ui in _NEVER_A_MEMBER):
+    if _excluded([lowered], settings.exclude):
         return None
-    for kind, patterns in _KIND_PATTERNS:
+    for kind, patterns in settings.kinds():
         if any(pattern.lower() in lowered for pattern in patterns):
             return kind
     return None
@@ -938,14 +995,19 @@ def _load_full_attributes(container) -> None:
 MIN_ENDPOINT_TIMEOUT = 0.1
 
 
-def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
+def probe_rustfs(
+    index: ContainerIndex, timeout: float = 2.0, settings: ProbeSettings | None = None
+) -> ClusterService:
     """GET /health per endpoint — the only unauthenticated status RustFS offers.
 
     The endpoints are probed one ``docker exec`` at a time, so *timeout* is
     divided between them: five endpoints behind a blackhole must cost the
     configured budget for RustFS once, not five times a per-endpoint constant.
     """
-    container, verdict, extras = locate_member(index, "rustfs", RUSTFS_PATTERNS)
+    settings = settings or ProbeSettings()
+    container, verdict, extras = locate_member(
+        index, "rustfs", settings.rustfs.match, settings.exclude
+    )
     if verdict is not None:
         return verdict
     _load_full_attributes(container)
@@ -997,26 +1059,29 @@ def probe_rustfs(index: ContainerIndex, timeout: float = 2.0) -> ClusterService:
     return service
 
 
-_PROBES: dict[str, Callable[[ContainerIndex, float], ClusterService]] = {
+_PROBES: dict[str, Callable[[ContainerIndex, float, ProbeSettings], ClusterService]] = {
     # The three docker-exec probes cannot enforce a timeout themselves:
     # docker-py bounds an exec by the client's socket timeout, not per call.
     # Their configured timeout is enforced by the budget thread that runs them
     # (``budget.run_with_budget``), and the health client's socket timeout is
     # built so that it never expires first (``cli._health_socket_timeout``).
-    "postgres": lambda index, _timeout: probe_postgres(index),
+    "postgres": lambda index, _timeout, settings: probe_postgres(index, settings),
     # Unlike its two neighbours this one *does* use its timeout: not to bound
     # the exec, which docker-py cannot do per call, but to compute the deadline
     # the fan-out inside mongosh checks itself.
-    "mongodb": probe_mongodb,
-    "kafka": lambda index, _timeout: probe_kafka(index),
+    "mongodb": lambda index, timeout, settings: probe_mongodb(index, timeout, settings),
+    "kafka": lambda index, _timeout, settings: probe_kafka(index, settings),
     # These two spawn their own child process / curl and enforce it directly.
-    "glusterfs": lambda _index, timeout: probe_glusterfs(timeout),
-    "rustfs": probe_rustfs,
+    "glusterfs": lambda _index, timeout, _settings: probe_glusterfs(timeout),
+    "rustfs": lambda index, timeout, settings: probe_rustfs(index, timeout, settings),
 }
 
 
 def probe_cluster(
-    index: ContainerIndex, kind: str, timeout: float = DEFAULT_KIND_TIMEOUT
+    index: ContainerIndex,
+    kind: str,
+    timeout: float = DEFAULT_KIND_TIMEOUT,
+    settings: ProbeSettings | None = None,
 ) -> ClusterService:
     """Probe one kind under its own *timeout*. Never raises.
 
@@ -1027,6 +1092,6 @@ def probe_cluster(
     if probe is None:
         return ClusterService(kind=kind, error="unknown kind")
     try:
-        return probe(index, timeout)
+        return probe(index, timeout, settings or ProbeSettings())
     except Exception as exc:
         return ClusterService(kind=kind, error=f"{type(exc).__name__}: {exc}")

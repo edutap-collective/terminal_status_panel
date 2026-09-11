@@ -19,7 +19,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from ..collectors.clusters import kind_for_service
+from ..collectors.clusters import ProbeSettings, kind_for_service
 from ..config import Config, Thresholds
 from ..model import (
     TROUBLE_WINDOW_SECONDS,
@@ -1367,9 +1367,10 @@ def _stack_columns(
     # node listing, so an empty list next to a non-zero count is reachable and
     # would otherwise render a global row as "/0".
     node_count = swarm.node_count or len(swarm.nodes)
+    settings = ProbeSettings.from_config(cfg)
 
     def verdict(services):
-        kind = next((k for k in (kind_for_service(s.name) for s in services) if k), None)
+        kind = next((k for k in (kind_for_service(s.name, settings) for s in services) if k), None)
         return service_verdict(
             services,
             kind=kind,

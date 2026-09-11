@@ -1,6 +1,12 @@
 import subprocess
 
 from terminal_status_panel.collectors import clusters
+from terminal_status_panel.config import (
+    Config,
+    KafkaProbe,
+    PostgresProbe,
+    RustfsProbe,
+)
 from terminal_status_panel.model import ClusterService
 
 PG_STATE = """\
@@ -884,7 +890,7 @@ class _SwarmClient(_FakeClient):
 def test_locate_member_returns_the_container_when_one_runs():
     target = _FakeContainer("PostgreSQL-18_pg-swarm01-mgr-01.1.abc")
     container, verdict, _ = clusters.locate_member(
-        _index([target]), "postgres", clusters.POSTGRES_PATTERNS
+        _index([target]), "postgres", PostgresProbe().match
     )
     assert container is target
     assert verdict is None
@@ -900,7 +906,7 @@ def test_a_crash_looping_service_is_an_error_not_not_applicable():
         services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1, hostname="swarm01-mgr-01")],
     )
     container, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert container is None
     assert verdict.applicable is True
@@ -915,7 +921,7 @@ def test_a_service_pinned_to_another_hostname_is_still_not_applicable():
         services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1, hostname="swarm01-wrk-01")],
     )
     _, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert verdict.applicable is False
     assert verdict.error is None
@@ -929,7 +935,7 @@ def test_no_matching_service_at_all_is_not_applicable():
         services=[_FakeSwarmService("something_else", replicas=1, hostname="swarm01-mgr-01")],
     )
     _, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert verdict.applicable is False
 
@@ -943,7 +949,7 @@ def test_a_global_mode_service_is_wanted_on_every_node():
         services=[_FakeSwarmService("rustfs_rustfs-x", global_mode=True)],
     )
     _, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert verdict.applicable is True
     assert "no running container" in verdict.error
@@ -958,7 +964,7 @@ def test_a_replicated_service_with_zero_replicas_is_not_applicable():
         services=[_FakeSwarmService("rustfs_rustfs-x", replicas=0, hostname="swarm01-mgr-01")],
     )
     _, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert verdict.applicable is False
 
@@ -975,7 +981,7 @@ def test_an_unpinned_replicated_service_is_not_applicable():
         services=[_FakeSwarmService("rustfs_rustfs-x", replicas=1, hostname=None)],
     )
     _, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert verdict.applicable is False
     assert verdict.error is None
@@ -990,7 +996,7 @@ def test_a_placement_constraint_without_spaces_is_still_recognised():
         containers=[], node_id="node-1", hostname="swarm01-mgr-01", services=[service]
     )
     _, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert verdict.applicable is True
     assert "no running container" in verdict.error
@@ -1003,7 +1009,7 @@ def test_a_swarm_query_failure_degrades_to_not_applicable():
 
     client = _Broken(containers=[], node_id="node-1", services=[])
     _, verdict, _ = clusters.locate_member(
-        clusters.ContainerIndex(client), "rustfs", clusters.RUSTFS_PATTERNS
+        clusters.ContainerIndex(client), "rustfs", RustfsProbe().match
     )
     assert verdict.applicable is False
     assert verdict.error is None
@@ -1260,3 +1266,104 @@ def test_a_secondary_ahead_of_the_primary_is_not_reported_as_lagging():
     member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
     assert member.warning == "lag"
     assert member.lag_bytes is None, "eine negative Distanz waere Unsinn"
+
+
+# --- configured patterns and the infra-UI exclusion -------------------------
+
+
+def _demo_settings(**kinds):
+    return clusters.ProbeSettings(**kinds)
+
+
+def test_a_configured_match_finds_a_container_the_default_would_not():
+    broker = _FakeContainer("demo_kafka.1.abc", exec_result=(0, KAFKA_QUORUM.encode()))
+    settings = _demo_settings(kafka=KafkaProbe(match=("demo_kafka",)))
+
+    service = clusters.probe_cluster(_index([broker]), "kafka", 4.0, settings)
+
+    assert service.applicable is True
+    assert broker.commands  # the probe ran inside it
+
+
+def test_without_settings_the_default_patterns_apply():
+    broker = _FakeContainer("demo_kafka.1.abc", exec_result=(0, KAFKA_QUORUM.encode()))
+
+    service = clusters.probe_cluster(_index([broker]), "kafka", 4.0)
+
+    assert service.applicable is False
+    assert broker.commands == []
+
+
+def test_an_admin_ui_sharing_the_stack_name_is_never_probed():
+    """No substring of `demo_kafka` avoids `demo_kafka-ui`; only the exclusion can."""
+    ui = _FakeContainer("demo_kafka-ui.1.aaa")
+    broker = _FakeContainer("demo_kafka.1.bbb", exec_result=(0, KAFKA_QUORUM.encode()))
+    settings = _demo_settings(kafka=KafkaProbe(match=("demo_kafka",)))
+
+    clusters.probe_cluster(_index([ui, broker]), "kafka", 4.0, settings)
+
+    assert ui.commands == []
+    assert broker.commands
+
+
+def test_an_excluded_container_is_not_counted_as_a_further_member():
+    ui = _FakeContainer("demo_rustfs-console.1.aaa")
+    member = _FakeContainer("demo_rustfs.1.bbb", exec_result=(0, b"200"))
+    settings = _demo_settings(rustfs=RustfsProbe(match=("demo_rustfs",)))
+
+    service = clusters.probe_cluster(_index([ui, member]), "rustfs", 2.0, settings)
+
+    assert "more container" not in (service.detail or "")
+
+
+def test_the_crash_loop_check_uses_the_configured_patterns():
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="demo-01",
+        services=[_FakeSwarmService("demo_rustfs", replicas=1, hostname="demo-01")],
+    )
+    settings = _demo_settings(rustfs=RustfsProbe(match=("demo_rustfs",)))
+
+    service = clusters.probe_cluster(clusters.ContainerIndex(client), "rustfs", 2.0, settings)
+
+    assert "no running container" in service.error
+
+
+def test_the_crash_loop_check_skips_an_excluded_service():
+    client = _SwarmClient(
+        containers=[],
+        node_id="node-1",
+        hostname="demo-01",
+        services=[_FakeSwarmService("demo_kafka-ui", replicas=1, hostname="demo-01")],
+    )
+    settings = _demo_settings(kafka=KafkaProbe(match=("demo_kafka",)))
+
+    service = clusters.probe_cluster(clusters.ContainerIndex(client), "kafka", 4.0, settings)
+
+    assert service.applicable is False
+
+
+def test_kind_for_service_reads_the_configured_patterns():
+    settings = _demo_settings(postgres=PostgresProbe(match=("demo_postgres",)))
+
+    assert clusters.kind_for_service("demo_postgres", settings) == "postgres"
+    assert clusters.kind_for_service("demo_postgres") is None
+
+
+def test_kind_for_service_uses_the_configured_exclusion_list():
+    settings = _demo_settings(kafka=KafkaProbe(match=("x_kafka",)), exclude=("special-ui",))
+
+    assert clusters.kind_for_service("x_kafka_special-ui", settings) is None
+    # The built-in list is not consulted once a configured one is given.
+    assert clusters.kind_for_service("x_kafka-ui", settings) == "kafka"
+
+
+def test_probe_settings_come_from_the_config():
+    cfg = Config(infra_ui_services=["my-console"])
+    cfg.health.rustfs = RustfsProbe(match=("demo_rustfs",), scheme="http")
+
+    settings = clusters.ProbeSettings.from_config(cfg)
+
+    assert settings.rustfs.scheme == "http"
+    assert settings.exclude == ("my-console",)
