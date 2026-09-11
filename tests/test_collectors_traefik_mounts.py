@@ -453,3 +453,89 @@ def test_dot_dot_does_not_escape_a_sibling_with_a_similar_name():
     located = mounts.locate(workload, "/etc/traefik/../traefik2/x.yml")
 
     assert located.mount is None
+
+
+# --- Fix round 2 -------------------------------------------------------
+
+
+def test_an_absolute_symlink_on_an_intermediate_directory_is_not_followed(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "t.yml").write_text("x: 1\n")
+    (tmp_path / "absdir").symlink_to(real_dir)
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(tmp_path))), "/d/absdir/t.yml")
+
+    with pytest.raises(mounts.Unreadable, match="absolute symlink"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_relative_symlink_chaining_to_an_absolute_one_is_not_followed(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "t.yml").write_text("x: 1\n")
+    (tmp_path / "abs.yml").symlink_to(real_dir / "t.yml")
+    (tmp_path / "chain.yml").symlink_to("abs.yml")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(tmp_path))), "/d/chain.yml")
+
+    with pytest.raises(mounts.Unreadable, match="absolute symlink"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_bind_file_source_that_is_itself_an_absolute_symlink_is_read_normally(tmp_path):
+    (tmp_path / "release.yml").write_text("entryPoints: {}\n")
+    (tmp_path / "traefik.yml").symlink_to(tmp_path / "release.yml")
+    workload = _workload(
+        mounts.Mount("bind", "/etc/traefik/traefik.yml", str(tmp_path / "traefik.yml"))
+    )
+    located = mounts.locate(workload, "/etc/traefik/traefik.yml")
+
+    assert mounts.read_located(located, configs={}, placement=HERE) == "entryPoints: {}\n"
+
+
+def test_a_nested_bind_under_an_unsearchable_parent_gives_a_note_not_unmounted(tmp_path):
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permission bits do not apply to root")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "extra").mkdir()
+    (locked / "extra" / "a.yml").write_text("")
+    locked.chmod(0)
+    try:
+        workload = _workload(mounts.Mount("bind", "/dyn/extra", str(locked / "extra")))
+        listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+        assert listing.files == []
+        assert any("/dyn/extra" in note for note in listing.notes)
+        assert not any("not mounted" in note for note in listing.notes)
+    finally:
+        locked.chmod(0o700)
+
+
+def test_a_missing_nested_bind_source_gives_a_note_with_the_host_path(tmp_path):
+    missing = tmp_path / "missing"
+    workload = _workload(mounts.Mount("bind", "/dyn/extra", str(missing)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert any(str(missing) in note for note in listing.notes)
+
+
+def test_a_nul_byte_in_a_nested_bind_source_does_not_raise_out():
+    workload = _workload(mounts.Mount("bind", "/dyn/sub", "/tmp/abc\x00def"))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes
+
+
+def test_a_genuinely_empty_nested_bind_directory_is_not_reported_as_unmounted(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    workload = _workload(mounts.Mount("bind", "/dyn/sub", str(empty)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes == []

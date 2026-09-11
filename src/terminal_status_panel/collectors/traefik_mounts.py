@@ -197,6 +197,45 @@ def _os_error_text(exc: OSError | ValueError) -> str:
     return exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc)
 
 
+#: A defensive bound on a chain of relative symlinks, well above any real
+#: Traefik dynamic-config layout -- not a claim about what the OS allows.
+_MAX_SYMLINK_HOPS = 40
+
+
+def _refuse_absolute_symlink_below_root(path: str, root: str) -> None:
+    """Refuse a symlink below *root* whose target is absolute.
+
+    Checked component by component from *root* downwards -- never *root*
+    itself, since the daemon already resolved the bind source on the host,
+    so the container sees exactly what it points to, however that source
+    path is spelled. A relative symlink is followed, one hop at a time, so a
+    relative link that in turn points to an absolute one is still caught, at
+    whichever hop is the absolute one.
+    """
+    relative = os.path.relpath(path, root)
+    if relative in (os.curdir, ""):
+        return
+    current = root
+    for component in relative.split(os.sep):
+        current = os.path.join(current, component)
+        hops = 0
+        while os.path.islink(current):
+            hops += 1
+            if hops > _MAX_SYMLINK_HOPS:
+                raise Unreadable(f"{current}: too many levels of symbolic links")
+            target = os.readlink(current)
+            if os.path.isabs(target):
+                # Resolved on the host, this may stay inside the bind source
+                # only by coincidence -- inside the container, the same
+                # absolute target resolves under a different root and names
+                # a different file.
+                raise Unreadable(
+                    f"{current} is an absolute symlink — resolves differently "
+                    "inside the container, not followed"
+                )
+            current = os.path.normpath(os.path.join(os.path.dirname(current), target))
+
+
 def _read_host_file(path: str, root: str) -> str:
     """The text at *path*, refusing anything that is not a plain, contained file.
 
@@ -211,18 +250,9 @@ def _read_host_file(path: str, root: str) -> str:
     if real != real_root and not real.startswith(real_root.rstrip(os.sep) + os.sep):
         raise Unreadable(f"{path} leads outside {root} — not followed")
     try:
-        is_symlink = os.path.islink(path)
-        link_target = os.readlink(path) if is_symlink else None
+        _refuse_absolute_symlink_below_root(path, root)
     except (OSError, ValueError) as exc:
         raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
-    if link_target is not None and os.path.isabs(link_target):
-        # Resolved on the host, this stays inside the bind source only by
-        # coincidence -- inside the container, the same absolute target
-        # resolves under a different root and names a different file.
-        raise Unreadable(
-            f"{path} is an absolute symlink — resolves differently inside "
-            "the container, not followed"
-        )
     try:
         descriptor = os.open(real, os.O_RDONLY | os.O_NONBLOCK)
     except (OSError, ValueError) as exc:
@@ -284,9 +314,14 @@ class ProviderListing:
     notes: list[str] = field(default_factory=list)
 
 
-def _not_readable_note(start: str, host_root: str, placement: Placement) -> str:
+def _bind_mount_note(start: str, host_source: str, reason: str) -> str:
+    """A note naming both the container path and the host path behind it."""
+    return f"{start}: a bind mount of {host_source} — {reason}"
+
+
+def _not_here_reason(placement: Placement) -> str:
     where = f" (Traefik runs on {placement.node})" if placement.node else ""
-    return f"{start}: a bind mount of {host_root} — not readable on this node{where}"
+    return f"not readable on this node{where}"
 
 
 def _reraise(exc: OSError) -> None:
@@ -332,7 +367,13 @@ def _walk(
                 if located.mount == mount:
                     found.append(located)
     except (OSError, ValueError) as exc:
-        listing.notes.append(f"{start}: {_os_error_text(exc)} — not listed")
+        # An OSError from os.walk's onerror names the exact entry that
+        # failed (e.g. an unreadable subdirectory); fall back to the walk's
+        # own root when the exception carries nothing more specific.
+        failing_host_path = getattr(exc, "filename", None) or host_root
+        listing.notes.append(
+            _bind_mount_note(start, failing_host_path, f"{_os_error_text(exc)}, not listed")
+        )
         return []
     return found
 
@@ -351,9 +392,16 @@ def _nested_bind_files(
     something Traefik would not read either way.
     """
     if not placement.here:
-        listing.notes.append(_not_readable_note(target, mount.source, placement))
+        listing.notes.append(_bind_mount_note(target, mount.source, _not_here_reason(placement)))
         return []
-    if not os.path.isdir(mount.source):
+    try:
+        info = os.stat(mount.source)
+    except (OSError, ValueError) as exc:
+        listing.notes.append(
+            _bind_mount_note(target, mount.source, f"{_os_error_text(exc)}, not listed")
+        )
+        return []
+    if not stat.S_ISDIR(info.st_mode):
         return []
     return _walk(workload, mount, mount.source, target, listing)
 
@@ -375,7 +423,7 @@ def _covering_bind_files(
         return []
     host_root = base.host_path or mount.source
     if not placement.here:
-        listing.notes.append(_not_readable_note(directory, host_root, placement))
+        listing.notes.append(_bind_mount_note(directory, host_root, _not_here_reason(placement)))
         return []
     return _walk(workload, mount, host_root, directory, listing)
 
@@ -384,7 +432,14 @@ def _empty_directory_note(workload: Workload, directory: str) -> str | None:
     """Why nothing was found under *directory* at all, when that has an explanation."""
     owner = locate(workload, directory).mount
     if owner is None:
-        return f"{directory} is not mounted — nothing to read"
+        # A mount nested below *directory* (rather than covering it) already
+        # explains an empty result in its own right -- it may just be an
+        # empty, perfectly readable directory. "Not mounted" is only true
+        # when nothing lies at or under *directory* at all.
+        under_directory = any(
+            _covers(directory, posixpath.normpath(mount.target)) for mount in workload.mounts
+        )
+        return None if under_directory else f"{directory} is not mounted — nothing to read"
     if owner.kind == "volume":
         return f"{directory} is on volume {owner.source} — not readable"
     if owner.kind == "tmpfs":
