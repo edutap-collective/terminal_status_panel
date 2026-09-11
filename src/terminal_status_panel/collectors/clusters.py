@@ -564,10 +564,9 @@ def mongo_command(timeout: float) -> list[str]:
     """The mongosh invocation, with the fan-out deadline compiled in.
 
     ``db.hello()`` is answered before authentication, which is what makes any
-    of this possible without credentials -- the image's own healthcheck
-    conventionally relies on an unauthenticated ping as well. It reports the
-    set's membership but state only for the primary and for the node
-    answering, so the script then asks each member the same question directly.
+    of this possible without credentials. It reports the set's membership but
+    state only for the primary and for the node answering, so the script then
+    asks each member the same question directly.
 
     ``replSetGetStatus`` would answer all of it in one round trip, including
     replication lag. It is not an option here: measured against the real set it
