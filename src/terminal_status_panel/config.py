@@ -50,6 +50,59 @@ class DnsExpectation:
     addresses: list[str] = field(default_factory=list)
 
 
+#: Name substrings identifying a member of each Docker-hosted cluster kind.
+#: These are the stack names of the deployment the panel was first written
+#: for; any other host states its own under ``[health.<kind>] match``. Kept
+#: as defaults so an installation that sets nothing sees no change.
+DEFAULT_POSTGRES_MATCH: tuple[str, ...] = ("_pg-",)
+DEFAULT_MONGODB_MATCH: tuple[str, ...] = ("mongodb",)
+DEFAULT_KAFKA_MATCH: tuple[str, ...] = ("kafka_kafka-",)
+DEFAULT_RUSTFS_MATCH: tuple[str, ...] = ("rustfs_rustfs",)
+
+#: A client config some Kafka deployments mount for manual queries through
+#: ``docker exec``. Upstream images have none; ``""`` omits the option.
+DEFAULT_KAFKA_COMMAND_CONFIG = "/client.properties"
+
+#: ``pg_auto_failover``: ``pg_autoctl show state``, one row per member.
+#: ``standalone``: ``pg_isready``, for a single server without a monitor.
+POSTGRES_MODES = ("pg_auto_failover", "standalone")
+
+#: Scheme of RustFS's local-instance endpoint. URL-form endpoints in
+#: ``RUSTFS_VOLUMES`` carry their own and are not affected.
+RUSTFS_SCHEMES = ("https", "http")
+
+
+@dataclass(frozen=True)
+class PostgresProbe:
+    """How the PostgreSQL check finds its container and what it asks it."""
+
+    match: tuple[str, ...] = DEFAULT_POSTGRES_MATCH
+    mode: str = "pg_auto_failover"
+
+
+@dataclass(frozen=True)
+class MongoProbe:
+    """How the MongoDB check finds its container."""
+
+    match: tuple[str, ...] = DEFAULT_MONGODB_MATCH
+
+
+@dataclass(frozen=True)
+class KafkaProbe:
+    """How the Kafka check finds its container and which client config it passes."""
+
+    match: tuple[str, ...] = DEFAULT_KAFKA_MATCH
+    command_config: str = DEFAULT_KAFKA_COMMAND_CONFIG
+
+
+@dataclass(frozen=True)
+class RustfsProbe:
+    """How the RustFS check finds its container and how it reaches the local instance."""
+
+    match: tuple[str, ...] = DEFAULT_RUSTFS_MATCH
+    scheme: str = "https"
+
+
 @dataclass
 class HealthConfig:
     """What the CLUSTER HEALTH section may probe, and how long it may take."""
@@ -68,6 +121,10 @@ class HealthConfig:
     timeouts: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_HEALTH_TIMEOUTS))
     enabled: list[str] = field(default_factory=lambda: list(DEFAULT_HEALTH_KINDS))
     dns_expect: list[DnsExpectation] = field(default_factory=list)
+    postgres: PostgresProbe = field(default_factory=PostgresProbe)
+    mongodb: MongoProbe = field(default_factory=MongoProbe)
+    kafka: KafkaProbe = field(default_factory=KafkaProbe)
+    rustfs: RustfsProbe = field(default_factory=RustfsProbe)
 
 
 DEFAULT_INFRASTRUCTURE_STACKS = [
@@ -398,6 +455,64 @@ class _Reader:
         self._note(key, raw, default, "expected a string")
         return default
 
+    def patterns(self, section: dict, key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+        """Name substrings. A bare string is one pattern; an empty one is refused.
+
+        The empty substring is contained in every name, so accepting it would
+        hand a verdict to whichever container the daemon happens to list first
+        -- a plausible-looking answer about the wrong thing. It is dropped and
+        reported; the other entries stay. An empty *list* is a statement ("no
+        member of this kind here") and is taken as written.
+        """
+        name = key.rsplit(".", 1)[-1]
+        if name not in section:
+            return default
+        raw = section[name]
+        if isinstance(raw, str):
+            raw = [raw]
+        if not isinstance(raw, list):
+            self._note(key, raw, list(default), "expected a list of strings")
+            return default
+        kept: list[str] = []
+        for entry in raw:
+            if isinstance(entry, str) and entry.strip():
+                kept.append(entry)
+                continue
+            self.problems.append(
+                ConfigProblem(
+                    key=key,
+                    found=repr(entry),
+                    used="nothing (entry dropped)",
+                    reason="expected a non-empty string",
+                )
+            )
+        return tuple(kept)
+
+    def choice(self, section: dict, key: str, default: str, allowed: tuple[str, ...]) -> str:
+        """A string from a fixed set of values."""
+        value = self.text(section, key, default)
+        if value in allowed:
+            return value
+        self._note(key, value, default, f"expected one of: {', '.join(allowed)}")
+        return default
+
+    def unknown_keys(self, section: dict, prefix: str, known: set[str]) -> None:
+        """Report keys nothing reads. Only for the tables that opted into it.
+
+        A misspelt key in these tables would otherwise leave its default in
+        place without a word -- ``mach = [...]`` reading as "n/a here".
+        """
+        for name, value in section.items():
+            if name not in known:
+                self.problems.append(
+                    ConfigProblem(
+                        key=f"{prefix}.{name}",
+                        found=repr(value),
+                        used="ignored",
+                        reason="unknown key",
+                    )
+                )
+
 
 def _section(data: dict, *keys: str) -> dict:
     node = data
@@ -476,6 +591,23 @@ def _managed_config(data: dict, reader: _Reader) -> ManagedConfig:
     return ManagedConfig(by=by, repository=repository, detail=detail)
 
 
+#: The keys each ``[health.<kind>]`` table accepts.
+_HEALTH_KIND_KEYS: dict[str, set[str]] = {
+    "postgres": {"match", "mode"},
+    "mongodb": {"match"},
+    "kafka": {"match", "command_config"},
+    "rustfs": {"match", "scheme"},
+}
+
+#: Every table ``[health]`` may contain. Anything else is a misspelling.
+_HEALTH_TABLES = {"timeout", "dns", *_HEALTH_KIND_KEYS}
+
+#: The non-table keys ``[health]`` itself accepts. Anything else -- a scalar
+#: this block does not read -- is as much a misspelling as an unknown table,
+#: and is reported the same way.
+_HEALTH_SCALAR_KEYS = {"budget", "enabled"}
+
+
 def _health_config(data: dict, reader: _Reader) -> HealthConfig:
     """Parse the [health] block. A malformed value falls back to its default."""
     health = _section(data, "health")
@@ -510,7 +642,59 @@ def _health_config(data: dict, reader: _Reader) -> HealthConfig:
                 )
             )
 
-    return HealthConfig(budget=budget, timeouts=timeouts, enabled=kinds, dns_expect=expectations)
+    for name, value in health.items():
+        if isinstance(value, dict):
+            if name not in _HEALTH_TABLES:
+                reader.problems.append(
+                    ConfigProblem(
+                        key=f"health.{name}",
+                        found=repr(value),
+                        used="ignored",
+                        reason="unknown table",
+                    )
+                )
+        elif name not in _HEALTH_SCALAR_KEYS:
+            reader.problems.append(
+                ConfigProblem(
+                    key=f"health.{name}", found=repr(value), used="ignored", reason="unknown key"
+                )
+            )
+    for kind, known in _HEALTH_KIND_KEYS.items():
+        reader.unknown_keys(_section(data, "health", kind), f"health.{kind}", known)
+
+    pg = _section(data, "health", "postgres")
+    kafka_section = _section(data, "health", "kafka")
+    rustfs_section = _section(data, "health", "rustfs")
+    postgres = PostgresProbe(
+        match=reader.patterns(pg, "health.postgres.match", DEFAULT_POSTGRES_MATCH),
+        mode=reader.choice(pg, "health.postgres.mode", "pg_auto_failover", POSTGRES_MODES),
+    )
+    mongodb = MongoProbe(
+        match=reader.patterns(
+            _section(data, "health", "mongodb"), "health.mongodb.match", DEFAULT_MONGODB_MATCH
+        )
+    )
+    kafka = KafkaProbe(
+        match=reader.patterns(kafka_section, "health.kafka.match", DEFAULT_KAFKA_MATCH),
+        command_config=reader.text(
+            kafka_section, "health.kafka.command_config", DEFAULT_KAFKA_COMMAND_CONFIG
+        ),
+    )
+    rustfs = RustfsProbe(
+        match=reader.patterns(rustfs_section, "health.rustfs.match", DEFAULT_RUSTFS_MATCH),
+        scheme=reader.choice(rustfs_section, "health.rustfs.scheme", "https", RUSTFS_SCHEMES),
+    )
+
+    return HealthConfig(
+        budget=budget,
+        timeouts=timeouts,
+        enabled=kinds,
+        dns_expect=expectations,
+        postgres=postgres,
+        mongodb=mongodb,
+        kafka=kafka,
+        rustfs=rustfs,
+    )
 
 
 def load_config(path: str | os.PathLike | None = None) -> Config:

@@ -444,3 +444,23 @@ def test_tcp_fallback_peers_show_no_transfer_columns():
     peer = PeerReachability(name="node-a", method="tcp", ok=True, detail="tcp/2377")
     output = _render(HealthInfo(peers=[peer], peers_probed=True))
     assert "0.0 B" not in output
+
+
+def test_a_standalone_postgres_renders_as_one_line_with_its_verdict():
+    health = HealthInfo(
+        clusters=[
+            ClusterService(
+                kind="postgres",
+                name="demo_postgres",
+                reachable=True,
+                quorum_ok=True,
+                detail="standalone, accepting connections",
+            )
+        ],
+        clusters_probed=True,
+    )
+
+    out = _render(health)
+
+    assert "✅ PostgreSQL demo_postgres — standalone, accepting connections" in out
+    assert "leader" not in out

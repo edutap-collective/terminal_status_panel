@@ -12,7 +12,17 @@ from __future__ import annotations
 
 import pytest
 
-from terminal_status_panel.config import Config, load_config
+from terminal_status_panel.config import (
+    DEFAULT_KAFKA_COMMAND_CONFIG,
+    DEFAULT_MONGODB_MATCH,
+    DEFAULT_POSTGRES_MATCH,
+    DEFAULT_RUSTFS_MATCH,
+    Config,
+    KafkaProbe,
+    PostgresProbe,
+    RustfsProbe,
+    load_config,
+)
 
 
 def _write(tmp_path, body: str):
@@ -222,3 +232,161 @@ def test_a_health_timeout_with_a_wrong_type_is_reported_by_its_own_name(tmp_path
 
     assert any(p.key == "health.timeout.kafka" for p in cfg.problems)
     assert cfg.health.timeouts["kafka"] == Config().health.timeouts["kafka"]
+
+
+# --------------------------------------------------------------------------- #
+# [health.<kind>]: per-kind probe settings
+# --------------------------------------------------------------------------- #
+
+
+def test_without_kind_tables_every_probe_keeps_the_old_behaviour():
+    """The acceptance bar: no new key, no change."""
+    health = Config().health
+    assert health.postgres == PostgresProbe(match=("_pg-",), mode="pg_auto_failover")
+    assert health.mongodb.match == ("mongodb",)
+    assert health.kafka == KafkaProbe(match=("kafka_kafka-",), command_config="/client.properties")
+    assert health.rustfs == RustfsProbe(match=("rustfs_rustfs",), scheme="https")
+
+
+def test_every_kind_table_is_read(tmp_path):
+    path = _write(
+        tmp_path,
+        "[health.postgres]\n"
+        'match = ["demo_postgres"]\n'
+        'mode = "standalone"\n'
+        "[health.mongodb]\n"
+        'match = ["demo_mongo"]\n'
+        "[health.kafka]\n"
+        'match = ["demo_kafka"]\n'
+        'command_config = ""\n'
+        "[health.rustfs]\n"
+        'match = ["demo_rustfs"]\n'
+        'scheme = "http"\n',
+    )
+
+    cfg = load_config(path)
+
+    assert cfg.problems == []
+    assert cfg.health.postgres == PostgresProbe(match=("demo_postgres",), mode="standalone")
+    assert cfg.health.mongodb.match == ("demo_mongo",)
+    assert cfg.health.kafka == KafkaProbe(match=("demo_kafka",), command_config="")
+    assert cfg.health.rustfs == RustfsProbe(match=("demo_rustfs",), scheme="http")
+
+
+def test_match_replaces_the_default_rather_than_extending_it(tmp_path):
+    path = _write(tmp_path, '[health.kafka]\nmatch = ["demo_kafka"]\n')
+
+    assert load_config(path).health.kafka.match == ("demo_kafka",)
+
+
+def test_a_bare_string_match_is_one_pattern(tmp_path):
+    path = _write(tmp_path, '[health.rustfs]\nmatch = "demo_rustfs"\n')
+
+    cfg = load_config(path)
+
+    assert cfg.health.rustfs.match == ("demo_rustfs",)
+    assert cfg.problems == []
+
+
+def test_an_empty_match_list_means_no_member_here(tmp_path):
+    path = _write(tmp_path, "[health.mongodb]\nmatch = []\n")
+
+    cfg = load_config(path)
+
+    assert cfg.health.mongodb.match == ()
+    assert cfg.problems == []
+
+
+def test_an_empty_string_pattern_is_dropped_and_reported(tmp_path):
+    """The empty substring is in every name: it would hand the verdict to
+    whichever container the daemon lists first."""
+    path = _write(tmp_path, '[health.postgres]\nmatch = ["", "  ", "demo_postgres"]\n')
+
+    cfg = load_config(path)
+
+    assert cfg.health.postgres.match == ("demo_postgres",)
+    assert [p.key for p in cfg.problems] == ["health.postgres.match", "health.postgres.match"]
+
+
+def test_a_match_that_is_not_a_list_falls_back(tmp_path):
+    path = _write(tmp_path, "[health.postgres]\nmatch = 5\n")
+
+    cfg = load_config(path)
+
+    assert cfg.health.postgres.match == DEFAULT_POSTGRES_MATCH
+    assert any(p.key == "health.postgres.match" for p in cfg.problems)
+
+
+def test_an_unknown_mode_falls_back_and_is_reported(tmp_path):
+    path = _write(tmp_path, '[health.postgres]\nmode = "patroni"\n')
+
+    cfg = load_config(path)
+
+    assert cfg.health.postgres.mode == "pg_auto_failover"
+    problem = next(p for p in cfg.problems if p.key == "health.postgres.mode")
+    assert "standalone" in problem.reason
+
+
+def test_an_unknown_scheme_falls_back_and_is_reported(tmp_path):
+    path = _write(tmp_path, '[health.rustfs]\nscheme = "ftp"\n')
+
+    cfg = load_config(path)
+
+    assert cfg.health.rustfs.scheme == "https"
+    assert any(p.key == "health.rustfs.scheme" for p in cfg.problems)
+
+
+def test_a_non_string_command_config_falls_back(tmp_path):
+    path = _write(tmp_path, "[health.kafka]\ncommand_config = false\n")
+
+    cfg = load_config(path)
+
+    assert cfg.health.kafka.command_config == DEFAULT_KAFKA_COMMAND_CONFIG
+    assert any(p.key == "health.kafka.command_config" for p in cfg.problems)
+
+
+def test_an_unknown_key_in_a_kind_table_is_reported(tmp_path):
+    path = _write(tmp_path, '[health.postgres]\nmach = ["demo_postgres"]\n')
+
+    cfg = load_config(path)
+
+    assert cfg.health.postgres.match == DEFAULT_POSTGRES_MATCH
+    assert any(p.key == "health.postgres.mach" and p.reason == "unknown key" for p in cfg.problems)
+
+
+def test_a_misspelt_kind_table_is_reported(tmp_path):
+    path = _write(tmp_path, '[health.postgress]\nmatch = ["demo_postgres"]\n')
+
+    cfg = load_config(path)
+
+    assert any(p.key == "health.postgress" and p.reason == "unknown table" for p in cfg.problems)
+
+
+def test_the_known_health_subtables_are_not_reported(tmp_path):
+    path = _write(
+        tmp_path,
+        "[health.timeout]\nkafka = 7.0\n"
+        '[[health.dns.expect]]\nname = "login.example.net"\n'
+        '[health.rustfs]\nscheme = "http"\n',
+    )
+
+    assert load_config(path).problems == []
+
+
+def test_an_unknown_scalar_key_directly_under_health_is_reported(tmp_path):
+    path = _write(tmp_path, "[health]\nprobe_nmae = true\n")
+
+    cfg = load_config(path)
+
+    assert any(p.key == "health.probe_nmae" and p.reason == "unknown key" for p in cfg.problems)
+
+
+def test_the_known_health_scalar_keys_are_not_reported(tmp_path):
+    path = _write(tmp_path, '[health]\nbudget = 5.0\nenabled = ["postgres"]\n')
+
+    assert load_config(path).problems == []
+
+
+def test_rustfs_and_mongodb_defaults_are_exported_unchanged():
+    assert DEFAULT_RUSTFS_MATCH == ("rustfs_rustfs",)
+    assert DEFAULT_MONGODB_MATCH == ("mongodb",)

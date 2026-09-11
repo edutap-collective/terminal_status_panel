@@ -19,7 +19,7 @@ def test_collect_health_gathers_all_three_groups(monkeypatch):
     monkeypatch.setattr(
         health_collector,
         "probe_cluster",
-        lambda index, kind, timeout: ClusterService(kind=kind, reachable=True),
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind, reachable=True),
     )
     monkeypatch.setattr(
         health_collector,
@@ -116,7 +116,7 @@ def test_clusters_probed_and_empty_is_distinct_from_never_probed(monkeypatch):
     renderer then names the kinds instead of claiming nothing was found."""
     import time
 
-    def slow(index, kind, timeout):
+    def slow(index, kind, timeout, settings=None):
         time.sleep(5)
         return ClusterService(kind=kind)
 
@@ -139,7 +139,7 @@ def test_a_hung_kind_loses_only_its_own_result(monkeypatch):
     PostgreSQL quorum loss that was measured two seconds earlier."""
     import time
 
-    def probe(index, kind, timeout):
+    def probe(index, kind, timeout, settings=None):
         if kind == "rustfs":
             time.sleep(5)
         return ClusterService(kind=kind, quorum_ok=False)
@@ -162,7 +162,7 @@ def test_each_kind_is_probed_with_its_own_configured_timeout(monkeypatch):
     applied to a single cluster probe."""
     seen = {}
 
-    def probe(index, kind, timeout):
+    def probe(index, kind, timeout, settings=None):
         seen[kind] = timeout
         return ClusterService(kind=kind)
 
@@ -185,7 +185,7 @@ def test_all_kinds_share_one_container_index(monkeypatch):
     """One Docker container listing per run, not one per kind."""
     seen = []
 
-    def probe(index, kind, timeout):
+    def probe(index, kind, timeout, settings=None):
         seen.append(index)
         return ClusterService(kind=kind)
 
@@ -294,7 +294,7 @@ def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
     monkeypatch.setattr(
         health_collector,
         "probe_cluster",
-        lambda index, kind, timeout: ClusterService(kind=kind),
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
 
@@ -317,7 +317,7 @@ def test_peers_probed_is_false_without_names_or_answers(monkeypatch):
     monkeypatch.setattr(
         health_collector,
         "probe_cluster",
-        lambda index, kind, timeout: ClusterService(kind=kind),
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
@@ -336,7 +336,7 @@ def test_a_slow_fqdn_lookup_is_truncated_rather_than_delaying_the_login(monkeypa
     monkeypatch.setattr(
         health_collector,
         "probe_cluster",
-        lambda index, kind, timeout: ClusterService(kind=kind),
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
@@ -357,7 +357,7 @@ def test_peers_probed_is_true_when_names_were_available(monkeypatch):
     monkeypatch.setattr(
         health_collector,
         "probe_cluster",
-        lambda index, kind, timeout: ClusterService(kind=kind),
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
     )
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
@@ -366,3 +366,23 @@ def test_peers_probed_is_true_when_names_were_available(monkeypatch):
     )
     assert health.peers == []
     assert health.peers_probed is True
+
+
+def test_collect_health_hands_the_probes_the_configured_settings(monkeypatch):
+    from terminal_status_panel.config import KafkaProbe
+
+    seen = []
+
+    def probe(index, kind, timeout, settings=None):
+        seen.append(settings)
+        return ClusterService(kind=kind)
+
+    monkeypatch.setattr(health_collector, "probe_cluster", probe)
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+    cfg = _config(enabled=["kafka"])
+    cfg.health.kafka = KafkaProbe(match=("demo_kafka",), command_config="")
+
+    health_collector.collect_health(cfg, peer_names=[], client=object(), resolve_fqdn=_fqdn)
+
+    assert seen[0].kafka.match == ("demo_kafka",)

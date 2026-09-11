@@ -23,7 +23,7 @@ from functools import partial
 from ..budget import run_with_budget
 from ..config import Config
 from ..model import ClusterService, DnsCheck, HealthInfo, PeerReachability
-from .clusters import DEFAULT_KIND_TIMEOUT, ContainerIndex, probe_cluster
+from .clusters import DEFAULT_KIND_TIMEOUT, ContainerIndex, ProbeSettings, probe_cluster
 from .dns import collect_dns
 from .network import collect_peers
 
@@ -64,10 +64,11 @@ def _build_health_tasks(
     clusters_probed = client is not None and bool(kinds)
     if clusters_probed:
         index = ContainerIndex(client)
+        settings = ProbeSettings.from_config(cfg)
         for kind in kinds:
             timeout = health_cfg.timeouts.get(kind, DEFAULT_KIND_TIMEOUT)
             key = _CLUSTER_TASK_PREFIX + kind
-            tasks[key] = partial(probe_cluster, index, kind, timeout)
+            tasks[key] = partial(probe_cluster, index, kind, timeout, settings=settings)
             timeouts[key] = timeout
 
     # Resolved at most once, by whichever of the two tasks needs it first.

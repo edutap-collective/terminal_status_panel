@@ -67,9 +67,9 @@ full table is in the [icon vocabulary](docs/reference/icon-vocabulary.md).
 The panel opens no database or broker connection and holds no credentials. Its
 only privilege is the Docker socket: the Docker section reads the Swarm API,
 and the health section additionally executes **read-only status commands inside
-the service containers** (`pg_autoctl show state`, `db.hello()`,
-`kafka-metadata-quorum.sh`, a `/health` curl). GlusterFS is queried on the host
-via `sudo -n` and is skipped when that is unavailable.
+the service containers** (`pg_autoctl show state` or `pg_isready`,
+`db.hello()`, `kafka-metadata-quorum.sh`, a `/health` curl). GlusterFS is
+queried on the host via `sudo -n` and is skipped when that is unavailable.
 
 ## Documentation
 

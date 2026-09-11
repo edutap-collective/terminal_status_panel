@@ -9,11 +9,12 @@ this needs database or broker credentials:
 
 | Service | Command |
 |---------|---------|
-| PostgreSQL | `pg_autoctl show state` |
+| PostgreSQL (`pg_auto_failover` mode, the default) | `pg_autoctl show state`, one row per member |
+| PostgreSQL (`standalone` mode) | `pg_isready`, one server, no replication |
 | MongoDB | `db.hello()` via `mongosh` (unauthenticated) |
-| Kafka (KRaft) | `kafka-metadata-quorum.sh describe --status` |
+| Kafka (KRaft) | `kafka-metadata-quorum.sh describe --status`, with `--command-config` unless `health.kafka.command_config` is set to `""` |
 | GlusterFS | `gluster peer status --xml` / `gluster volume status --xml` via `sudo -n` |
-| RustFS | `curl` against `/health` on each configured endpoint |
+| RustFS | `curl` against `/health` on each configured endpoint, over `health.rustfs.scheme` for the local instance |
 
 WireGuard peer reachability is read from `sudo -n wg show all dump`
 (handshake age per peer); when that is unavailable it falls back to a plain
@@ -52,6 +53,21 @@ Kafka's 2.6 s**, so it does not lengthen the section at all — the checks run
 concurrently and Kafka is still the one everything waits for. The 6 s deadline
 exists for the worst case, and the 8 s budget exists because a per-kind
 timeout above the budget has no effect.
+
+## On a host that is not a cluster
+
+The defaults describe a five-node Swarm with pg_auto_failover, a Kafka role
+that mounts a client config, and RustFS over TLS. A single-node host running
+upstream images needs three statements, one per kind: which names are its
+members (`match`), and how to ask them (`mode`, `command_config`, `scheme`).
+The verdicts then say what was measured on that host: a standalone PostgreSQL
+reports that it accepts connections and claims no replication; a single-voter
+KRaft quorum reports its one voter as leader.
+
+Budget for Kafka: its quorum query starts a JVM inside the broker's container.
+Measured on a two-CPU host, the first run of the day took 6.4 s and repeated
+runs about 3 s. A login usually meets the first case, so `health.timeout.kafka`
+should cover it.
 
 ## How the timeouts are enforced
 
