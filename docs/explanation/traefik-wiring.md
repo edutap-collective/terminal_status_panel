@@ -2,27 +2,34 @@
 
 `status-traefik` (and the `traefik` section inside `status-full`) reads
 Traefik's entrypoint → router → middleware → service wiring straight from the
-Docker API: the entrypoints from the Traefik service's own command arguments,
-the routers/middlewares/services from every Swarm service's `traefik.http.*`
+Docker API: the entrypoints from Traefik's own static configuration — a file,
+its command-line flags, or its environment, whichever Traefik itself would
+read (see *Where the static configuration comes from* below) — the
+routers/middlewares/services from every Swarm service's `traefik.http.*`
 labels **and** from every plain or Compose container's — a Traefik router can
 be declared on a service, a `docker compose` container, or a bare
 `docker run` container, and the panel reads all three the same way — and the
-file-provider routers from the mounted Docker configs (`traefik_dynamic*`) —
-the `api` and `ping-router` entries live only there. A container that is
-itself a Swarm task is skipped: its labels are its service's own, already
+file-provider routers from every file Traefik's file provider reads, Docker
+configs and, on the node the Traefik task runs on, bind-mounted host files
+alike — the `api` and `ping-router` entries live only there. A container that
+is itself a Swarm task is skipped: its labels are its service's own, already
 read once from the services list, and reading them again from the container
-list would double-count every Swarm-hosted router. No credentials beyond the
-Docker socket are needed, and no change to the Traefik deployment.
+list would double-count every Swarm-hosted router. No client certificate is
+needed, and no change to the Traefik deployment — reading a bind-mounted host
+file uses only the Docker socket already required for everything else.
 
-**Only the config generations the Traefik service actually mounts are read.**
-Swarm keeps every generation of a config — `traefik_dynamic_yml_v1` through
-`_v4` may all still exist — but only the ones named in the service spec are
-the ones Traefik has loaded. Selecting by name instead showed `ping-router`
-four times on every entrypoint and turned entrypoints that were removed two
-revisions ago into orphaned-router findings. Where the Traefik service cannot
-be found at all, no generation is guessed: the file-provider routers are
-reported as missing, with the reason named, rather than shown as if they were
-current.
+**Selected by the file provider's own path, once one is known; by name
+otherwise.** Once the static configuration names `providers.file.directory`
+or `.filename`, that path decides exactly which files qualify — see *Where
+the static configuration comes from* below. Only when no provider path could
+be determined does the panel fall back to 0.12.2's original rule: Swarm keeps
+every generation of a config — `traefik_dynamic_yml_v1` through `_v4` may all
+still exist — but only the ones named in the service spec are the ones
+Traefik has loaded. Selecting by name instead showed `ping-router` four times
+on every entrypoint and turned entrypoints that were removed two revisions
+ago into orphaned-router findings. Where the Traefik service cannot be found
+at all, no generation is guessed: the file-provider routers are reported as
+missing, with the reason named, rather than shown as if they were current.
 
 ## Labels from containers, not only Swarm services
 
@@ -142,11 +149,14 @@ the columns: its lines are the longest in the section, and it is what you
 read first. Each entrypoint's head line carries the worst verdict among its
 routers, so a wall of branches still says at a glance which one to open.
 
-Entrypoints appear **in the order the Traefik service's arguments declare
-them**, not by port. The Ansible role lists the four every cluster has —
-`dashboard`, `ping`, `default`, `https` — before appending this cluster's
-per-vhost ones, and that grouping is more useful than the numeric order, which
-would put `https` (443) first and `dashboard` (8082) last and scatter the four.
+Entrypoints appear **in the order Traefik's static configuration declares
+them** — a file, command-line arguments, or environment variables, whichever
+source applies (see *Where the static configuration comes from* above) — not
+by port. A deployment's automation typically lists the entrypoints every
+cluster has — `dashboard`, `ping`, `default`, `https` — before appending its
+own per-vhost ones, and that grouping is more useful than the numeric order,
+which would put `https` (443) first and `dashboard` (8082) last and scatter
+what belongs together.
 
 ## Folding endpoints that claim nothing
 
@@ -259,50 +269,115 @@ partial-read failure, distinct from the routers simply being empty. Because
 `api` and `ping-router` live only in the file provider, this warning is the
 signal that their absence below is a read failure, not a finding.
 
-## What is still not read when Traefik itself runs as a container
+## Where the static configuration comes from
 
-Reading labels from containers (above) means a router can now be *declared*
-anywhere. Two other things this collector reads, it still reads only from
-the Traefik **Swarm service**, and a host where Traefik runs as a container
-rather than a Swarm service loses both — though not in the same way, as the
-two paragraphs below show: one announces the gap loudly, the other can stay
-completely silent about it.
+Traefik takes its static configuration from exactly one of three sources, and
+uses only the first that yields something: a file, then its command-line
+flags, then its `TRAEFIK_*` environment variables
+([configuration overview](https://doc.traefik.io/traefik/getting-started/configuration-overview/);
+the search order lives in
+[`cmd/traefik/traefik.go`](https://github.com/traefik/traefik/blob/master/cmd/traefik/traefik.go),
+the first-success logic in paerser's `cli/commands.go`, read against Traefik
+v3.7.13 and paerser v0.2.2, the version Traefik pins). The panel mirrors that
+search so its tree matches what Traefik actually reads — mixing flags into a
+tree built from a file, or the reverse, would show a configuration Traefik
+itself ignores.
 
-**Entrypoints.** `--entryPoints.*` is read from the Traefik service's own
-`TaskTemplate.ContainerSpec.Args`, a piece of the Docker API that only a
-Swarm *service* carries. A container-hosted Traefik has no such spec, so
-`info.entrypoints` comes back empty — and the section says so plainly: a
-yellow `⚠️  no entrypoints found — the tree cannot be drawn, the routers
-below could not be placed` banner opens the section whenever this happens,
-so the *cause* is never quiet. What the banner does not spell out is its
-second-order effect: with no entrypoint list, every router — however it was
-declared — falls into the **ORPHANED ROUTERS** block instead of the tree,
-where it reads, in yellow, ``⚠️  … entrypoint `https` — no entrypoint could
-be read``, never the red ``✗ … entrypoint `https` does not exist`` a router
-with a genuinely missing entrypoint gets: with no entrypoint list to check
-against, the code cannot tell "not on this one" from "nothing was read" and
-declines to accuse. So while the section is loud about not having read the
-entrypoints, it says nothing further about whether any router points at one
-that does not exist — that specific check simply does not run, for any
-router, on such a host. **A container-hosted Traefik with no red orphan
-findings has not been shown clean; the check that would have found a
-problem never ran.**
+**The file.** The first candidate that exists wins: the `--configFile` value,
+then `/etc/traefik/traefik`, `$XDG_CONFIG_HOME/traefik`,
+`$HOME/.config/traefik`, `./traefik`, each tried with `.toml`, `.yaml`, `.yml`
+in that order
+([`loader_file.go` L66-68](https://github.com/traefik/traefik/blob/v3.7.13/pkg/cli/loader_file.go#L66-L68),
+[paerser `file_finder.go` L37-49](https://github.com/traefik/paerser/blob/v0.2.2/cli/file_finder.go#L37-L49)).
+`$XDG_CONFIG_HOME` and `$HOME` are expanded from the workload's own declared
+environment — a `HOME` the container engine injects at run time is invisible
+from here — and `./` only resolves against a declared working directory;
+without one, a relative `--configFile` is reported as such rather than
+guessed at. A `--configFile` that does not exist is skipped silently by
+Traefik itself, not treated as an error
+([`file_finder.go` L23-26](https://github.com/traefik/paerser/blob/v0.2.2/cli/file_finder.go#L23-L26)),
+and the panel does the same.
 
-**The file provider.** This collector reaches `traefik.yml` only through a
-Docker Config mounted into a Swarm service; it never reads a container's
-filesystem or its bind mounts. A container-hosted Traefik's `traefik.yml`,
-mounted the ordinary Compose way, is invisible to the Docker API entirely —
-there is no path to it. Concretely: if no `traefik_dynamic*` Docker config
-exists at all, which is the normal state for a deployment that never created
-one, the section prints **no warning whatsoever**; `api@internal` and the
-ping router are simply absent from the tree, exactly as they would be for a
-Swarm deployment that genuinely declares no file provider. The two cases are
-not distinguishable from the panel's output. Only when a *stale*
-`traefik_dynamic*` config survives from an earlier, Swarm-based deployment
-of the same Traefik does the `file provider unreadable: traefik service not
-found, so which config generations are mounted cannot be determined` warning
-above fire — because in that case the collector can see a config, just not
-one it can still tie to a live service.
+**Only what is mounted is visible.** A candidate counts as present only when a
+Docker config sits exactly at it, or a bind mount — a file mount exactly at
+it, or a directory mount covering it — does, the Traefik task runs on this
+node, and the file is actually there, checked with the same path resolution a
+read uses. A candidate that is not there is passed over, exactly as Traefik
+passes over it — a missing `--configFile` included, provided it sits under a
+mount that can be checked here at all.
+
+**An unreadable file never falls back to the flags.** A covering mount that
+cannot be checked from here — a bind mount whose Traefik task runs on another
+node, a named volume, a tmpfs, or a check that fails outright — makes the
+search undecidable, not absent: the panel says so and draws no tree at all,
+rather than falling back to a configuration Traefik may not be using. A
+`--configFile` that no checkable mount backs is the same kind of gap: it may
+be baked into the image, in which case Traefik reads it, or simply absent, in
+which case Traefik moves on to its default locations and then the flags —
+nothing readable from here can tell those two apart.
+
+**Bind mounts, read only on the Traefik task's node.** A Docker config is
+readable through the API from any node; a bind mount is a host path, readable
+only where a running Traefik task actually is (a Swarm service's own
+`Service.tasks`, checked against `docker info`'s node ID; always, for a plain
+container). Reading one reads a host file as the panel's own login user,
+resolved component by component below the bind source the way the kernel
+would resolve it inside the container — an absolute symlink is never
+followed, no step may climb back out of the bind source, symlink loops are
+bounded — and only a plain regular file is read, at most 1 MiB.
+
+**The file provider, once its path is known.** `providers.file.directory` or
+`.filename` — read from the same source as the entrypoints, `directory`
+winning when both are set — selects the files: for a directory, everything
+under it, recursively, from Docker configs and bind mounts alike, matched by
+`.toml`, `.yaml` or `.yml` case-insensitively, hidden files included, because
+Traefik's own directory walk does not skip them
+([`file.go` L406-427](https://github.com/traefik/traefik/blob/v3.7.13/pkg/provider/file/file.go#L406-L427)).
+A file that a more specific mount also covers belongs to that mount, and is
+read once. A directory yields at most 64 files — sorted by path, with a note
+naming how many were left unread past that — and each file is capped at 1
+MiB, the same limit a bind-mounted static file has. A file containing `{{` is
+noted as templated and not evaluated — Traefik runs every dynamic file
+through Go's `text/template`
+([`file.go` L125-156](https://github.com/traefik/traefik/blob/v3.7.13/pkg/provider/file/file.go#L125-L156)),
+which the panel cannot do without presenting a guess as configuration.
+
+**Without a known provider path**, dynamic-file reading falls back to the rule
+0.12.2 already used: Docker configs named `*traefik_dynamic*` that the
+service actually mounts — the file-provider path just described applies only
+once the static configuration is known and names one.
+
+### When the tree cannot be drawn at all
+
+Every state below ends the section's banner the same way — `… — the tree
+cannot be drawn, the routers below could not be placed` — and draws no
+entrypoint branches at all: every router that was still read falls into the
+ORPHANED ROUTERS block instead, in yellow rather than red, because with no
+entrypoint list to check against, the code cannot tell "not on this one" from
+"nothing was read" and declines to accuse.
+
+| State | Reason stated in the banner | Where it is produced |
+|---|---|---|
+| No Traefik service or container matches `traefik.match` | `no Traefik service or container matches traefik.match (<patterns>)` | `collect_traefik`, `collectors/traefik.py` |
+| A relative `--configFile` with no declared working directory | `--configFile=<path> is relative and the container's working directory is not declared — not read` | `_find_static_file`, `collectors/traefik.py` |
+| `--configFile` not backed by any checkable mount | `--configFile=<path> is not mounted — it may be part of the image, or absent (then Traefik falls back to its default locations and flags)` | `_find_static_file`, `collectors/traefik.py` |
+| A candidate's presence cannot be decided — a bind mount on another node, a volume, a tmpfs, or a check that failed | `<reason> — whether it holds <name(s)> cannot be checked from here` | `_find_static_file`, using `presence()` in `collectors/traefik_mounts.py` |
+| The located file cannot be read — a bind mount on another node, a volume, an unsupported mount kind, an OS error | `entrypoints are configured in <path>, <reason>` | `_read_static_file`, `collectors/traefik.py` |
+| The file's text is not valid YAML/TOML | `<path>: <YAMLError/TOMLDecodeError …>` | `_read_static_file`, `collectors/traefik.py` |
+| The file parses cleanly but declares no entrypoints | `<path> declares no entrypoints` | `_read_static_file`, `collectors/traefik.py` |
+| No file, no command-line flags, no `TRAEFIK_*` variables at all | `no static configuration found — no file, no flags, no TRAEFIK_ variables` | `_read_static`, `collectors/traefik.py` |
+| Something the collector's own guard did not foresee | `Traefik's configuration could not be read: <ExceptionType>: <message>` | `_absorb_traefik`, `collectors/traefik.py` |
+
+The old wording, `no entrypoints found`, still appears for the one case none
+of the above covers: the workload's command-line flags or `TRAEFIK_*`
+variables are read successfully but simply declare no entrypoints —
+`parse_static_args` and `parse_static_env` report that as an empty result,
+not as a problem, so nothing sets a more specific reason.
+
+A file found beside other command-line flags does draw a tree; Traefik
+ignores those flags, and the panel notes that in one dim line above the tree
+(`static configuration from <path>; Traefik ignores N other command-line
+flags`) rather than treating it as a reason not to draw.
 
 Two further, narrower gaps, one on each side of the container-label read: a
 `containers.list()` call that fails is recorded on `TraefikInfo.container_error`,

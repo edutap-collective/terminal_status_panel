@@ -219,8 +219,8 @@ class TraefikApiConfig:
     """Everything under ``[traefik]``.
 
     The API cross-check is dormant today: the dashboard router requires a
-    client certificate signed by the web frontend's CA, and the Ansible role
-    issues only app-server ones. ``links`` is independent of it.
+    client certificate signed by the web frontend's CA, and one deployment's
+    automation issues only app-server ones. ``links`` is independent of it.
     """
 
     url: str | None = None

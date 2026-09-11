@@ -22,6 +22,13 @@ guesswork dressed as a record.
   `kafka.command_config` (`""` omits it) and `rustfs.scheme`. Every default is
   the behaviour of 0.12.2. Unknown keys and tables under `[health]` are
   reported by `--debug`.
+- `traefik.match`: the Traefik workload is found by configurable name
+  patterns, as a Swarm service or as a plain container.
+- Traefik's static configuration is read from the source Traefik itself uses —
+  a file (`--configFile` or a default location), else the command-line flags,
+  else `TRAEFIK_*` variables — and the file provider by the path that
+  configuration names. Files come from Docker configs or, on the node the
+  Traefik task runs on, from bind mounts. YAML and TOML.
 
 ### Changed
 
@@ -29,6 +36,8 @@ guesswork dressed as a record.
   match — the probe's container search and the crash-loop check as well as the
   DOCKER INFOS join — and the join reads the configured list instead of the
   built-in one.
+- When no entrypoints can be read, the banner names the reason instead of
+  "no entrypoints found".
 
 ## [0.12.2] - 2026-09-10
 

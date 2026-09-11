@@ -14,9 +14,11 @@ import yaml
 
 from ..model import TraefikEntrypoint, TraefikMiddleware, TraefikRouter, TraefikServiceRef
 
-# The four default entrypoints are declared '--entrypoints.…' and the five
-# vhost ones '--entryPoints.…', because different parts of the Ansible role
-# build them. Case-sensitivity here silently drops five of nine.
+# A deployment's default entrypoints and its per-vhost ones can end up
+# declared with different casing -- '--entrypoints.…' versus
+# '--entryPoints.…' -- when different parts of the automation that built the
+# command line disagree on the spelling. Case-sensitivity here would silently
+# drop whichever group used the other casing.
 _ENTRYPOINT_ADDRESS = re.compile(
     r"^--entrypoints\.(?P<name>[^.]+)\.address=(?P<address>.+)$", re.IGNORECASE
 )
@@ -37,11 +39,13 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
     In the order the arguments declare them.
 
     Declaration order is the deployment's own grouping and reads better than
-    the port number: the Ansible role lists the four entrypoints every cluster
-    has — ``dashboard``, ``ping``, ``default``, ``https`` — before the per-vhost
-    ones it appends for this cluster, so that grouping survives into the panel.
-    Sorting by port would interleave them (``https`` at 443 first, ``dashboard``
-    at 8082 last) and scatter what belongs together.
+    the port number: a deployment's automation typically lists a handful of
+    entrypoints every cluster has — such as ``dashboard``, ``ping``,
+    ``default``, ``https`` — before appending the per-vhost ones for that
+    cluster, so that grouping survives into the panel. Sorting by port would
+    interleave them (a high-numbered entrypoint like ``https`` at 443 first, a
+    low-numbered one like ``dashboard`` at 8082 last) and scatter what belongs
+    together.
     """
     found: list[TraefikEntrypoint] = []
     seen: set[str] = set()

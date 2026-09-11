@@ -209,10 +209,10 @@ def test_a_router_naming_no_entrypoint_appears_under_every_entrypoint():
 def test_without_entrypoints_the_routers_are_still_shown_under_a_warning():
     """Not finding the entrypoints is a coverage gap, not an empty panel.
 
-    It happens whenever the Traefik service is not matched by
-    TRAEFIK_SERVICE_PATTERNS, or its entrypoints come from static YAML rather
-    than from Args. Dropping every router in that state is the very blind spot
-    the orphan block exists to close.
+    It happens whenever the Traefik service or container is not matched by
+    ``traefik.match``, or its static configuration could not be read.
+    Dropping every router in that state is the very blind spot the orphan
+    block exists to close.
     """
     info = TraefikInfo(
         reachable=True,
