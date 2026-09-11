@@ -197,43 +197,94 @@ def _os_error_text(exc: OSError | ValueError) -> str:
     return exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc)
 
 
-#: A defensive bound on a chain of relative symlinks, well above any real
-#: Traefik dynamic-config layout -- not a claim about what the OS allows.
+#: A defensive bound on a chain of symlink hops, well above any real Traefik
+#: dynamic-config layout -- not a claim about what the OS allows.
 _MAX_SYMLINK_HOPS = 40
 
 
-def _refuse_absolute_symlink_below_root(path: str, root: str) -> None:
-    """Refuse a symlink below *root* whose target is absolute.
+def _lstat_or_defer(candidate: str, path: str, *, is_final: bool) -> os.stat_result | None:
+    """``lstat`` *candidate*, or ``None`` to defer a missing *final* component.
 
-    Checked component by component from *root* downwards -- never *root*
-    itself, since the daemon already resolved the bind source on the host,
-    so the container sees exactly what it points to, however that source
-    path is spelled. A relative symlink is followed, one hop at a time, so a
-    relative link that in turn points to an absolute one is still caught, at
-    whichever hop is the absolute one.
+    A missing final component is not reported here -- the ordinary open()
+    failure that follows resolution reports "no such file" in its usual
+    wording. Any other failure, at any position, is reported immediately.
+    """
+    try:
+        return os.lstat(candidate)
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, FileNotFoundError) and is_final:
+            return None
+        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
+
+
+def _symlink_hop_components(candidate: str, path: str, hops: int) -> tuple[list[str], int]:
+    """The components of *candidate*'s relative link target, and the new hop count.
+
+    Refuses an absolute target -- resolved on the host, it may stay inside
+    the bind source only by coincidence; inside the container, the same
+    absolute target resolves under a different root and names a different
+    file -- and a chain longer than ``_MAX_SYMLINK_HOPS``.
+    """
+    hops += 1
+    if hops > _MAX_SYMLINK_HOPS:
+        raise Unreadable(f"{path}: too many levels of symbolic links — not followed")
+    target = os.readlink(candidate)
+    if os.path.isabs(target):
+        raise Unreadable(
+            f"{candidate} is an absolute symlink — resolves differently "
+            "inside the container, not followed"
+        )
+    return target.split(os.sep), hops
+
+
+def _resolve_below_root(path: str, root: str) -> str:
+    """The real host path *path* resolves to, physically -- as the kernel does.
+
+    *root* is never ``lstat``'ed or read as a link: the daemon already
+    resolved the bind source on the host, so the container sees exactly its
+    target, whatever *root* is spelled as or itself points to. Every
+    component below *root* is resolved one at a time, kernel-style:
+    ``..`` undoes the last *resolved* (already-physical) component rather
+    than the last written one, so it cannot be fooled by a symlinked
+    component that was never actually descended into lexically; a relative
+    symlink's own target is pushed back onto the queue, so its own ``..``
+    and any further links are resolved the exact same way; a climb that
+    would go above *root* is refused, even one that would immediately
+    return back below it -- inside the container, that same relative link
+    resolves against a different root and names a different file.
+
+    Raises ``Unreadable`` for an absolute symlink (at any hop), a symlink
+    loop, a climb above *root*, or a component that could not even be
+    inspected -- except a missing *final* component, which is left for the
+    ordinary "no such file" failure that follows this call, in its usual
+    wording.
     """
     relative = os.path.relpath(path, root)
     if relative in (os.curdir, ""):
-        return
-    current = root
-    for component in relative.split(os.sep):
-        current = os.path.join(current, component)
-        hops = 0
-        while os.path.islink(current):
-            hops += 1
-            if hops > _MAX_SYMLINK_HOPS:
-                raise Unreadable(f"{current}: too many levels of symbolic links")
-            target = os.readlink(current)
-            if os.path.isabs(target):
-                # Resolved on the host, this may stay inside the bind source
-                # only by coincidence -- inside the container, the same
-                # absolute target resolves under a different root and names
-                # a different file.
-                raise Unreadable(
-                    f"{current} is an absolute symlink — resolves differently "
-                    "inside the container, not followed"
-                )
-            current = os.path.normpath(os.path.join(os.path.dirname(current), target))
+        return root
+    pending = relative.split(os.sep)
+    resolved: list[str] = []
+    hops = 0
+    while pending:
+        component = pending.pop(0)
+        if component in ("", os.curdir):
+            continue
+        if component == os.pardir:
+            if not resolved:
+                raise Unreadable(f"{path} leads outside {root} — not followed")
+            resolved.pop()
+            continue
+        candidate = os.path.join(root, *resolved, component)
+        info = _lstat_or_defer(candidate, path, is_final=not pending)
+        if info is None:
+            resolved.append(component)
+            break
+        if not stat.S_ISLNK(info.st_mode):
+            resolved.append(component)
+            continue
+        target_components, hops = _symlink_hop_components(candidate, path, hops)
+        pending[0:0] = target_components
+    return os.path.join(root, *resolved) if resolved else root
 
 
 def _read_host_file(path: str, root: str) -> str:
@@ -243,16 +294,7 @@ def _read_host_file(path: str, root: str) -> str:
     writer that never comes; ``fstat`` then refuses anything that is not a
     regular file (a FIFO, a socket, a device) before a byte is read from it.
     """
-    try:
-        real, real_root = os.path.realpath(path), os.path.realpath(root)
-    except (OSError, ValueError) as exc:
-        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
-    if real != real_root and not real.startswith(real_root.rstrip(os.sep) + os.sep):
-        raise Unreadable(f"{path} leads outside {root} — not followed")
-    try:
-        _refuse_absolute_symlink_below_root(path, root)
-    except (OSError, ValueError) as exc:
-        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
+    real = _resolve_below_root(path, root)
     try:
         descriptor = os.open(real, os.O_RDONLY | os.O_NONBLOCK)
     except (OSError, ValueError) as exc:
@@ -360,7 +402,17 @@ def _walk(
                     continue
                 relative = name if relative_dir == "." else f"{relative_dir}/{name}"
                 container_path = posixpath.join(start, relative)
-                if not _is_regular_file(os.path.join(current, name)):
+                host_file = os.path.join(current, name)
+                # Resolve the same way read_located would, so a walked entry
+                # and a directly-read one agree: an entry whose last leg is
+                # an absolute symlink, a loop, or an escaping "..", is a
+                # note here rather than an ``Unreadable`` there.
+                try:
+                    resolved_file = _resolve_below_root(host_file, host_root)
+                except Unreadable as exc:
+                    listing.notes.append(f"{container_path}: {exc}")
+                    continue
+                if not _is_regular_file(resolved_file):
                     listing.notes.append(f"{container_path}: not a regular file — not listed")
                     continue
                 located = locate(workload, container_path)

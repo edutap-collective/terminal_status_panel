@@ -190,7 +190,10 @@ def test_a_symlink_leading_out_of_the_bind_source_is_not_followed(tmp_path):
     outside.write_text("x: 1\n")
     root = tmp_path / "dynamic"
     root.mkdir()
-    (root / "link.yml").symlink_to(outside)
+    # A relative escape (".." past the source root) -- an *absolute*-target
+    # symlink is refused for a different reason ("is an absolute symlink"),
+    # covered separately; see the fix-round-3 tests below.
+    (root / "link.yml").symlink_to("../secret.yml")
     located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root))), "/d/link.yml")
 
     with pytest.raises(mounts.Unreadable, match="leads outside"):
@@ -539,3 +542,104 @@ def test_a_genuinely_empty_nested_bind_directory_is_not_reported_as_unmounted(tm
 
     assert listing.files == []
     assert listing.notes == []
+
+
+# --- Fix round 3 -------------------------------------------------------
+
+
+def test_a_relative_target_through_an_absolute_intermediate_link_is_not_followed(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "t.yml").write_text("REAL\n")
+    (tmp_path / "absdir").symlink_to(real_dir)
+    (tmp_path / "via.yml").symlink_to("absdir/t.yml")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(tmp_path))), "/d/via.yml")
+
+    with pytest.raises(mounts.Unreadable, match="absolute symlink"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_an_absolute_link_nested_inside_a_relative_targets_own_target_is_not_followed(tmp_path):
+    real_dir = tmp_path / "real"
+    (real_dir / "deep").mkdir(parents=True)
+    (real_dir / "deep" / "u.yml").write_text("DEEP\n")
+    (tmp_path / "absdir").symlink_to(real_dir)
+    (tmp_path / "reldir").symlink_to("absdir/deep")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(tmp_path))), "/d/reldir/u.yml")
+
+    with pytest.raises(mounts.Unreadable, match="absolute symlink"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_dot_dot_after_a_symlinked_component_resolves_physically_not_lexically(tmp_path):
+    real_dir = tmp_path / "real"
+    (real_dir / "deep").mkdir(parents=True)
+    (real_dir / "t.yml").write_text("REAL\n")
+    # The kernel's target once "dl" is followed: real/deep/../t2.yml == real/t2.yml
+    # (an absolute symlink) -- not the *lexical* tmp_path/t2.yml decoy below, which
+    # a naive component-cancelling normpath of "dl/../t2.yml" would land on instead.
+    (real_dir / "t2.yml").symlink_to(real_dir / "t.yml")
+    (tmp_path / "t2.yml").write_text("DECOY\n")
+    (tmp_path / "dl").symlink_to("real/deep")
+    (tmp_path / "lex.yml").symlink_to("dl/../t2.yml")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(tmp_path))), "/d/lex.yml")
+
+    with pytest.raises(mounts.Unreadable, match="absolute symlink"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_relative_hop_that_climbs_above_the_source_and_back_in_is_refused(tmp_path):
+    source = tmp_path / "S"
+    (source / "real").mkdir(parents=True)
+    (source / "real" / "t.yml").write_text("REAL\n")
+    (source / "climb.yml").symlink_to("../S/real/t.yml")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(source))), "/d/climb.yml")
+
+    with pytest.raises(mounts.Unreadable, match="leads outside"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_relative_hop_back_to_the_source_root_is_followed_even_when_the_source_is_a_symlink(
+    tmp_path,
+):
+    real_root = tmp_path / "R"
+    (real_root / "sub").mkdir(parents=True)
+    (real_root / "t.yml").write_text("ROOT-T\n")
+    (real_root / "sub" / "up").symlink_to("..")
+    root_link = tmp_path / "rootlink"
+    root_link.symlink_to(real_root)
+    located = mounts.locate(
+        _workload(mounts.Mount("bind", "/d", str(root_link))), "/d/sub/up/t.yml"
+    )
+
+    assert mounts.read_located(located, configs={}, placement=HERE) == "ROOT-T\n"
+
+
+def test_a_relative_self_reference_is_followed_even_when_the_source_is_a_symlink(tmp_path):
+    real_root = tmp_path / "R"
+    real_root.mkdir()
+    (real_root / "t.yml").write_text("ROOT-T\n")
+    (real_root / "cur").symlink_to(".")
+    root_link = tmp_path / "rootlink"
+    root_link.symlink_to(real_root)
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root_link))), "/d/cur/t.yml")
+
+    assert mounts.read_located(located, configs={}, placement=HERE) == "ROOT-T\n"
+
+
+def test_a_symlink_loop_at_the_final_component_is_refused_without_hanging(tmp_path):
+    (tmp_path / "a.yml").symlink_to("b.yml")
+    (tmp_path / "b.yml").symlink_to("a.yml")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(tmp_path))), "/d/a.yml")
+
+    with pytest.raises(mounts.Unreadable, match="too many levels"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_symlink_loop_at_an_intermediate_component_is_refused_without_hanging(tmp_path):
+    (tmp_path / "d1").symlink_to("d2")
+    (tmp_path / "d2").symlink_to("d1")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(tmp_path))), "/d/d1/t.yml")
+
+    with pytest.raises(mounts.Unreadable, match="too many levels"):
+        mounts.read_located(located, configs={}, placement=HERE)
