@@ -416,3 +416,22 @@ def test_the_flag_survives_into_follow_mode(isolated_cli, monkeypatch):
     )
     cli.main(["--sections", "server", "--processes", "7", "--follow", "--no-color"])
     assert limits == [7, 7]
+
+
+def test_collect_all_passes_the_configured_match_to_the_traefik_collector(isolated_cli):
+    from terminal_status_panel.config import TraefikApiConfig
+    from terminal_status_panel.model import TraefikInfo
+
+    seen = {}
+
+    def fake(client, **kwargs):
+        seen.update(kwargs)
+        return TraefikInfo()
+
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: None)
+    isolated_cli.setattr(cli, "collect_traefik", fake)
+    cfg = Config(traefik=TraefikApiConfig(match=("demo_traefik",)))
+
+    cli.collect_all(cfg, sections=("traefik",))
+
+    assert seen["match"] == ("demo_traefik",)

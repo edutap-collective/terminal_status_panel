@@ -94,11 +94,16 @@ def candidate_paths(args: list[str], env: dict[str, str], workdir: str | None) -
     The environment is the one the workload declares; a ``HOME`` the engine
     injects at run time is not visible from here. ``./`` is only resolved
     against a declared working directory -- an image's own ``WORKDIR`` is not
-    visible either, and guessing one would invent a location.
+    visible either, and guessing one would invent a location. A relative
+    ``--configFile`` is joined onto that working directory the same way, and
+    left relative without one, for the caller to report.
     """
     paths: list[str] = []
     explicit = config_file_arg(args)
     if explicit:
+        if workdir and not posixpath.isabs(explicit):
+            # Traefik opens a relative path against its own working directory.
+            explicit = posixpath.join(workdir, explicit)
         paths.append(explicit)
     for base in _BASE_PATHS:
         expanded = _expand(base, env)

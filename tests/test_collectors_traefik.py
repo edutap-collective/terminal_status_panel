@@ -1155,3 +1155,264 @@ def test_a_relative_provider_path_without_a_working_directory_reads_nothing():
     assert info.file_provider_error == (
         "dynamic is relative and the container's working directory is not declared — not read"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Looking for the static file the way Traefik does: a candidate under a
+# bind-mounted directory is there only if the file is
+# --------------------------------------------------------------------------- #
+
+
+def _dir_based_traefik(tmp_path, args=(), task_nodes=("node-1",)):
+    """Traefik with /etc/traefik bind-mounted from a host directory."""
+    host_dir = tmp_path / "etc-traefik"
+    host_dir.mkdir()
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": list(args),
+            "Mounts": [{"Type": "bind", "Source": str(host_dir), "Target": "/etc/traefik"}],
+        },
+        task_nodes=task_nodes,
+    )
+    return service, host_dir
+
+
+def test_a_bind_mounted_directory_is_searched_for_the_extension_it_holds(tmp_path):
+    service, host_dir = _dir_based_traefik(tmp_path)
+    (host_dir / "traefik.yml").write_text(STATIC_YAML)
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["http", "https"]
+    assert info.static_source == "/etc/traefik/traefik.yml"
+    assert info.static_problem is None
+
+
+def test_a_bind_mounted_directory_without_a_static_file_leaves_the_flags_in_charge(tmp_path):
+    service, _ = _dir_based_traefik(tmp_path, args=["--entrypoints.web.address=:80"])
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+    assert info.static_source == "command-line flags"
+    assert info.static_problem is None
+
+
+def test_a_bind_mounted_directory_on_another_node_makes_the_search_undecidable(tmp_path):
+    service, host_dir = _dir_based_traefik(
+        tmp_path, args=["--entrypoints.web.address=:80"], task_nodes=("node-2",)
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_source is None
+    assert info.static_problem == (
+        f"/etc/traefik is a bind mount of {host_dir}, not readable on this node"
+        " (Traefik runs on node-2) — whether it holds traefik.toml/.yaml/.yml"
+        " cannot be checked from here"
+    )
+
+
+def test_a_volume_over_the_default_location_makes_the_search_undecidable():
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--entrypoints.web.address=:80"],
+            "Mounts": [{"Type": "volume", "Source": "traefik_conf", "Target": "/etc/traefik"}],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == (
+        "/etc/traefik is on volume traefik_conf — whether it holds traefik.toml/.yaml/.yml"
+        " cannot be checked from here"
+    )
+
+
+def test_a_missing_config_file_under_a_checkable_bind_falls_through_like_traefik(tmp_path):
+    """Traefik skips a --configFile that does not exist, tries its default
+    locations, and then takes its flags."""
+    service, _ = _dir_based_traefik(
+        tmp_path,
+        args=["--configFile=/etc/traefik/custom.yaml", "--entrypoints.web.address=:80"],
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+    assert info.static_source == "command-line flags"
+    assert info.static_problem is None
+
+
+# --------------------------------------------------------------------------- #
+# 0.12.2's texts in the unchanged shape
+# --------------------------------------------------------------------------- #
+
+
+def test_an_undecodable_config_in_the_flags_and_config_shape_keeps_the_old_text():
+    class _Undecodable:
+        name = "traefik_dynamic_yml_v3"
+        attrs = {"Spec": {"Data": "not base64 %%%"}}
+
+    service = _SpecService(
+        "traefik_traefik",
+        {
+            "Args": ["--entrypoints.https.address=:443", "--providers.file.directory=/dynamic/"],
+            "Configs": [
+                {
+                    "ConfigName": "traefik_dynamic_yml_v3",
+                    "File": {"Name": "/dynamic/00-cluster.yml"},
+                }
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service], configs=[_Undecodable()]))
+
+    assert info.routers == []
+    assert info.file_provider_error == "traefik_dynamic_yml_v3: config data is not decodable"
+
+
+# --------------------------------------------------------------------------- #
+# A relative --configFile
+# --------------------------------------------------------------------------- #
+
+
+def test_a_relative_config_file_is_resolved_against_the_declared_working_directory(tmp_path):
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--configFile=traefik.yaml"],
+            "Dir": "/etc/traefik",
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Target": "/etc/traefik/traefik.yaml",
+                }
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["http", "https"]
+    assert info.static_source == "/etc/traefik/traefik.yaml"
+
+
+def test_a_relative_config_file_without_a_working_directory_is_not_guessed():
+    service = _SpecService(
+        "demo_traefik",
+        {"Args": ["--configFile=traefik.yaml", "--entrypoints.web.address=:80"]},
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == (
+        "--configFile=traefik.yaml is relative and the container's working directory"
+        " is not declared — not read"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Never raises: shapes the Docker API should not send, but might
+# --------------------------------------------------------------------------- #
+
+
+def test_a_tasks_listing_of_the_wrong_shape_counts_as_not_here(tmp_path):
+    service = _file_based_traefik(tmp_path)
+    service.tasks = lambda filters=None: None
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert "not readable on this node" in info.static_problem
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"Mounts": 5},
+        {"Configs": 5},
+        {"Args": 5},
+        {"Dir": 5},
+        {"Mounts": [{"Type": "bind", "Source": 5, "Target": "/etc/traefik/traefik.yaml"}]},
+        {"Mounts": [{"Type": "bind", "Source": "/srv/traefik", "Target": 5}]},
+    ],
+    ids=["mounts", "configs", "args", "dir", "source", "target"],
+)
+def test_a_traefik_spec_of_the_wrong_shape_is_ignored_not_raised(spec):
+    service = _SpecService("demo_traefik", {"Env": ["TRAEFIK_ENTRYPOINTS_WEB_ADDRESS=:80"], **spec})
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.error is None
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+def test_an_unexpected_failure_reading_traefik_s_configuration_is_a_problem(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(collector, "candidate_paths", boom)
+    traefik = _SpecService("demo_traefik", {"Args": ["--entrypoints.web.address=:80"]})
+    app = _FakeService("demo_app", labels={"traefik.http.routers.app.entrypoints": "web"})
+
+    info = collector.collect_traefik(_NodeClient(services=[traefik, app]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == "Traefik's configuration could not be read: RuntimeError: boom"
+    # The labels were read before, and stay.
+    assert [r.name for r in info.routers] == ["app"]
+
+
+# --------------------------------------------------------------------------- #
+# Paths the first round left untested
+# --------------------------------------------------------------------------- #
+
+
+def test_an_unparseable_static_file_names_the_parser_s_reason(tmp_path):
+    from terminal_status_panel.collectors.traefik_static import parse_static_document
+
+    broken = "entryPoints: [unclosed\n"
+    service = _file_based_traefik(tmp_path)
+    (tmp_path / "traefik.yaml").write_text(broken)
+    with pytest.raises(ValueError) as parsed:
+        parse_static_document(broken, "yaml")
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == f"/etc/traefik/traefik.yaml: {parsed.value}"
+
+
+def test_a_static_file_without_entrypoints_says_so_and_the_provider_is_still_read(tmp_path):
+    service = _file_based_traefik(tmp_path)
+    (tmp_path / "traefik.yaml").write_text(
+        "providers:\n  file:\n    directory: /etc/traefik/dynamic\n"
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == "/etc/traefik/traefik.yaml declares no entrypoints"
+    assert "tools-auth" in info.middlewares
+
+
+def test_a_matching_service_wins_over_a_matching_container():
+    service = _SpecService("demo_traefik", {"Args": ["--entrypoints.web.address=:80"]})
+    container = _FakeContainer("demo_traefik-compose-1")
+    container.attrs["Args"] = ["--entrypoints.other.address=:81"]
+
+    info = collector.collect_traefik(
+        _NodeClient(services=[service], containers=[container]), match=("demo_traefik",)
+    )
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]

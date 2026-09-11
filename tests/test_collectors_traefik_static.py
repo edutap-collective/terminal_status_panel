@@ -158,3 +158,14 @@ def test_flags_beside_the_config_file_are_counted():
 
     assert static.ignored_flags(args) == 2
     assert static.ignored_flags(["--configFile=/t.yml"]) == 0
+
+
+def test_a_relative_config_file_is_anchored_to_the_declared_working_directory():
+    paths = static.candidate_paths(["--configFile=conf/traefik.yaml"], {}, "/etc/traefik")
+
+    assert paths[0] == "/etc/traefik/conf/traefik.yaml"
+
+
+def test_a_relative_config_file_stays_relative_without_a_working_directory():
+    """Left for the caller to report: guessing a directory would invent a location."""
+    assert static.candidate_paths(["--configFile=traefik.yaml"], {}, None)[0] == "traefik.yaml"

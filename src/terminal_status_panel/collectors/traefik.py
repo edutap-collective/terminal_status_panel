@@ -17,6 +17,7 @@ import base64
 import posixpath
 import ssl
 from contextlib import contextmanager
+from typing import Any
 
 import httpx2
 
@@ -31,6 +32,7 @@ from .traefik_mounts import (
     Workload,
     format_of,
     locate,
+    presence,
     provider_files,
     read_located,
     workload_from_container,
@@ -162,11 +164,13 @@ def _matches(name: str, match: tuple[str, ...]) -> bool:
     return any(pattern in name for pattern in match)
 
 
-def _absorb_swarm_services(client, info: TraefikInfo, match: tuple[str, ...]) -> Workload | None:
-    """List Swarm services, take their wiring, and return the Traefik workload.
+def _absorb_swarm_services(client, info: TraefikInfo, match: tuple[str, ...]) -> Any:
+    """List Swarm services, take their wiring, and return the Traefik service.
 
     ``None`` when the listing failed or no service matched *match*. Last match
-    wins, as it did before.
+    wins, as it did before. The service is returned as docker-py handed it:
+    turning it into a ``Workload`` is part of reading Traefik's own
+    configuration, which the caller guards.
     """
     try:
         services = client.services.list()
@@ -179,13 +183,13 @@ def _absorb_swarm_services(client, info: TraefikInfo, match: tuple[str, ...]) ->
         return None
 
     info.reachable = True
-    workload: Workload | None = None
+    traefik = None
     for service in services:
         name = getattr(service, "name", "") or ""
         if _matches(name, match):
-            workload = workload_from_service(service)
+            traefik = service
         _absorb(info, parse_labels(_labels_of(service), origin=name))
-    return workload
+    return traefik
 
 
 def _list_containers(client, info: TraefikInfo) -> list:
@@ -231,13 +235,13 @@ def _absorb_containers(info: TraefikInfo, containers: list) -> None:
         _absorb(info, parse_labels(labels, origin=name, docker_name=compose_identity(labels, name)))
 
 
-def _traefik_container(containers: list, match: tuple[str, ...]) -> Workload | None:
+def _traefik_container(containers: list, match: tuple[str, ...]) -> Any:
     """A plain (non-Swarm) Traefik container, when no Swarm service matched."""
     for container in containers:
         if SWARM_SERVICE_LABEL in container_labels(container):
             continue
         if _matches(getattr(container, "name", "") or "", match):
-            return workload_from_container(container)
+            return container
     return None
 
 
@@ -280,9 +284,9 @@ def _node_name(client, node_id: str) -> str:
 def _runs_here(client, workload: Workload) -> tuple[bool, str | None]:
     """Whether a running task of *workload* is on this node, and where it is if not.
 
-    Anything that cannot be asked counts as "not here": a bind mount is then
-    reported as unreadable rather than read from a host that may not be the
-    one Traefik runs on.
+    Anything that cannot be asked, or answers in a shape that cannot be read,
+    counts as "not here": a bind mount is then reported as unreadable rather
+    than read from a host that may not be the one Traefik runs on.
     """
     if workload.service is None:
         # A plain container runs on the daemon that listed it.
@@ -290,27 +294,87 @@ def _runs_here(client, workload: Workload) -> tuple[bool, str | None]:
     try:
         node_id = ((client.info() or {}).get("Swarm") or {}).get("NodeID")
         tasks = workload.service.tasks(filters={"desired-state": "running"})
+        nodes = [
+            task.get("NodeID") for task in tasks if isinstance(task, dict) and task.get("NodeID")
+        ]
     except Exception:
         return False, None
-    nodes = [task.get("NodeID") for task in tasks if isinstance(task, dict) and task.get("NodeID")]
     if node_id and node_id in nodes:
         return True, None
     return False, (_node_name(client, nodes[0]) if nodes else None)
 
 
+def _unchecked_names(paths: list[str], index: int, target: str, explicit: bool) -> str:
+    """The file names an undecidable check leaves open, relative to the mount *target*.
+
+    For ``--configFile``, its one name. For a default location, every
+    extension Traefik would still try there: ``traefik.toml/.yaml/.yml``.
+    """
+    path = paths[index]
+    name = posixpath.relpath(path, posixpath.normpath(target))
+    if name == posixpath.curdir:
+        name = posixpath.basename(path)
+    if explicit:
+        return name
+    stem = posixpath.splitext(path)[0]
+    extensions = dict.fromkeys(
+        posixpath.splitext(later)[1]
+        for later in paths[index:]
+        if posixpath.splitext(later)[0] == stem
+    )
+    return posixpath.splitext(name)[0] + "/".join(extensions)
+
+
+def _find_static_file(workload: Workload, placement: Placement) -> Located | str | None:
+    """The file Traefik reads its static configuration from, searched as Traefik searches.
+
+    Returns the located file; a sentence saying why the search cannot be
+    decided from here; or ``None`` when there is no file, and the flags or
+    the environment apply. A candidate that is not there is passed over, as
+    Traefik passes over it -- a missing ``--configFile`` included. One that no
+    mount provides counts as not there, except ``--configFile``: that one may
+    live in the image, so it cannot be decided either way.
+    """
+    explicit = config_file_arg(workload.args)
+    explicit_index = 0 if explicit else -1
+    paths = candidate_paths(workload.args, workload.env, workload.workdir)
+    if explicit and not posixpath.isabs(paths[0]):
+        return (
+            f"--configFile={explicit} is relative and the container's working directory"
+            " is not declared — not read"
+        )
+    for index, path in enumerate(paths):
+        located = locate(workload, path)
+        mount = located.mount
+        if mount is None:
+            if index == explicit_index:
+                return (
+                    f"--configFile={explicit} is not mounted — it may be part of the image,"
+                    " or absent (then Traefik falls back to its default locations and flags)"
+                )
+            continue
+        found = presence(located, placement=placement)
+        if found.state == "present":
+            return located
+        if found.state == "unknown":
+            names = _unchecked_names(paths, index, mount.target, index == explicit_index)
+            return f"{found.reason} — whether it holds {names} cannot be checked from here"
+    return None
+
+
 def _read_static_file(
     info: TraefikInfo,
     workload: Workload,
-    path: str,
     located: Located,
     configs: dict[str, str | None],
     placement: Placement,
 ) -> StaticConfig:
-    """The static file Traefik would read at *path*, or the reason it cannot be read here.
+    """The static file Traefik reads, or the reason it cannot be read here.
 
     Never the flags instead: Traefik reads the file, and the flags would show
     a configuration it ignores.
     """
+    path = located.path
     try:
         text = read_located(located, configs=configs, placement=placement)
         static = parse_static_document(text, format_of(path) or "yaml")
@@ -337,22 +401,16 @@ def _read_static(
 ) -> StaticConfig:
     """The static configuration, from the source Traefik itself would use.
 
-    The first file found wins; a candidate path that no mount provides is
-    passed over, as Traefik passes over a file that does not exist -- except
-    the one named by ``--configFile``, which may live in the image and so
-    cannot be decided either way.
+    The first file found, else the flags, else the ``TRAEFIK_`` variables. A
+    search that cannot be decided draws nothing: the flags would show a
+    configuration Traefik may be ignoring.
     """
-    explicit = config_file_arg(workload.args)
-    for path in candidate_paths(workload.args, workload.env, workload.workdir):
-        located = locate(workload, path)
-        if located.mount is not None:
-            return _read_static_file(info, workload, path, located, configs, placement)
-        if path == explicit:
-            info.static_problem = (
-                f"--configFile={explicit} is not mounted — it may be part of the image,"
-                " or absent (then Traefik falls back to its default locations and flags)"
-            )
-            return StaticConfig()
+    found = _find_static_file(workload, placement)
+    if isinstance(found, str):
+        info.static_problem = found
+        return StaticConfig()
+    if found is not None:
+        return _read_static_file(info, workload, found, configs, placement)
     if workload.args:
         info.static_source = "command-line flags"
         return parse_static_args(workload.args)
@@ -486,16 +544,19 @@ def _absorb_located(
 ) -> None:
     """Take the wiring of one file the provider path selects, config or host file."""
     mount = located.mount
+    is_config = mount is not None and mount.kind == "config"
     # A config keeps its name as the origin, as it always has; a host file is
     # named by its host path, which is where somebody would go to edit it.
-    if mount is not None and mount.kind == "config":
+    if mount is not None and is_config:
         origin = mount.source
     else:
         origin = located.host_path or located.path
     try:
         text = read_located(located, configs=configs, placement=placement)
     except Unreadable as exc:
-        _note_file_provider_error(info, f"{located.path}: {exc}")
+        # A config's reason already names the config, in the words 0.12.2
+        # used; any other mount is named by its path in the container.
+        _note_file_provider_error(info, str(exc) if is_config else f"{located.path}: {exc}")
         return
     if is_templated(text):
         _note_file_provider_error(info, f"{origin}: templated — not evaluated")
@@ -553,6 +614,27 @@ def _absorb_workload(client, info: TraefikInfo, workload: Workload, configs: lis
     _absorb_generations(info, configs, mounted)
 
 
+def _absorb_traefik(client, info: TraefikInfo, service: Any, container: Any, configs: list) -> None:
+    """Read Traefik's own configuration; a failure nobody foresaw is a problem, not a crash.
+
+    Everything below is written not to raise. This guard is for the shape
+    nobody thought of: it keeps the promise that the collector never raises,
+    and says what happened instead of drawing half a tree.
+    """
+    try:
+        if service is not None:
+            workload = workload_from_service(service)
+        else:
+            workload = workload_from_container(container)
+        _absorb_workload(client, info, workload, configs)
+    except Exception as exc:
+        info.entrypoints = []
+        info.ping_entrypoint = None
+        info.static_problem = (
+            f"Traefik's configuration could not be read: {type(exc).__name__}: {exc}"
+        )
+
+
 def _absorb(info: TraefikInfo, parsed) -> None:
     """Merge one parser's routers, middlewares and service references."""
     routers, middlewares, refs = parsed
@@ -580,7 +662,7 @@ def collect_traefik(
     """
     info = TraefikInfo()
     with _socket_timeout(client, timeout):
-        workload = _absorb_swarm_services(client, info, match)
+        service = _absorb_swarm_services(client, info, match)
         containers = _list_containers(client, info)
         if not info.reachable:
             # Both listings failed: there is no wiring left to show, unlike
@@ -588,19 +670,18 @@ def collect_traefik(
             info.error = _combined_listing_error(info.service_error, info.container_error)
             return info
         _absorb_containers(info, containers)
-        if workload is None:
-            workload = _traefik_container(containers, match)
+        container = _traefik_container(containers, match) if service is None else None
         configs = _list_configs(client, info)
         # The file reads happen inside the timeout too: where Traefik runs is
         # a Docker call, and host files are bounded by the mount resolver's
         # own size and count limits.
-        if workload is None:
+        if service is None and container is None:
             info.static_problem = (
                 f"no Traefik service or container matches traefik.match ({', '.join(match)})"
             )
             _absorb_generations(info, configs, None)
         else:
-            _absorb_workload(client, info, workload, configs)
+            _absorb_traefik(client, info, service, container, configs)
 
     info.routers.sort(key=lambda r: (r.source != "swarm", r.name))
     return info

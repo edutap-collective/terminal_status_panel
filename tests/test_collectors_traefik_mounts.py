@@ -752,3 +752,169 @@ def test_a_bind_mount_with_an_empty_source_is_unreadable_not_a_value_error():
 
     with pytest.raises(mounts.Unreadable, match="empty source"):
         _read(workload, "/d")
+
+
+# --- Presence: whether a candidate file is there -------------------------
+
+
+def _under_etc_traefik(source, path="/etc/traefik/traefik.yml", kind="bind"):
+    return mounts.locate(_workload(mounts.Mount(kind, "/etc/traefik", str(source))), path)
+
+
+def test_a_config_is_present_on_any_node():
+    workload = _workload(mounts.Mount("config", "/etc/traefik/traefik.yml", "static_v1"))
+    located = mounts.locate(workload, "/etc/traefik/traefik.yml")
+
+    assert mounts.presence(located, placement=ELSEWHERE) == mounts.Presence("present")
+
+
+def test_a_bind_aimed_exactly_at_the_path_is_present_on_any_node():
+    workload = _workload(mounts.Mount("bind", "/etc/traefik/traefik.yml", "/srv/t.yml"))
+    located = mounts.locate(workload, "/etc/traefik/traefik.yml")
+
+    assert mounts.presence(located, placement=ELSEWHERE) == mounts.Presence("present")
+
+
+def test_a_file_under_a_bind_directory_is_present_when_it_is_there(tmp_path):
+    (tmp_path / "traefik.yml").write_text("")
+
+    result = mounts.presence(_under_etc_traefik(tmp_path), placement=HERE)
+
+    assert result == mounts.Presence("present")
+
+
+def test_a_file_under_a_bind_directory_is_absent_when_it_is_not_there(tmp_path):
+    result = mounts.presence(_under_etc_traefik(tmp_path), placement=HERE)
+
+    assert result == mounts.Presence("absent")
+
+
+def test_a_missing_intermediate_directory_is_absent_too(tmp_path):
+    located = _under_etc_traefik(tmp_path, path="/etc/traefik/.config/traefik.toml")
+
+    assert mounts.presence(located, placement=HERE) == mounts.Presence("absent")
+
+
+def test_a_dangling_relative_link_is_absent_as_a_stat_sees_it(tmp_path):
+    (tmp_path / "traefik.yml").symlink_to("gone.yml")
+
+    assert mounts.presence(_under_etc_traefik(tmp_path), placement=HERE) == mounts.Presence(
+        "absent"
+    )
+
+
+def test_a_bind_directory_on_another_node_cannot_be_checked(tmp_path):
+    result = mounts.presence(_under_etc_traefik(tmp_path), placement=ELSEWHERE)
+
+    assert result == mounts.Presence(
+        "unknown",
+        f"/etc/traefik is a bind mount of {tmp_path}, not readable on this node"
+        " (Traefik runs on swarm01-wrk-02)",
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,source,reason",
+    [
+        ("volume", "traefik_conf", "/etc/traefik is on volume traefik_conf"),
+        ("tmpfs", "", "/etc/traefik is on a tmpfs mount"),
+    ],
+)
+def test_volumes_and_tmpfs_cannot_be_checked(kind, source, reason):
+    located = _under_etc_traefik(source, kind=kind)
+
+    assert mounts.presence(located, placement=HERE) == mounts.Presence("unknown", reason)
+
+
+def test_an_unmounted_path_cannot_be_checked():
+    located = mounts.locate(_workload(), "/etc/traefik/traefik.yml")
+
+    assert mounts.presence(located, placement=HERE) == mounts.Presence(
+        "unknown", "/etc/traefik/traefik.yml is not mounted"
+    )
+
+
+def test_an_absolute_link_at_the_candidate_cannot_be_checked(tmp_path):
+    (tmp_path / "traefik.yml").symlink_to("/etc/hosts")
+
+    result = mounts.presence(_under_etc_traefik(tmp_path), placement=HERE)
+
+    assert result.state == "unknown"
+    assert result.reason.startswith(f"/etc/traefik is a bind mount of {tmp_path}, ")
+    assert "absolute symlink" in result.reason
+
+
+def test_a_check_that_is_refused_is_unknown_not_absent(tmp_path):
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("permission bits do not apply to root")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        located = _under_etc_traefik(tmp_path, path="/etc/traefik/locked/traefik.yml")
+
+        result = mounts.presence(located, placement=HERE)
+
+        assert result.state == "unknown"
+        assert "Permission denied" in result.reason
+    finally:
+        locked.chmod(0o700)
+
+
+# --- Shapes the Docker API should not send, but might -----------------------
+
+
+def test_a_service_spec_of_the_wrong_shape_is_ignored():
+    workload = mounts.workload_from_service(
+        _Service({"Args": 5, "Env": 5, "Mounts": 5, "Configs": 5, "Dir": 5})
+    )
+
+    assert (workload.args, workload.env, workload.mounts, workload.workdir) == ([], {}, [], None)
+
+
+def test_service_mount_entries_with_non_string_fields_are_dropped():
+    service = _Service(
+        {
+            "Mounts": [
+                {"Type": "bind", "Source": 5, "Target": "/a"},
+                {"Type": "bind", "Source": "/srv/b", "Target": 5},
+                "junk",
+                {"Type": "tmpfs", "Target": "/tmp"},
+                {"Type": "bind", "Source": "/srv/ok", "Target": "/ok"},
+            ],
+            "Configs": [{"ConfigName": "c", "File": {"Name": 5}}, 7, {"ConfigName": 5}],
+        }
+    )
+
+    workload = mounts.workload_from_service(service)
+
+    assert workload.mounts == [
+        mounts.Mount("tmpfs", "/tmp", ""),
+        mounts.Mount("bind", "/ok", "/srv/ok"),
+        mounts.Mount("config", "/c", "c"),
+    ]
+
+
+def test_a_container_inspect_of_the_wrong_shape_is_ignored():
+    workload = mounts.workload_from_container(
+        _Container({"Args": 5, "Mounts": 5, "Config": {"WorkingDir": 5, "Env": 5}})
+    )
+
+    assert (workload.args, workload.env, workload.mounts, workload.workdir) == ([], {}, [], None)
+
+
+def test_container_mount_entries_with_non_string_fields_are_dropped():
+    container = _Container(
+        {
+            "Mounts": [
+                {"Type": "bind", "Source": 5, "Destination": "/a"},
+                {"Type": "volume", "Name": 5, "Destination": "/v"},
+                {"Type": "bind", "Source": "/srv/b", "Destination": 5},
+                {"Type": "bind", "Source": "/srv/ok", "Destination": "/ok"},
+            ]
+        }
+    )
+
+    workload = mounts.workload_from_container(container)
+
+    assert workload.mounts == [mounts.Mount("bind", "/ok", "/srv/ok")]

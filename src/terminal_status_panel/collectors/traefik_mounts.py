@@ -17,7 +17,7 @@ import os
 import posixpath
 import stat
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from .traefik_static import FileProvider
 
@@ -71,32 +71,55 @@ def _args(raw: object) -> list[str]:
     return [str(arg) for arg in raw] if isinstance(raw, list) else []
 
 
+def _entries(raw: object) -> list[dict]:
+    """The mappings in *raw* when it is a list, nothing otherwise.
+
+    The Docker API sends a list of mappings here. Any other shape is one it
+    should not send, and is ignored rather than allowed to raise out of the
+    collector.
+    """
+    return [entry for entry in raw if isinstance(entry, dict)] if isinstance(raw, list) else []
+
+
+def _text(raw: object) -> str | None:
+    """*raw* when it is a non-empty string, ``None`` otherwise."""
+    return raw if isinstance(raw, str) and raw else None
+
+
+def _mount(kind: object, target: object, source: object) -> Mount | None:
+    """One mount, or ``None`` when its target or its source is not a string.
+
+    An absent source is an empty one -- a tmpfs mount has none.
+    """
+    if not isinstance(target, str) or not target:
+        return None
+    if source is not None and not isinstance(source, str):
+        return None
+    return Mount(str(kind or "").lower(), target, source or "")
+
+
 def workload_from_service(service: Any) -> Workload:
     """The Traefik workload as a Swarm service declares it."""
     spec = _mapping(_mapping(getattr(service, "attrs", None)).get("Spec"))
     container = _mapping(_mapping(spec.get("TaskTemplate")).get("ContainerSpec"))
     items: list[Mount] = []
-    for raw in container.get("Mounts") or []:
-        entry = _mapping(raw)
-        target = entry.get("Target")
-        if isinstance(target, str) and target:
-            kind = str(entry.get("Type") or "").lower()
-            source = str(entry.get("Source") or "")
-            items.append(Mount(kind, target, source))
-    for raw in container.get("Configs") or []:
-        entry = _mapping(raw)
-        name = entry.get("ConfigName")
-        if not isinstance(name, str) or not name:
+    for entry in _entries(container.get("Mounts")):
+        mount = _mount(entry.get("Type"), entry.get("Target"), entry.get("Source"))
+        if mount is not None:
+            items.append(mount)
+    for entry in _entries(container.get("Configs")):
+        name = _text(entry.get("ConfigName"))
+        if name is None:
             continue
-        file_name = _mapping(entry.get("File")).get("Name") or name
+        file_name = _text(_mapping(entry.get("File")).get("Name")) or name
         # The daemon uses an absolute name as-is and joins a relative one onto
         # "/" (moby daemon/container/container.go, docker-v29.8.0).
-        items.append(Mount("config", posixpath.join("/", str(file_name)), name))
+        items.append(Mount("config", posixpath.join("/", file_name), name))
     return Workload(
         name=getattr(service, "name", "") or "",
         args=_args(container.get("Args")),
         env=_env(container.get("Env")),
-        workdir=container.get("Dir") or None,
+        workdir=_text(container.get("Dir")),
         mounts=items,
         service=service,
     )
@@ -107,19 +130,17 @@ def workload_from_container(container: Any) -> Workload:
     attrs = _mapping(getattr(container, "attrs", None))
     config = _mapping(attrs.get("Config"))
     items: list[Mount] = []
-    for raw in attrs.get("Mounts") or []:
-        entry = _mapping(raw)
-        target = entry.get("Destination")
-        if not isinstance(target, str) or not target:
-            continue
+    for entry in _entries(attrs.get("Mounts")):
         kind = str(entry.get("Type") or "").lower()
         source = entry.get("Name") if kind == "volume" else entry.get("Source")
-        items.append(Mount(kind, target, str(source or "")))
+        mount = _mount(kind, entry.get("Destination"), source)
+        if mount is not None:
+            items.append(mount)
     return Workload(
         name=getattr(container, "name", "") or "",
         args=_args(attrs.get("Args")),
         env=_env(config.get("Env")),
-        workdir=config.get("WorkingDir") or None,
+        workdir=_text(config.get("WorkingDir")),
         mounts=items,
     )
 
@@ -202,18 +223,30 @@ def _os_error_text(exc: OSError | ValueError) -> str:
 _MAX_SYMLINK_HOPS = 40
 
 
+class _MissingComponent(Unreadable):
+    """A component above the final one does not exist, so neither does the path.
+
+    It carries the message ``Unreadable`` always carried there, so a read
+    reports it exactly as before; only ``presence`` tells it apart, because
+    for Traefik's file search a missing directory means "not there".
+    """
+
+
 def _lstat_or_defer(candidate: str, path: str, *, is_final: bool) -> os.stat_result | None:
     """``lstat`` *candidate*, or ``None`` to defer a missing *final* component.
 
     A missing final component is not reported here -- the ordinary open()
     failure that follows resolution reports "no such file" in its usual
-    wording. Any other failure, at any position, is reported immediately.
+    wording. A missing component above it is ``_MissingComponent``; any other
+    failure, at any position, is reported immediately.
     """
     try:
         return os.lstat(candidate)
     except (OSError, ValueError) as exc:
-        if isinstance(exc, FileNotFoundError) and is_final:
-            return None
+        if isinstance(exc, FileNotFoundError):
+            if is_final:
+                return None
+            raise _MissingComponent(f"{path}: {_os_error_text(exc)}") from exc
         raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
 
 
@@ -356,6 +389,65 @@ def read_located(located: Located, *, configs: dict[str, str | None], placement:
     if mount.kind == "volume":
         raise Unreadable(f"on volume {mount.source} — not readable")
     raise Unreadable(f"on a {mount.kind or 'unknown'} mount — not readable")
+
+
+@dataclass(frozen=True)
+class Presence:
+    """Whether a located file is there, as far as this node can tell."""
+
+    #: ``"unknown"`` when the mount in the way cannot be checked from here.
+    state: Literal["present", "absent", "unknown"]
+    #: For ``"unknown"``: the mount in the way, and why it cannot be checked.
+    reason: str | None = None
+
+
+def presence(located: Located, *, placement: Placement) -> Presence:
+    """Whether *located* exists inside the container -- measured where that can be done.
+
+    A config, and a bind mount aimed exactly at the path, are there by
+    definition; whether they can be *read* is ``read_located``'s question. A
+    path under a bind-mounted directory is there only if the file is: that is
+    measured on this node, through the resolver a read uses, so the symlink
+    rules are the same. Anything else -- a bind directory on another node, a
+    volume, a tmpfs, a check that fails for any reason but "does not exist",
+    or no mount at all -- cannot be checked from here.
+    """
+    mount = located.mount
+    if mount is None:
+        return Presence("unknown", f"{located.path} is not mounted")
+    target = posixpath.normpath(mount.target)
+    if mount.kind == "config" or (mount.kind == "bind" and located.path == target):
+        return Presence("present")
+    if mount.kind == "volume":
+        return Presence("unknown", f"{target} is on volume {mount.source}")
+    if mount.kind != "bind":
+        return Presence("unknown", f"{target} is on a {mount.kind or 'unknown'} mount")
+    if not placement.here:
+        return Presence(
+            "unknown", f"{target} is a bind mount of {mount.source}, {_not_here_reason(placement)}"
+        )
+    return _bind_presence(located.host_path or mount.source, mount, target)
+
+
+def _bind_presence(host_path: str, mount: Mount, target: str) -> Presence:
+    """Whether *host_path*, below the bind *mount*, exists on this node.
+
+    Only "does not exist" -- at the file or at a directory above it -- makes
+    it absent, as only that makes Traefik move on to its next candidate.
+    """
+    try:
+        os.stat(_resolve_below_root(host_path, mount.source))
+    except (_MissingComponent, FileNotFoundError):
+        return Presence("absent")
+    except Unreadable as exc:
+        reason = str(exc)
+    except (OSError, ValueError) as exc:
+        reason = f"{host_path}: {_os_error_text(exc)}"
+    else:
+        return Presence("present")
+    return Presence(
+        "unknown", f"{target} is a bind mount of {mount.source}, and checking it failed: {reason}"
+    )
 
 
 def format_of(path: str) -> str | None:
