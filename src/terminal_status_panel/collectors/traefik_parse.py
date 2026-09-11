@@ -21,7 +21,8 @@ _ENTRYPOINT_ADDRESS = re.compile(
 )
 
 
-def _port_of(address: str) -> int | None:
+def port_of(address: str) -> int | None:
+    """Extract the port number from an address string like ':80' or 'localhost:443'."""
     _, _, tail = address.rpartition(":")
     try:
         return int(tail)
@@ -52,7 +53,7 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
             continue
         seen.add(name)
         address = match.group("address")
-        found.append(TraefikEntrypoint(name=name, address=address, port=_port_of(address)))
+        found.append(TraefikEntrypoint(name=name, address=address, port=port_of(address)))
     return found
 
 
