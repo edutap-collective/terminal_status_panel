@@ -657,6 +657,15 @@ def _absorb(info: TraefikInfo, parsed) -> None:
     info.services.update(refs)
 
 
+def _swarm_active(client) -> bool:
+    """Whether this daemon is part of an active Swarm -- ``False`` when that cannot be asked."""
+    try:
+        swarm = (client.info() or {}).get("Swarm") or {}
+        return swarm.get("LocalNodeState") == "active"
+    except Exception:
+        return False
+
+
 def collect_traefik(
     client, timeout: float = 5.0, match: tuple[str, ...] = DEFAULT_TRAEFIK_MATCH
 ) -> TraefikInfo:
@@ -691,10 +700,14 @@ def collect_traefik(
         _absorb_containers(info, containers)
         container = _traefik_container(containers, match) if service is None else None
         # Swarm configs exist only on a Swarm daemon. When the services listing
-        # failed, asking for configs fails the same way and would blame the
-        # file provider for a Compose-only host; on a Swarm daemon nothing
-        # changes.
-        configs = _list_configs(client, info) if info.service_error is None else []
+        # failed, the daemon is asked once whether Swarm is active: a worker --
+        # which can never list services -- or a manager whose listing failed
+        # lists configs exactly as 0.12.2 did, and a failure there is reported
+        # as it always was. Where Swarm is not active, or that cannot be asked,
+        # configs are not asked for: the "not a swarm manager" answer would
+        # blame the file provider for a Compose-only host.
+        list_configs = info.service_error is None or _swarm_active(client)
+        configs = _list_configs(client, info) if list_configs else []
         # The file reads happen inside the timeout too: where Traefik runs is
         # a Docker call, and host files are bounded by the mount resolver's
         # own size and count limits.

@@ -263,10 +263,14 @@ otherwise vanish from the panel silently. Instead it gets its own
 refers to that do not exist, its rule, and the service it would have pointed
 at.
 
-When the file provider could not be read — the Docker configs backing it
-could not be listed, or a file under it could not be read, parsed or
-evaluated — a `file provider unreadable: …` warning appears above the tree:
-a partial-read failure, distinct from the routers simply being empty. It
+When the file provider could not be read in full, a `file provider
+unreadable: …` warning appears above the tree. The reasons include, for
+example, Docker configs that could not be listed; a file under it that could
+not be read, parsed or evaluated; a relative provider path with no declared
+working directory; a Traefik service that was not found, so which config
+generations are live is unknown; and a listing that stopped at its file or
+directory-entry limit. It is a partial-read failure, distinct from the
+routers simply being empty. It
 names the first failure and counts the others, `(+N more)`, rather than
 dropping them; `TraefikInfo.file_provider_notes` holds every one. Because
 `api` and `ping-router` live only in the file provider, this warning is the
@@ -420,8 +424,14 @@ reports itself active and the services listing still failed — a Swarm
 manager or worker that genuinely could not be queried, which is worth a
 line precisely because it is not supposed to happen.
 
-For the same reason, Docker configs are not asked for at all when the
-services listing failed. They exist only on a Swarm daemon, and on a
-Compose-only host the same answer would otherwise read as an unreadable file
-provider — although the bind-mounted files Traefik actually reads there were
-read fine. On a Swarm daemon configs are listed as before.
+For the same reason, Docker configs are asked for only where Swarm is
+active. When the services listing succeeded, they are listed as before. When
+it failed, the panel asks `docker info` once: where Swarm is active — a
+worker, which can never list services, or a manager whose listing failed —
+configs are listed exactly as 0.12.2 listed them, and a failure there reads
+`file provider unreadable: …` as it always has. Where Swarm is not active,
+or `docker info` itself fails, configs are not asked for at all: they exist
+only on a Swarm daemon, and on a Compose-only host the "not a swarm manager"
+answer would otherwise read as an unreadable file provider — although the
+bind-mounted files Traefik actually reads there were read fine. On a Swarm
+daemon, then, configs are listed as before.

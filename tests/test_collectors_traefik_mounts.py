@@ -943,7 +943,9 @@ def test_a_file_swapped_for_a_symlink_after_resolution_is_not_followed(tmp_path,
     with pytest.raises(mounts.Unreadable) as caught:
         mounts.read_located(located, configs={}, placement=HERE)
 
-    assert str(caught.value).startswith(f"{root / 'a.yml'}: ")
+    assert str(caught.value) == (
+        f"{root / 'a.yml'} changed to a symlink after it was checked — not followed"
+    )
 
 
 def test_a_directory_swapped_for_a_symlink_after_resolution_is_not_followed(tmp_path, monkeypatch):
@@ -968,7 +970,59 @@ def test_a_directory_swapped_for_a_symlink_after_resolution_is_not_followed(tmp_
     with pytest.raises(mounts.Unreadable) as caught:
         mounts.read_located(located, configs={}, placement=HERE)
 
-    assert str(caught.value).startswith(f"{root / 'sub' / 'a.yml'}: ")
+    assert str(caught.value) == (
+        f"{root / 'sub'} changed to a symlink after it was checked — not followed"
+    )
+
+
+def test_a_symlink_refusal_reported_as_too_many_links_is_named_as_the_swap(tmp_path, monkeypatch):
+    """FreeBSD's open(2) answers O_NOFOLLOW on a symlink with EMLINK, "Too
+    many links" -- a reason that would be false here."""
+    import errno
+
+    root = tmp_path / "dyn"
+    root.mkdir()
+    (root / "a.yml").write_text("REAL\n")
+    real_open = os.open
+
+    def freebsd_open(path, flags, *args, dir_fd=None, **kwargs):
+        if dir_fd is not None and flags & os.O_NOFOLLOW and path == "a.yml":
+            raise OSError(errno.EMLINK, os.strerror(errno.EMLINK))
+        return real_open(path, flags, *args, dir_fd=dir_fd, **kwargs)
+
+    monkeypatch.setattr(mounts.os, "open", freebsd_open)
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root))), "/d/a.yml")
+
+    with pytest.raises(mounts.Unreadable) as caught:
+        mounts.read_located(located, configs={}, placement=HERE)
+
+    assert str(caught.value) == (
+        f"{root / 'a.yml'} changed to a symlink after it was checked — not followed"
+    )
+
+
+def test_a_directory_swapped_for_a_plain_file_keeps_the_kernel_s_reason(tmp_path, monkeypatch):
+    import errno
+
+    root = tmp_path / "dyn"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "a.yml").write_text("REAL\n")
+    resolve = mounts._resolved_below_root
+
+    def swap_after_resolving(path, source):
+        parts = resolve(path, source)
+        (root / "sub" / "a.yml").unlink()
+        (root / "sub").rmdir()
+        (root / "sub").write_text("now a plain file\n")
+        return parts
+
+    monkeypatch.setattr(mounts, "_resolved_below_root", swap_after_resolving)
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root))), "/d/sub/a.yml")
+
+    with pytest.raises(mounts.Unreadable) as caught:
+        mounts.read_located(located, configs={}, placement=HERE)
+
+    assert str(caught.value) == f"{root / 'sub' / 'a.yml'}: {os.strerror(errno.ENOTDIR)}"
 
 
 def test_the_walk_stops_once_more_files_are_known_than_are_read(tmp_path, monkeypatch):
@@ -1003,7 +1057,24 @@ def test_the_walk_stops_at_the_scan_budget_and_says_where(tmp_path, monkeypatch)
     listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
 
     assert listing.files == []
-    assert listing.notes == ["/dyn: more than 5 directory entries — the rest not scanned"]
+    assert listing.notes == ["/dyn: walk stopped after 5 directory entries — the rest not scanned"]
+
+
+def test_the_budget_note_names_the_subdirectory_the_walk_stopped_in(tmp_path, monkeypatch):
+    """The budget counts every entry of the walk, so the note says where it
+    stopped -- not that this one directory holds that many."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    for number in range(4):
+        (tmp_path / "a" / f"{number}.txt").write_text("")
+    monkeypatch.setattr(mounts, "MAX_SCANNED_ENTRIES", 5)
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.notes == [
+        "/dyn/a: walk stopped after 5 directory entries — the rest not scanned"
+    ]
 
 
 @pytest.mark.parametrize(

@@ -13,6 +13,7 @@ making the panel read something large or something outside the mount.
 
 from __future__ import annotations
 
+import errno
 import os
 import posixpath
 import stat
@@ -360,13 +361,48 @@ def _open_below_root(root: str, parts: list[str]) -> int:
         return os.open(root, os.O_RDONLY | os.O_NONBLOCK)
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        for part in parts[:-1]:
-            below = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        for index, part in enumerate(parts[:-1]):
+            where = os.path.join(root, *parts[: index + 1])
+            below = _open_component(part, os.O_RDONLY | os.O_DIRECTORY, directory, where)
             os.close(directory)
             directory = below
-        return os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=directory)
+        where = os.path.join(root, *parts)
+        return _open_component(parts[-1], os.O_RDONLY | os.O_NONBLOCK, directory, where)
     finally:
         os.close(directory)
+
+
+def _open_component(name: str, flags: int, directory: int, where: str) -> int:
+    """Open the single component *name* below the descriptor *directory*, never through a link.
+
+    A component that became a symlink after it was resolved is refused by
+    ``O_NOFOLLOW`` with an errno that differs by platform and reads wrong
+    either way: ELOOP ("Too many levels of symbolic links", though there is
+    no loop) on Linux and macOS, EMLINK ("Too many links") on FreeBSD, and on
+    some systems ENOTDIR when ``O_DIRECTORY`` is set too. That case is named
+    for what happened, at the host path *where*; any other failure keeps the
+    kernel's own reason.
+    """
+    try:
+        return os.open(name, flags | os.O_NOFOLLOW, dir_fd=directory)
+    except OSError as exc:
+        if _became_symlink(exc, name, directory):
+            raise Unreadable(
+                f"{where} changed to a symlink after it was checked — not followed"
+            ) from exc
+        raise
+
+
+def _became_symlink(exc: OSError, name: str, directory: int) -> bool:
+    """Whether *exc* is ``O_NOFOLLOW`` refusing *name* because it is now a symlink."""
+    if exc.errno in (errno.ELOOP, errno.EMLINK):
+        return True
+    if exc.errno != errno.ENOTDIR:
+        return False
+    try:
+        return stat.S_ISLNK(os.lstat(name, dir_fd=directory).st_mode)
+    except OSError:
+        return False
 
 
 def _read_host_file(path: str, root: str) -> str:
@@ -649,8 +685,11 @@ def _walk(
         scan.exhausted = True
         relative_dir = os.path.relpath(spent.directory, host_root)
         where = start if relative_dir == os.curdir else posixpath.join(start, relative_dir)
+        # A stop location, not a count for *where*: the budget runs over the
+        # whole walk, every mount of the listing included.
         listing.notes.append(
-            f"{where}: more than {MAX_SCANNED_ENTRIES} directory entries — the rest not scanned"
+            f"{where}: walk stopped after {MAX_SCANNED_ENTRIES} directory entries"
+            " — the rest not scanned"
         )
     except (OSError, ValueError) as exc:
         # An OSError from the walk names the exact entry that failed (e.g. an

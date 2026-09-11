@@ -31,8 +31,9 @@ guesswork dressed as a record.
   configuration names. Files come from Docker configs or, on the node the
   Traefik task runs on, from bind mounts. YAML and TOML. A bind-mounted file
   is opened component by component, never through a symlink below the bind
-  source; a provider directory walk stops after 64 files or 10,000 directory
-  entries, with a note.
+  source. A provider directory yields at most 64 files — its walk stops once
+  a 65th is known — and scans at most 10,000 directory entries; either limit
+  leaves a note.
 
 ### Changed
 
@@ -49,9 +50,10 @@ guesswork dressed as a record.
 
 ### Fixed
 
-- On a host without Swarm, the file provider is no longer reported unreadable
-  because Docker configs — a Swarm-only object — could not be listed; they
-  are not asked for there.
+- On a host where Swarm is not active, the file provider is no longer
+  reported unreadable because Docker configs — a Swarm-only object — could
+  not be listed; they are not asked for there. A Swarm node lists them as
+  before, a worker included.
 
 ## [0.12.2] - 2026-09-10
 

@@ -1551,3 +1551,66 @@ def test_more_than_one_file_provider_failure_is_counted_not_dropped(tmp_path):
     with console.capture() as capture:
         console.print(traefik_section(info, Config()))
     assert "templated — not evaluated (+1 more)" in capture.get()
+
+
+# --------------------------------------------------------------------------- #
+# Copilot round 2 (#41): configs are asked for where Swarm is active
+# --------------------------------------------------------------------------- #
+
+_NOT_A_MANAGER = (
+    "This node is not a swarm manager. Worker nodes can't be used to view or modify"
+    " cluster state. Please run this command on a manager node or promote the current"
+    " node to a manager."
+)
+
+
+def _non_manager_client(state, calls):
+    """A daemon whose services and configs listings answer "not a swarm manager"."""
+
+    class _NonManager(_FakeClient):
+        def info(self):
+            calls.append("info")
+            return {"Swarm": {"LocalNodeState": state}}
+
+        @property
+        def services(self):
+            raise RuntimeError(_NOT_A_MANAGER)
+
+        @property
+        def configs(self):
+            calls.append("configs")
+            raise RuntimeError(_NOT_A_MANAGER)
+
+    return _NonManager()
+
+
+def test_a_daemon_where_swarm_is_inactive_is_not_asked_for_configs():
+    calls = []
+
+    info = collector.collect_traefik(_non_manager_client("inactive", calls))
+
+    assert calls == ["info"]
+    assert info.file_provider_error is None
+
+
+def test_a_swarm_worker_reports_the_configs_it_cannot_list_as_0_12_2_did():
+    calls = []
+
+    info = collector.collect_traefik(_non_manager_client("active", calls))
+
+    assert calls == ["info", "configs"]
+    assert info.file_provider_error == f"RuntimeError: {_NOT_A_MANAGER}"
+
+
+def test_a_manager_whose_services_listing_succeeded_is_not_asked_about_swarm():
+    calls = []
+
+    class _Manager(_FakeClient):
+        def info(self):
+            calls.append("info")
+            return {"Swarm": {"LocalNodeState": "active"}}
+
+    info = collector.collect_traefik(_Manager(services=[_FakeService("traefik_traefik", args=[])]))
+
+    assert calls == []
+    assert info.file_provider_error is None
