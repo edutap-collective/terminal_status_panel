@@ -39,13 +39,12 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
     In the order the arguments declare them.
 
     Declaration order is the deployment's own grouping and reads better than
-    the port number: a deployment's automation typically lists a handful of
-    entrypoints every cluster has — such as ``dashboard``, ``ping``,
-    ``default``, ``https`` — before appending the per-vhost ones for that
-    cluster, so that grouping survives into the panel. Sorting by port would
-    interleave them (a high-numbered entrypoint like ``https`` at 443 first, a
-    low-numbered one like ``dashboard`` at 8082 last) and scatter what belongs
-    together.
+    the port number: a deployment's automation typically lists its baseline
+    entrypoints — such as ``dashboard``, ``ping``, ``default``, ``https`` —
+    before appending its own per-vhost ones, so that grouping survives into
+    the panel. Sorting by port would interleave them (a high-numbered
+    entrypoint like ``https`` at 443 first, a low-numbered one like
+    ``dashboard`` at 8082 last) and scatter what belongs together.
     """
     found: list[TraefikEntrypoint] = []
     seen: set[str] = set()

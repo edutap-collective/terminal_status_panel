@@ -298,13 +298,20 @@ Traefik itself, not treated as an error
 ([`file_finder.go` L23-26](https://github.com/traefik/paerser/blob/v0.2.2/cli/file_finder.go#L23-L26)),
 and the panel does the same.
 
-**Only what is mounted is visible.** A candidate counts as present only when a
-Docker config sits exactly at it, or a bind mount — a file mount exactly at
-it, or a directory mount covering it — does, the Traefik task runs on this
-node, and the file is actually there, checked with the same path resolution a
-read uses. A candidate that is not there is passed over, exactly as Traefik
-passes over it — a missing `--configFile` included, provided it sits under a
-mount that can be checked here at all.
+**Only what is mounted is visible — and "present" means something different
+for each mount shape.** A Docker config sitting exactly at the candidate, and
+a bind mount whose own target is exactly the candidate (a single file
+bind-mounted there), both count as present outright, with no node or
+existence check performed at this point: whether either can actually be read
+is a question for the read itself, and an unreadable one is reported as such,
+not silently treated as absent. A bind mount whose target is a *directory*
+that merely covers the candidate is the one shape checked up front, using the
+same path resolution a read uses: present only when the Traefik task runs on
+this node and the file genuinely exists there. Genuinely missing under such a
+directory, a candidate is passed over exactly as Traefik passes over it — a
+missing `--configFile` under a checkable directory mount included; on another
+node, on a volume, on a tmpfs, or behind a check that fails outright, it is
+undecidable rather than absent, which the next paragraph covers.
 
 **An unreadable file never falls back to the flags.** A covering mount that
 cannot be checked from here — a bind mount whose Traefik task runs on another

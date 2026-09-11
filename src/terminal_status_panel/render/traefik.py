@@ -3,7 +3,8 @@
 One branch per entrypoint, ordered by port, then a block for routers whose
 entrypoint does not exist. That block is not symmetry: a tree keyed by
 entrypoint has no branch for such a router, so without it the panel would drop
-it silently — and the cluster has one today.
+it silently — a real gap, observed on a real deployment, not a hypothetical
+one.
 """
 
 from __future__ import annotations
@@ -367,9 +368,10 @@ def traefik_section(
         )
         parts.append(Text(""))
     if data.entrypoints:
-        # Declaration order, which the collector preserves: the four
-        # entrypoints every cluster has come before this cluster's own. The
-        # packer may put them in any column, but never out of order within one.
+        # Declaration order, which the collector preserves: it is the
+        # deployment's own grouping, and the panel keeps it rather than
+        # imposing its own. The packer may put them in any column, but never
+        # out of order within one.
         #
         # Two candidate renderings, folded and not: folding a router's
         # `@internal` target onto its own line saves a row per branch but

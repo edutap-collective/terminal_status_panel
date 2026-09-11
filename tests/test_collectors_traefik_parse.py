@@ -55,9 +55,10 @@ def test_ports_are_parsed_from_the_address():
 
 
 def test_entrypoints_keep_the_order_the_arguments_declare_them_in():
-    """The role lists the four every cluster has before this cluster's own, and
-    that grouping is worth more than the port number: sorted by port, `https`
-    (443) would lead and `dashboard` (8082) would trail, scattering the four."""
+    """This fixture's baseline entrypoints come before its own per-vhost ones,
+    and that grouping is worth more than the port number: sorted by port,
+    `https` (443) would lead and `dashboard` (8082) would trail, scattering
+    what belongs together."""
     names = [ep.name for ep in parse.parse_entrypoints(ARGS)]
     assert names[:4] == ["dashboard", "ping", "default", "https"]
     assert names[4:] == [

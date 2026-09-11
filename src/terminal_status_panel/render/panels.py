@@ -1210,9 +1210,10 @@ def _ui_subrows(ui_services, node_names, ui_keys) -> list[tuple[str, list, str]]
     """One sub-row per admin UI, labelled without stack prefix or node suffix.
 
     A service that only came along because its *stack* name matched — a
-    sidecar such as ``cloudbeaver-init`` inside the ``cloudbeaver`` stack,
-    whose own name is not one of ``docker.infra_ui_services`` — keeps its
-    origin as ``stack/service``, so a detached row stays attributable.
+    sidecar such as ``zookeeper`` inside the ``kafbat-ui`` stack, whose own
+    name (once the stack prefix is stripped) is not one of
+    ``docker.infra_ui_services`` — is labelled ``stack/service`` (here
+    ``kafbat-ui/zookeeper``), so a detached row stays attributable.
     """
     rows = []
     for base, group in _base_groups(ui_services, node_names).items():
