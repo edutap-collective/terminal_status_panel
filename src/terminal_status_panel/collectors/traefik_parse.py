@@ -255,14 +255,14 @@ def parse_dynamic(
 ) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware], dict[str, TraefikServiceRef]]:
     """Routers, middlewares and services from a file-provider config.
 
-    The api and ping-router entries live only here. Without them the dashboard
-    entrypoint looks empty and the /_traefik_ping_ path every webfe health
-    check depends on is invisible.
+    The api and ping-router entries may live only here. Without them the
+    dashboard entrypoint looks empty and a ping path an upstream health check
+    depends on is invisible.
 
-    The services matter for the same reason in reverse: ``account-api`` points
-    at ``account-api-placeholder``, which is declared here and not in Swarm at
-    all. Read only from labels, it looks like a router pointing at nothing —
-    the panel would report a missing service it had never looked for.
+    The services matter for the same reason in reverse: a router can point at
+    a service declared here and not in Swarm at all. Read only from labels, it
+    looks like a router pointing at nothing — the panel would report a missing
+    service it had never looked for.
 
     *fmt* is ``yaml`` or ``toml``.
     """

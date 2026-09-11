@@ -218,9 +218,9 @@ DEFAULT_TRAEFIK_MATCH: tuple[str, ...] = ("traefik_traefik",)
 class TraefikApiConfig:
     """Everything under ``[traefik]``.
 
-    The API cross-check is dormant today: the dashboard router requires a
-    client certificate signed by the web frontend's CA, and one deployment's
-    automation issues only app-server ones. ``links`` is independent of it.
+    The API cross-check works only where the deployment issues the panel a
+    client certificate that Traefik's dashboard router accepts; without one
+    it stays unset. ``links`` is independent of it.
     """
 
     url: str | None = None

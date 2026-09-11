@@ -42,7 +42,17 @@ guesswork dressed as a record.
   DOCKER INFOS join — and the join reads the configured list instead of the
   built-in one.
 - When no entrypoints can be read, the banner names the reason instead of
-  "no entrypoints found".
+  "no entrypoints found" wherever the panel knows it. A Swarm worker, which
+  cannot list services, keeps the old banner.
+- A Traefik configured by command-line flags with a file-provider directory
+  has its dynamic configs chosen by mount path now, as Traefik chooses them:
+  a config mounted under that directory with a `.yml`, `.yaml` or `.toml`
+  file name is read whatever the config is called; a `*traefik_dynamic*`
+  config mounted elsewhere, or without such an extension, is no longer read;
+  and the files are read in path order, which decides between two files
+  declaring the same name. A config the service mounts but a successful
+  configs listing does not contain is reported as `<name>: config not
+  found`; a listing that failed stays one note.
 - A Docker config read under the config-generation rule that contains `{{` is
   noted as templated and no longer parsed, as on the file-provider path.
 - The file-provider warning counts further failures, `(+N more)`, instead of

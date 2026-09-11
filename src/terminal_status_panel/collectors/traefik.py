@@ -254,6 +254,39 @@ def _traefik_container(containers: list, match: tuple[str, ...]) -> Any:
     return None
 
 
+class _DaemonInfo:
+    """``docker info``, asked at most once per collection, and only when needed.
+
+    Two questions go to it -- whether Swarm is active here, and which node
+    this is -- and both read the same answer rather than asking twice.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self._asked = False
+        self._swarm: dict | None = None
+
+    def swarm(self) -> dict | None:
+        """The answer's ``Swarm`` block; ``None`` when ``docker info`` could not be asked."""
+        if not self._asked:
+            self._asked = True
+            try:
+                self._swarm = _mapping(_mapping(self._client.info()).get("Swarm"))
+            except Exception:
+                self._swarm = None
+        return self._swarm
+
+    def swarm_state(self) -> str | None:
+        """``LocalNodeState`` (``"active"``, ``"inactive"``, ...), ``None`` when unknown."""
+        state = (self.swarm() or {}).get("LocalNodeState")
+        return state if isinstance(state, str) and state else None
+
+    def node_id(self) -> str | None:
+        """The Swarm node ID of the node asked, ``None`` when unknown."""
+        node = (self.swarm() or {}).get("NodeID")
+        return node if isinstance(node, str) and node else None
+
+
 class _SwarmPlacement:
     """Where the Traefik service's tasks run -- asked once, and only if needed.
 
@@ -261,14 +294,15 @@ class _SwarmPlacement:
     pays no extra Docker call.
     """
 
-    def __init__(self, client, workload: Workload) -> None:
+    def __init__(self, client, daemon: _DaemonInfo, workload: Workload) -> None:
         self._client = client
+        self._daemon = daemon
         self._workload = workload
         self._answer: tuple[bool, str | None] | None = None
 
     def _ask(self) -> tuple[bool, str | None]:
         if self._answer is None:
-            self._answer = _runs_here(self._client, self._workload)
+            self._answer = _runs_here(self._client, self._daemon, self._workload)
         return self._answer
 
     @property
@@ -290,7 +324,7 @@ def _node_name(client, node_id: str) -> str:
         return node_id
 
 
-def _runs_here(client, workload: Workload) -> tuple[bool, str | None]:
+def _runs_here(client, daemon: _DaemonInfo, workload: Workload) -> tuple[bool, str | None]:
     """Whether a running task of *workload* is on this node, and where it is if not.
 
     Anything that cannot be asked, or answers in a shape that cannot be read,
@@ -300,8 +334,10 @@ def _runs_here(client, workload: Workload) -> tuple[bool, str | None]:
     if workload.service is None:
         # A plain container runs on the daemon that listed it.
         return True, None
+    if daemon.swarm() is None:
+        return False, None
+    node_id = daemon.node_id()
     try:
-        node_id = ((client.info() or {}).get("Swarm") or {}).get("NodeID")
         tasks = workload.service.tasks(filters={"desired-state": "running"})
         nodes = [
             task.get("NodeID") for task in tasks if isinstance(task, dict) and task.get("NodeID")
@@ -375,7 +411,7 @@ def _read_static_file(
     info: TraefikInfo,
     workload: Workload,
     located: Located,
-    configs: dict[str, str | None],
+    configs: dict[str, str | None] | None,
     placement: Placement,
 ) -> StaticConfig:
     """The static file Traefik reads, or the reason it cannot be read here.
@@ -406,7 +442,10 @@ def _read_static_file(
 
 
 def _read_static(
-    info: TraefikInfo, workload: Workload, configs: dict[str, str | None], placement: Placement
+    info: TraefikInfo,
+    workload: Workload,
+    configs: dict[str, str | None] | None,
+    placement: Placement,
 ) -> StaticConfig:
     """The static configuration, from the source Traefik itself would use.
 
@@ -460,8 +499,12 @@ def _anchored_provider(
     return FileProvider(directory=anchor(provider.directory), filename=anchor(provider.filename))
 
 
-def _list_configs(client, info: TraefikInfo) -> list:
-    """List Swarm configs, or record why the file provider could not be read."""
+def _list_configs(client, info: TraefikInfo) -> list | None:
+    """List Swarm configs; ``None``, with the reason recorded, when that failed.
+
+    ``None`` is not an empty listing. A config the service mounts is then
+    unread, not missing, and must not be reported as "config not found".
+    """
     try:
         return client.configs.list()
     except Exception as exc:
@@ -469,11 +512,16 @@ def _list_configs(client, info: TraefikInfo) -> list:
         # "no dynamic config exists" — the caller must be able to tell them
         # apart, since api@internal and ping-router live only there.
         _note_file_provider_error(info, f"{type(exc).__name__}: {exc}")
-        return []
+        return None
 
 
-def _decoded_configs(configs: list) -> dict[str, str | None]:
-    """Every config's decoded body by name, ``None`` for one that could not be decoded."""
+def _decoded_configs(configs: list | None) -> dict[str, str | None] | None:
+    """Every config's decoded body by name, ``None`` for one that could not be decoded.
+
+    ``None`` as a whole when the configs could not be listed.
+    """
+    if configs is None:
+        return None
     return {getattr(config, "name", "") or "": _config_text(config) for config in configs}
 
 
@@ -554,11 +602,19 @@ def _absorb_config(info: TraefikInfo, config) -> None:
 
 
 def _absorb_located(
-    info: TraefikInfo, located: Located, configs: dict[str, str | None], placement: Placement
+    info: TraefikInfo,
+    located: Located,
+    configs: dict[str, str | None] | None,
+    placement: Placement,
 ) -> None:
     """Take the wiring of one file the provider path selects, config or host file."""
     mount = located.mount
     is_config = mount is not None and mount.kind == "config"
+    if is_config and configs is None:
+        # The configs listing failed, and its own note already says so. A note
+        # per mounted config on top would turn that one failure into several
+        # reasons, each claiming something about a config nobody could see.
+        return
     # A config keeps its name as the origin, as it always has; a host file is
     # named by its host path, which is where somebody would go to edit it.
     if mount is not None and is_config:
@@ -578,9 +634,12 @@ def _absorb_located(
     _absorb_text(info, text, origin, format_of(located.path) or "yaml")
 
 
-def _absorb_generations(info: TraefikInfo, configs: list, mounted: set[str] | None) -> None:
-    """Take the wiring of the live config generations (see ``_live_configs``)."""
-    for config in _live_configs(info, configs, mounted):
+def _absorb_generations(info: TraefikInfo, configs: list | None, mounted: set[str] | None) -> None:
+    """Take the wiring of the live config generations (see ``_live_configs``).
+
+    A failed configs listing (``None``) has its note already and yields none.
+    """
+    for config in _live_configs(info, configs or [], mounted):
         _absorb_config(info, config)
 
 
@@ -588,7 +647,7 @@ def _absorb_file_provider(
     info: TraefikInfo,
     workload: Workload,
     provider: FileProvider,
-    configs: dict[str, str | None],
+    configs: dict[str, str | None] | None,
     placement: Placement,
 ) -> None:
     """Take the wiring of every file Traefik's file provider reads, by its path."""
@@ -602,11 +661,13 @@ def _absorb_file_provider(
         _absorb_located(info, located, configs, placement)
 
 
-def _absorb_workload(client, info: TraefikInfo, workload: Workload, configs: list) -> None:
+def _absorb_workload(
+    client, daemon: _DaemonInfo, info: TraefikInfo, workload: Workload, configs: list | None
+) -> None:
     """The static configuration and the file provider, both as Traefik reads them."""
     decoded = _decoded_configs(configs)
     placement: Placement = (
-        _SwarmPlacement(client, workload)
+        _SwarmPlacement(client, daemon, workload)
         if workload.service is not None
         else KnownPlacement(here=True)
     )
@@ -628,7 +689,14 @@ def _absorb_workload(client, info: TraefikInfo, workload: Workload, configs: lis
     _absorb_generations(info, configs, mounted)
 
 
-def _absorb_traefik(client, info: TraefikInfo, service: Any, container: Any, configs: list) -> None:
+def _absorb_traefik(
+    client,
+    daemon: _DaemonInfo,
+    info: TraefikInfo,
+    service: Any,
+    container: Any,
+    configs: list | None,
+) -> None:
     """Read Traefik's own configuration; a failure nobody foresaw is a problem, not a crash.
 
     Everything below is written not to raise. This guard is for the shape
@@ -640,7 +708,7 @@ def _absorb_traefik(client, info: TraefikInfo, service: Any, container: Any, con
             workload = workload_from_service(service)
         else:
             workload = workload_from_container(container)
-        _absorb_workload(client, info, workload, configs)
+        _absorb_workload(client, daemon, info, workload, configs)
     except Exception as exc:
         info.entrypoints = []
         info.ping_entrypoint = None
@@ -655,15 +723,6 @@ def _absorb(info: TraefikInfo, parsed) -> None:
     info.routers.extend(routers)
     info.middlewares.update(middlewares)
     info.services.update(refs)
-
-
-def _swarm_active(client) -> bool:
-    """Whether this daemon is part of an active Swarm -- ``False`` when that cannot be asked."""
-    try:
-        swarm = (client.info() or {}).get("Swarm") or {}
-        return swarm.get("LocalNodeState") == "active"
-    except Exception:
-        return False
 
 
 def collect_traefik(
@@ -689,6 +748,7 @@ def collect_traefik(
     info = TraefikInfo()
     if not match:
         return info
+    daemon = _DaemonInfo(client)
     with _socket_timeout(client, timeout):
         service = _absorb_swarm_services(client, info, match)
         containers = _list_containers(client, info)
@@ -699,6 +759,7 @@ def collect_traefik(
             return info
         _absorb_containers(info, containers)
         container = _traefik_container(containers, match) if service is None else None
+        services_listed = info.service_error is None
         # Swarm configs exist only on a Swarm daemon. When the services listing
         # failed, the daemon is asked once whether Swarm is active: a worker --
         # which can never list services -- or a manager whose listing failed
@@ -706,18 +767,26 @@ def collect_traefik(
         # as it always was. Where Swarm is not active, or that cannot be asked,
         # configs are not asked for: the "not a swarm manager" answer would
         # blame the file provider for a Compose-only host.
-        list_configs = info.service_error is None or _swarm_active(client)
+        list_configs = services_listed or daemon.swarm_state() == "active"
         configs = _list_configs(client, info) if list_configs else []
         # The file reads happen inside the timeout too: where Traefik runs is
         # a Docker call, and host files are bounded by the mount resolver's
         # own size and count limits.
         if service is None and container is None:
-            info.static_problem = (
-                f"no Traefik service or container matches traefik.match ({', '.join(match)})"
-            )
+            # "Nothing matches" is said only where it was looked for: every
+            # service was listed, or `docker info` reports Swarm inactive here,
+            # so there are none. A worker cannot list services -- its Traefik
+            # task container carries the Swarm label and is skipped above --
+            # and where `docker info` reports any other state, or cannot be
+            # asked, whether a service matches is unknown. Those keep 0.12.2's
+            # banner, which claims no reason.
+            if services_listed or daemon.swarm_state() == "inactive":
+                info.static_problem = (
+                    f"no Traefik service or container matches traefik.match ({', '.join(match)})"
+                )
             _absorb_generations(info, configs, None)
         else:
-            _absorb_traefik(client, info, service, container, configs)
+            _absorb_traefik(client, daemon, info, service, container, configs)
 
     info.routers.sort(key=lambda r: (r.source != "swarm", r.name))
     return info

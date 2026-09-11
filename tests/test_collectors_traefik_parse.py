@@ -21,8 +21,8 @@ ARGS = [
     "--global.checknewversion=false",
     "--entryPoints.login_example_net.address=:2009",
     "--entryPoints.login_example_net.forwardedHeaders.trustedIPs=0.0.0.0/0",
-    "--entryPoints.portalmgmt.address=:2020",
-    "--entryPoints.portalmgmt.forwardedHeaders.trustedIPs=0.0.0.0/0",
+    "--entryPoints.adminpanel.address=:2020",
+    "--entryPoints.adminpanel.forwardedHeaders.trustedIPs=0.0.0.0/0",
     "--entryPoints.www_example_net.address=:2010",
     "--entryPoints.www_example_net.forwardedHeaders.trustedIPs=0.0.0.0/0",
     "--entryPoints.db-ui.address=:2008",
@@ -40,7 +40,7 @@ def test_both_spellings_of_the_prefix_are_found():
         "default",
         "https",
         "login_example_net",
-        "portalmgmt",
+        "adminpanel",
         "www_example_net",
         "db-ui",
         "kafbat",
@@ -49,8 +49,8 @@ def test_both_spellings_of_the_prefix_are_found():
 
 def test_ports_are_parsed_from_the_address():
     by_name = {ep.name: ep for ep in parse.parse_entrypoints(ARGS)}
-    assert by_name["portalmgmt"].port == 2020
-    assert by_name["portalmgmt"].address == ":2020"
+    assert by_name["adminpanel"].port == 2020
+    assert by_name["adminpanel"].address == ":2020"
     assert by_name["https"].port == 443
 
 
@@ -63,7 +63,7 @@ def test_entrypoints_keep_the_order_the_arguments_declare_them_in():
     assert names[:4] == ["dashboard", "ping", "default", "https"]
     assert names[4:] == [
         "login_example_net",
-        "portalmgmt",
+        "adminpanel",
         "www_example_net",
         "db-ui",
         "kafbat",
@@ -109,7 +109,7 @@ def test_no_arguments_yield_no_entrypoints():
 
 KAFBAT_LABELS = {
     "traefik.enable": "true",
-    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt,kafbat",
+    "traefik.http.routers.kafbat-ui.entrypoints": "adminpanel,kafbat",
     "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/portale/kafka-ui`)",
     "traefik.http.routers.kafbat-ui.tls": "true",
     "traefik.http.services.kafbat-ui.loadbalancer.server.port": "8080",
@@ -132,7 +132,7 @@ IMAGE_API_LABELS = {
 def test_a_router_on_several_entrypoints_keeps_all_of_them():
     routers, _, _ = parse.parse_labels(KAFBAT_LABELS, origin="kafbat-ui_kafbat-ui")
     assert len(routers) == 1
-    assert routers[0].entrypoints == ["portalmgmt", "kafbat"]
+    assert routers[0].entrypoints == ["adminpanel", "kafbat"]
     assert routers[0].rule == "PathPrefix(`/portale/kafka-ui`)"
     assert routers[0].tls is True
     assert routers[0].origin == "kafbat-ui_kafbat-ui"
@@ -274,7 +274,7 @@ http:
         ping-router:
             entryPoints:
             - login_example_net
-            - portalmgmt
+            - adminpanel
             - www_example_net
             - db-ui
             - kafbat
@@ -317,7 +317,7 @@ def test_the_capitalised_entrypoints_key_is_also_read():
     ping = [r for r in routers if r.name == "ping-router"][0]
     assert ping.entrypoints == [
         "login_example_net",
-        "portalmgmt",
+        "adminpanel",
         "www_example_net",
         "db-ui",
         "kafbat",
@@ -383,7 +383,7 @@ def test_a_middleware_with_a_null_spec_has_no_kind_rather_than_crashing():
 
 RAWDATA = {
     "routers": {
-        "kafbat-ui@swarm": {"entryPoints": ["portalmgmt"], "status": "enabled"},
+        "kafbat-ui@swarm": {"entryPoints": ["adminpanel"], "status": "enabled"},
         "api@internal": {"status": "enabled"},
         "broken@swarm": {"status": "disabled", "error": ["bad rule"]},
     }

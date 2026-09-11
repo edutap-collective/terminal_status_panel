@@ -72,7 +72,7 @@ def test_health_info_defaults_are_empty():
 
 def test_panel_data_carries_health():
     assert PanelData().health is None
-    health = HealthInfo(peers=[PeerReachability(name="ccn-01", method="wireguard")])
+    health = HealthInfo(peers=[PeerReachability(name="swarm01-wrk-01", method="wireguard")])
     assert PanelData(health=health).health.peers[0].method == "wireguard"
 
 
@@ -85,8 +85,8 @@ def test_health_info_defaults_to_unprobed_peers():
 
 
 def test_traefik_entrypoint_carries_name_and_address():
-    ep = TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)
-    assert (ep.name, ep.address, ep.port) == ("portalmgmt", ":2020", 2020)
+    ep = TraefikEntrypoint(name="adminpanel", address=":2020", port=2020)
+    assert (ep.name, ep.address, ep.port) == ("adminpanel", ":2020", 2020)
 
 
 def test_a_router_defaults_to_unconsulted_rather_than_accepted():

@@ -217,9 +217,9 @@ def test_swarm_active_counts_running_replicas(monkeypatch):
 
 def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
     nodes = [
-        _FakeNode("n1", "srv-ccc-01", role="manager", leader=True),
-        _FakeNode("n2", "srv-ccn-01"),
-        _FakeNode("n3", "srv-ccn-02", state="down"),
+        _FakeNode("n1", "swarm01-mgr-01", role="manager", leader=True),
+        _FakeNode("n2", "swarm01-wrk-01"),
+        _FakeNode("n3", "swarm01-wrk-02", state="down"),
     ]
     services = [
         _FakeService(
@@ -238,19 +238,19 @@ def test_swarm_groups_stacks_nodes_states_and_descriptions(monkeypatch):
     monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
     result = docker_collector.collect_docker()
 
-    assert [n.name for n in result.nodes] == ["srv-ccc-01", "srv-ccn-01", "srv-ccn-02"]
+    assert [n.name for n in result.nodes] == ["swarm01-mgr-01", "swarm01-wrk-01", "swarm01-wrk-02"]
     assert result.nodes[0].leader is True and result.nodes[0].role == "manager"
     assert result.nodes[2].reachable is False and result.nodes[2].state == "down"
 
     pg = next(s for s in result.services if s.name == "pg")
     assert pg.stack == "PostgreSQL-18"
     assert pg.description == "PostgreSQL database, version 18"
-    assert [(t.node, t.state) for t in pg.tasks] == [("srv-ccc-01", "running")]
+    assert [(t.node, t.state) for t in pg.tasks] == [("swarm01-mgr-01", "running")]
 
     kafka = next(s for s in result.services if s.name == "kafka")
     assert {(t.node, t.state) for t in kafka.tasks} == {
-        ("srv-ccn-01", "running"),
-        ("srv-ccn-02", "failed"),
+        ("swarm01-wrk-01", "running"),
+        ("swarm01-wrk-02", "failed"),
     }
 
     reg = next(s for s in result.services if s.name == "registry")
@@ -1712,7 +1712,7 @@ def test_a_service_with_no_local_task_has_no_figure(monkeypatch):
 def _df_legacy_payload():
     """What Docker 26.1.5 answers: lists and LayersSize, no *Usage aggregates.
 
-    Measured against lmzvd06-ccc-01 on 2026-08-22 — the keys were exactly
+    Measured on a production manager on 2026-08-22 — the keys were exactly
     ['BuildCache', 'Containers', 'Images', 'LayersSize', 'Volumes'].
     """
     return {

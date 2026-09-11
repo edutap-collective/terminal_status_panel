@@ -45,13 +45,13 @@ def _wired():
         reachable=True,
         entrypoints=[
             TraefikEntrypoint(name="kafbat", address=":2006", port=2006),
-            TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020),
+            TraefikEntrypoint(name="adminpanel", address=":2020", port=2020),
             TraefikEntrypoint(name="https", address=":443", port=443),
         ],
         routers=[
             TraefikRouter(
                 name="kafbat-ui",
-                entrypoints=["portalmgmt", "kafbat"],
+                entrypoints=["adminpanel", "kafbat"],
                 rule="PathPrefix(`/portale/kafka-ui`)",
                 service="kafbat-ui",
                 origin="kafbat-ui_kafbat-ui",
@@ -77,7 +77,7 @@ def test_an_error_is_shown_with_its_message():
 
 def test_entrypoints_appear_with_their_port():
     out = _render(_wired())
-    assert "portalmgmt" in out
+    assert "adminpanel" in out
     assert "2020" in out
 
 
@@ -121,7 +121,7 @@ def test_an_orphaned_router_is_not_silently_dropped():
     branch for a router naming an entrypoint that does not exist."""
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
+        entrypoints=[TraefikEntrypoint(name="adminpanel", address=":2020", port=2020)],
         routers=[TraefikRouter(name="lost", entrypoints=["nosuch"], service="lost")],
     )
     assert "lost" in _render(info)
@@ -130,8 +130,8 @@ def test_an_orphaned_router_is_not_silently_dropped():
 def test_a_router_on_a_known_and_an_unknown_entrypoint_appears_in_both_places():
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
-        routers=[TraefikRouter(name="half", entrypoints=["portalmgmt", "nosuch"], service="half")],
+        entrypoints=[TraefikEntrypoint(name="adminpanel", address=":2020", port=2020)],
+        routers=[TraefikRouter(name="half", entrypoints=["adminpanel", "nosuch"], service="half")],
     )
     out = _render(info)
     # Once under the entrypoint that exists, once in the orphan block.
@@ -145,7 +145,7 @@ def test_internal_routers_are_shown_but_dimmed_last():
     info.routers.append(
         TraefikRouter(
             name="ping-router",
-            entrypoints=["portalmgmt"],
+            entrypoints=["adminpanel"],
             rule="Path(`/_traefik_ping_`)",
             service="ping@internal",
             source="file",
@@ -196,7 +196,7 @@ def test_a_router_naming_no_entrypoint_appears_under_every_entrypoint():
     info = TraefikInfo(
         reachable=True,
         entrypoints=[
-            TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020),
+            TraefikEntrypoint(name="adminpanel", address=":2020", port=2020),
             TraefikEntrypoint(name="kafbat", address=":2006", port=2006),
         ],
         routers=[TraefikRouter(name="everywhere", entrypoints=[], service="everywhere")],
@@ -218,7 +218,7 @@ def test_without_entrypoints_the_routers_are_still_shown_under_a_warning():
         reachable=True,
         entrypoints=[],
         routers=[
-            TraefikRouter(name="alpha", entrypoints=["portalmgmt"], service="alpha"),
+            TraefikRouter(name="alpha", entrypoints=["adminpanel"], service="alpha"),
             TraefikRouter(name="beta", entrypoints=["kafbat"], service="beta"),
         ],
     )
@@ -233,7 +233,7 @@ def test_without_entrypoints_no_entrypoint_is_called_nonexistent():
     about something that was never measured."""
     info = TraefikInfo(
         reachable=True,
-        routers=[TraefikRouter(name="alpha", entrypoints=["portalmgmt"], service="alpha")],
+        routers=[TraefikRouter(name="alpha", entrypoints=["adminpanel"], service="alpha")],
     )
     out = _render(info)
     assert "does not exist" not in out
@@ -523,13 +523,13 @@ def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
     narrow = _render(_wired(), width=40)
     assert len(wide.splitlines()) < len(narrow.splitlines())
     # Side by side, one line carries two entrypoint heads.
-    assert any("kafbat" in line and "portalmgmt" in line for line in wide.splitlines())
+    assert any("kafbat" in line and "adminpanel" in line for line in wide.splitlines())
 
 
 def test_an_entrypoint_head_carries_the_worst_verdict_below_it():
     """A wall of branches has to say at a glance which one to read first."""
     info = _wired()
-    info.routers.append(TraefikRouter(name="broken", entrypoints=["portalmgmt"], service="gone"))
+    info.routers.append(TraefikRouter(name="broken", entrypoints=["adminpanel"], service="gone"))
     swarm = SwarmInfo(
         reachable=True,
         enabled=True,
@@ -1108,7 +1108,7 @@ def test_a_static_note_is_rendered_beside_a_drawn_tree(width):
     out = _flat(_render(info, width=width))
 
     assert "Traefik ignores 2 other command-line flags" in out
-    assert "portalmgmt" in out  # the tree is still drawn
+    assert "adminpanel" in out  # the tree is still drawn
 
 
 def test_traefik_match_empty_disables_reading():
@@ -1153,3 +1153,36 @@ def test_an_empty_match_wins_over_a_collection_error():
 
     assert "traefik.match is empty" in out
     assert "services: gone" not in out
+
+
+#: Every reason the collector can put on ``static_problem``, one per wording in
+#: collectors/traefik.py, with neutral values -- and ``None``, which keeps
+#: 0.12.2's own wording.
+_STATIC_PROBLEMS = [
+    "no Traefik service or container matches traefik.match (traefik_traefik)",
+    "--configFile=traefik.yaml is relative and the container's working directory"
+    " is not declared — not read",
+    "--configFile=/etc/traefik/traefik.yaml is not mounted — it may be part of the image,"
+    " or absent (then Traefik falls back to its default locations and flags)",
+    "/etc/traefik is on volume traefik_conf — whether it holds traefik.toml/.yaml/.yml"
+    " cannot be checked from here",
+    "entrypoints are configured in /etc/traefik/traefik.yaml, a bind mount of"
+    " /srv/traefik/traefik.yaml — not readable on this node (Traefik runs on swarm01-wrk-02)",
+    "entrypoints are configured in /etc/traefik/traefik.yml,"
+    " traefik_static_v1: Docker configs could not be listed",
+    "/etc/traefik/traefik.yaml: mapping values are not allowed here",
+    "/etc/traefik/traefik.yaml declares no entrypoints",
+    "no static configuration found — no file, no flags, no TRAEFIK_ variables",
+    "Traefik's configuration could not be read: RuntimeError: boom",
+    None,
+]
+
+
+@pytest.mark.parametrize("width", [80, 215])
+@pytest.mark.parametrize("problem", _STATIC_PROBLEMS)
+def test_every_banner_reason_renders_with_the_tail(problem, width):
+    out = _flat(_render(_orphaned(static_problem=problem), width=width))
+
+    reason = problem or "no entrypoints found"
+    assert f"{icons.WARN.strip()} {reason} — the tree cannot be drawn," in out
+    assert "— the tree cannot be drawn, the routers below could not be placed" in out

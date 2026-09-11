@@ -1,6 +1,7 @@
 """Render Traefik's wiring: entrypoint → router → middleware → service.
 
-One branch per entrypoint, ordered by port, then a block for routers whose
+One branch per entrypoint, in the order the static configuration declares
+them, then a block for routers whose
 entrypoint does not exist. That block is not symmetry: a tree keyed by
 entrypoint has no branch for such a router, so without it the panel would drop
 it silently — a real gap, observed on a real deployment, not a hypothetical

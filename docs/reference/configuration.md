@@ -35,7 +35,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `follow.interval` | `5.0` | Refresh interval in seconds for `--follow` when the `health` section is **not** among those requested (see {doc}`Follow mode </explanation/follow-mode>`). |
 | `follow.health_interval` | `20.0` | Refresh interval in seconds for `--follow` when the `health` section **is** among those requested. |
 | `traefik.match` | `["traefik_traefik"]` | Case-insensitive substrings identifying the Traefik workload: a Swarm service name, or — when no service matches — a plain container's name. Read like `health.<kind>.match`. An empty list (`[]`) means Traefik's wiring is not read on this host at all — no Docker call and no API cross-check is made for it: the TRAEFIK WIRING section renders one dim line saying so and nothing else. |
-| `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. Leave unset — see {doc}`Traefik wiring </explanation/traefik-wiring>` for why it cannot work on today's app servers. |
+| `traefik.url` | *(unset)* | URL of Traefik's `/api/rawdata` endpoint for the optional live cross-check. It works only where the deployment issues the panel a client certificate that Traefik's dashboard router accepts; without one, leave it unset — see {doc}`Enable the Traefik live cross-check </how-to/enable-the-traefik-cross-check>`. |
 | `traefik.cert` / `traefik.key` | *(unset)* | Client certificate/key for that endpoint (mTLS). Both `url` and `cert` must be set for the cross-check to run at all. |
 | `traefik.ca` | *(unset)* | CA bundle to verify the endpoint's server certificate. Unset, the **system trust store** applies — `ssl.create_default_context()` loads OpenSSL's default paths, so a corporate CA installed in `/etc/ssl/certs` *is* picked up, and `SSL_CERT_FILE`/`SSL_CERT_DIR` override them as usual. Set this only for a CA the system does not know; doing so replaces the system roots rather than adding to them. The HTTP library's own default never applies here — the cross-check requires `traefik.cert`, so the request always carries an explicitly built `SSLContext`. |
 | `managed.by` | *(unset)* | The name of the tool that configures this machine, e.g. `Ansible`. Setting it renders the **MANAGED** block under UPDATES; leaving it unset renders nothing at all, which is the default for every installation. Not tied to any one tool — Puppet, Salt and Chef are the same case. |
@@ -110,7 +110,7 @@ match = ["myapp_traefik"]
 
 [managed]
 by = "Ansible"
-repository = "https://gitlab.example.de/group/ansible-app-server"
+repository = "https://git.example.net/ops/servers"
 detail = "no local changes"
 
 [traefik.links]

@@ -1098,3 +1098,123 @@ def test_a_nested_volume_or_tmpfs_is_a_note_beside_the_files_found(tmp_path, mou
 
     assert [located.path for located in listing.files] == ["/dyn/a.yml"]
     assert listing.notes == [note]
+
+
+# --- Final review (0.13.0) -----------------------------------------------
+
+
+def test_a_config_whose_listing_failed_says_so_not_config_not_found():
+    located = mounts.Located("/d/a.yml", mounts.Mount("config", "/d/a.yml", "cfg_a"))
+
+    with pytest.raises(mounts.Unreadable) as caught:
+        mounts.read_located(located, configs=None, placement=HERE)
+
+    assert str(caught.value) == "cfg_a: Docker configs could not be listed"
+
+
+def test_a_config_missing_from_the_listing_is_not_found():
+    located = mounts.Located("/d/a.yml", mounts.Mount("config", "/d/a.yml", "cfg_a"))
+
+    with pytest.raises(mounts.Unreadable) as caught:
+        mounts.read_located(located, configs={}, placement=HERE)
+
+    assert str(caught.value) == "cfg_a: config not found"
+
+
+def test_a_dangling_symlink_in_the_walk_is_named_for_what_it_is(tmp_path):
+    (tmp_path / "good.yml").write_text("http: {}\n")
+    (tmp_path / "dangling.yml").symlink_to("missing.yml")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/good.yml"]
+    assert listing.notes == ["/dyn/dangling.yml: No such file or directory — not listed"]
+
+
+def test_a_walked_file_that_cannot_be_stat_ed_names_the_reason(tmp_path, monkeypatch):
+    (tmp_path / "locked.yml").write_text("http: {}\n")
+    real_stat = os.stat
+
+    def refusing_stat(path, *args, **kwargs):
+        if os.fspath(path).endswith("locked.yml"):
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(mounts.os, "stat", refusing_stat)
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes == ["/dyn/locked.yml: Permission denied — not listed"]
+
+
+def test_a_fifo_in_the_walk_is_still_not_a_regular_file(tmp_path):
+    os.mkfifo(tmp_path / "pipe.yml")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.notes == ["/dyn/pipe.yml: not a regular file — not listed"]
+
+
+@pytest.mark.parametrize(
+    "owner,note",
+    [
+        (mounts.Mount("volume", "/dyn", "dynvol"), "/dyn is on volume dynvol — not readable"),
+        (mounts.Mount("tmpfs", "/dyn", ""), "/dyn is on a tmpfs mount — not readable"),
+        (mounts.Mount("cluster", "/dyn", "csi"), "/dyn is on a cluster mount — not readable"),
+    ],
+    ids=["volume", "tmpfs", "cluster"],
+)
+def test_a_partial_listing_keeps_its_owner_s_note(owner, note):
+    """Traefik reads the files on the owning mount too; the panel cannot, so a
+    listing of the config beside them is partial, and says so."""
+    workload = _workload(owner, mounts.Mount("config", "/dyn/a.yml", "cfg_a"))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/a.yml"]
+    assert listing.notes == [note]
+
+
+def test_the_owner_s_note_comes_first_beside_other_notes():
+    workload = _workload(
+        mounts.Mount("volume", "/dyn", "dynvol"),
+        mounts.Mount("tmpfs", "/dyn/sub", ""),
+    )
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.notes == [
+        "/dyn is on volume dynvol — not readable",
+        "/dyn/sub is on a tmpfs mount — not readable",
+    ]
+
+
+@pytest.mark.parametrize(
+    "path,fmt",
+    [
+        ("/dyn/.yml", "yaml"),
+        ("/dyn/.toml", "toml"),
+        ("/dyn/.YAML", "yaml"),
+        ("/dyn/..yml", "yaml"),
+        ("/dyn/yml", None),
+        ("/dyn.yml/file", None),
+        ("/dyn/a.tar.toml", "toml"),
+    ],
+)
+def test_the_extension_is_go_s_filepath_ext(path, fmt):
+    """Go's ``filepath.Ext(".yml")`` is ``".yml"``; Python's splitext keeps a
+    leading dot in the stem. Traefik goes by Go's."""
+    assert mounts.format_of(path) == fmt
+
+
+def test_a_file_named_only_by_its_extension_is_listed(tmp_path):
+    (tmp_path / ".yml").write_text("http: {}\n")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/.yml"]

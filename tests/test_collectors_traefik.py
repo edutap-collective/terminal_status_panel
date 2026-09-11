@@ -107,13 +107,13 @@ class _NodeClient(_FakeClient):
 
 
 def test_unknown_entrypoints_reports_only_the_missing_ones():
-    router = TraefikRouter(name="r", entrypoints=["portalmgmt", "websecure"])
-    assert collector.unknown_entrypoints(router, {"portalmgmt"}) == ["websecure"]
+    router = TraefikRouter(name="r", entrypoints=["adminpanel", "websecure"])
+    assert collector.unknown_entrypoints(router, {"adminpanel"}) == ["websecure"]
 
 
 def test_a_router_with_only_known_entrypoints_has_no_orphans():
-    router = TraefikRouter(name="r", entrypoints=["portalmgmt"])
-    assert collector.unknown_entrypoints(router, {"portalmgmt"}) == []
+    router = TraefikRouter(name="r", entrypoints=["adminpanel"])
+    assert collector.unknown_entrypoints(router, {"adminpanel"}) == []
 
 
 def test_a_router_with_no_entrypoints_is_not_an_orphan():
@@ -124,22 +124,22 @@ def test_a_router_with_no_entrypoints_is_not_an_orphan():
 def test_collect_reads_entrypoints_from_the_traefik_service():
     client = _FakeClient(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
         ]
     )
     info = collector.collect_traefik(client)
     assert info.reachable is True
-    assert [ep.name for ep in info.entrypoints] == ["portalmgmt"]
+    assert [ep.name for ep in info.entrypoints] == ["adminpanel"]
 
 
 def test_collect_joins_labels_from_every_service():
     client = _FakeClient(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
             _FakeService(
                 "kafbat-ui_kafbat-ui",
                 labels={
-                    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
+                    "traefik.http.routers.kafbat-ui.entrypoints": "adminpanel",
                     "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
                     "traefik.http.services.kafbat-ui.loadbalancer.server.port": "8080",
                 },
@@ -377,11 +377,11 @@ def test_a_broken_file_provider_is_reported_but_labels_still_stand():
 
     client = _ConfigsBreak(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
             _FakeService(
                 "kafbat-ui_kafbat-ui",
                 labels={
-                    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
+                    "traefik.http.routers.kafbat-ui.entrypoints": "adminpanel",
                     "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
                 },
             ),
@@ -407,7 +407,7 @@ def test_a_mis_cased_entrypoints_label_still_reaches_the_orphan_block():
     the finding turns into "wired to all nine ports"."""
     client = _FakeClient(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
             _FakeService(
                 "mystack_image_api",
                 labels={
@@ -420,7 +420,7 @@ def test_a_mis_cased_entrypoints_label_still_reaches_the_orphan_block():
     info = collector.collect_traefik(client)
     router = next(r for r in info.routers if r.name == "image_api")
     assert router.entrypoints == ["websecure"]
-    assert collector.unknown_entrypoints(router, {"portalmgmt"}) == ["websecure"]
+    assert collector.unknown_entrypoints(router, {"adminpanel"}) == ["websecure"]
 
 
 def test_a_service_whose_attrs_are_not_a_mapping_does_not_raise():
@@ -616,7 +616,7 @@ def test_fetch_accepted_returns_none_not_empty_set_when_unreachable():
 def test_fetch_accepted_parses_a_successful_response():
     payload = {
         "routers": {
-            "kafbat-ui@swarm": {"entryPoints": ["portalmgmt"], "status": "enabled"},
+            "kafbat-ui@swarm": {"entryPoints": ["adminpanel"], "status": "enabled"},
             "broken@swarm": {"status": "disabled", "error": ["bad rule"]},
         }
     }
@@ -710,18 +710,18 @@ def test_only_the_config_generations_the_service_mounts_are_read():
         services=[
             _FakeService(
                 "traefik_traefik",
-                args=["--entryPoints.portalmgmt.address=:2020"],
+                args=["--entryPoints.adminpanel.address=:2020"],
                 configs=["traefik_dynamic_yml_v4"],
             )
         ],
         configs=[
             _FakeConfig("traefik_dynamic_yml_v1", body.format(eps="db-ui, kafbat")),
-            _FakeConfig("traefik_dynamic_yml_v4", body.format(eps="portalmgmt")),
+            _FakeConfig("traefik_dynamic_yml_v4", body.format(eps="adminpanel")),
         ],
     )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["ping-router"]
-    assert info.routers[0].entrypoints == ["portalmgmt"]
+    assert info.routers[0].entrypoints == ["adminpanel"]
     assert info.file_provider_error is None
 
 
@@ -1614,3 +1614,239 @@ def test_a_manager_whose_services_listing_succeeded_is_not_asked_about_swarm():
 
     assert calls == []
     assert info.file_provider_error is None
+
+
+# --------------------------------------------------------------------------- #
+# Final review (0.13.0): a Swarm worker states nothing it did not look at
+# --------------------------------------------------------------------------- #
+
+_SWARM_TASK = "com.docker.swarm.service.name"
+
+
+class _Worker(_FakeClient):
+    """A Swarm worker: it cannot list services or configs, and its Traefik
+    task container carries the Swarm label, as every task container does."""
+
+    def __init__(self, state="active"):
+        super().__init__(
+            containers=[
+                _FakeContainer("traefik_traefik.1.abc", {_SWARM_TASK: "traefik_traefik"}),
+                _FakeContainer(
+                    "myapp_api.1.def",
+                    {_SWARM_TASK: "myapp_api", "traefik.http.routers.api.entrypoints": "https"},
+                ),
+                _FakeContainer(
+                    "dev-web-1",
+                    {
+                        "traefik.http.routers.web.entrypoints": "https",
+                        "traefik.http.routers.web.rule": "PathPrefix(`/web`)",
+                        "traefik.http.services.web.loadbalancer.server.port": "8000",
+                    },
+                ),
+            ]
+        )
+        self.state = state
+        self.calls = []
+
+    def info(self):
+        self.calls.append("info")
+        if self.state is None:
+            raise RuntimeError("info unavailable")
+        return {"Swarm": {"LocalNodeState": self.state, "NodeID": "swarm01-wrk-02"}}
+
+    @property
+    def services(self):
+        raise RuntimeError(_NOT_A_MANAGER)
+
+    @property
+    def configs(self):
+        self.calls.append("configs")
+        raise RuntimeError(_NOT_A_MANAGER)
+
+
+def test_a_swarm_worker_collects_exactly_what_0_12_2_collected():
+    """The worker could not look at any service, so it names no reason of its
+    own: every field is what 0.12.2 produced for the same daemon."""
+    from terminal_status_panel.model import TraefikServiceRef
+
+    worker = _Worker()
+
+    info = collector.collect_traefik(worker)
+
+    not_a_manager = f"RuntimeError: {_NOT_A_MANAGER}"
+    assert info.entrypoints == []
+    assert info.ping_entrypoint is None
+    assert info.routers == [
+        TraefikRouter(
+            name="web",
+            entrypoints=["https"],
+            rule="PathPrefix(`/web`)",
+            service="web",
+            source="swarm",
+            origin="dev-web-1",
+        )
+    ]
+    assert info.middlewares == {}
+    assert info.services == {
+        "web": TraefikServiceRef(name="web", port=8000, docker_service="dev-web-1")
+    }
+    assert info.file_provider_error == not_a_manager
+    assert info.service_error == not_a_manager
+    assert info.container_error is None
+    assert info.error is None
+    assert info.static_problem is None
+    # One answer from `docker info` serves every question asked of it.
+    assert worker.calls == ["info", "configs"]
+
+
+#: 0.12.2's TRAEFIK WIRING for `_Worker`, rendered from the 0.12.2 tree.
+_WORKER_0_12_2 = {
+    80: [
+        "TRAEFIK WIRING " + "─" * 65,
+        "⚠️  no entrypoints found — the tree cannot be drawn, the routers below could not",
+        "be placed",
+        "",
+        "⚠️  file provider unreadable: RuntimeError: This node is not a swarm manager.",
+        "Worker nodes can't be used to view or modify cluster state. Please run this",
+        "command on a manager node or promote the current node to a manager. — routers",
+        "defined there are missing",
+        "",
+        "⚠️  Swarm service labels unreadable: RuntimeError: This node is not a swarm",
+        "manager. Worker nodes can't be used to view or modify cluster state. Please run",
+        "this command on a manager node or promote the current node to a manager. —",
+        "routers declared by Swarm services are missing",
+        "",
+        "ORPHANED ROUTERS",
+        "  ⚠️  web        entrypoint `https` — no entrypoint could be read   [dev-web-1]",
+        "     PathPrefix(`/web`)",
+        "     └─ → web :8000  ✗ no such service",
+    ],
+    215: [
+        "TRAEFIK WIRING " + "─" * 200,
+        "⚠️  no entrypoints found — the tree cannot be drawn, the routers below could not be placed",
+        "",
+        "⚠️  file provider unreadable: RuntimeError: This node is not a swarm manager. Worker"
+        " nodes can't be used to view or modify cluster state. Please run this command on a"
+        " manager node or promote the current node to a",
+        "manager. — routers defined there are missing",
+        "",
+        "⚠️  Swarm service labels unreadable: RuntimeError: This node is not a swarm manager."
+        " Worker nodes can't be used to view or modify cluster state. Please run this command"
+        " on a manager node or promote the current node",
+        "to a manager. — routers declared by Swarm services are missing",
+        "",
+        "ORPHANED ROUTERS",
+        "  ⚠️  web        entrypoint `https` — no entrypoint could be read   [dev-web-1]",
+        "     PathPrefix(`/web`)",
+        "     └─ → web :8000  ✗ no such service",
+    ],
+}
+
+
+@pytest.mark.parametrize("width", [80, 215])
+def test_a_swarm_worker_renders_0_12_2_s_banner(width):
+    from rich.console import Console
+
+    from terminal_status_panel.model import SwarmInfo
+    from terminal_status_panel.render.traefik import traefik_section
+
+    info = collector.collect_traefik(_Worker())
+    console = Console(width=width, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(info, Config(), SwarmInfo(reachable=True, enabled=True)))
+
+    assert [line.rstrip() for line in capture.get().splitlines()] == _WORKER_0_12_2[width]
+
+
+@pytest.mark.parametrize("state", [None, "pending", "locked"], ids=["no-info", "pending", "locked"])
+def test_a_swarm_state_other_than_inactive_after_a_failed_listing_claims_no_match(state):
+    """`docker info` failed, or reports a state that may still hold services:
+    whether a Traefik service exists is unknown."""
+    info = collector.collect_traefik(_Worker(state=state))
+
+    assert info.static_problem is None
+
+
+def test_a_host_without_swarm_and_without_traefik_names_the_pattern():
+    """Swarm is not active, so there are no services; no container matches."""
+    info = collector.collect_traefik(_Worker(state="inactive"))
+
+    assert info.static_problem == (
+        "no Traefik service or container matches traefik.match (traefik_traefik)"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Final review (0.13.0): a failed configs listing is one note, not one per config
+# --------------------------------------------------------------------------- #
+
+
+class _ConfigsTimeOut(_NodeClient):
+    @property
+    def configs(self):
+        class _Failing:
+            def list(self, *a, **k):
+                raise TimeoutError("Read timed out.")
+
+        return _Failing()
+
+
+def _flags_and_configs_traefik():
+    """The CLI flags + Docker-config shape of 0.12.2, with two dynamic configs."""
+    return _SpecService(
+        "traefik_traefik",
+        {
+            "Args": [
+                "--ping.entryPoint=ping",
+                "--providers.file.directory=/dynamic/",
+                "--entrypoints.ping.address=:8080",
+                "--entrypoints.https.address=:443",
+            ],
+            "Configs": [
+                {"ConfigName": "traefik_dynamic_yml_v3", "File": {"Name": "/dynamic/00-base.yml"}},
+                {"ConfigName": "traefik_dynamic_extra_v2", "File": {"Name": "/dynamic/extra.yml"}},
+                {"ConfigName": "traefik_rootca_v1", "File": {"Name": "/certs/rootca.pem"}},
+            ],
+        },
+    )
+
+
+def test_a_failed_configs_listing_in_the_0_12_2_shape_is_its_single_note():
+    info = collector.collect_traefik(_ConfigsTimeOut(services=[_flags_and_configs_traefik()]))
+
+    assert [ep.name for ep in info.entrypoints] == ["ping", "https"]
+    assert info.file_provider_error == "TimeoutError: Read timed out."
+    assert info.file_provider_notes == ["TimeoutError: Read timed out."]
+
+
+def test_a_config_missing_from_a_successful_listing_is_named():
+    client = _NodeClient(
+        services=[_flags_and_configs_traefik()],
+        configs=[_FakeConfig("traefik_dynamic_yml_v3", PING_ROUTER)],
+    )
+
+    info = collector.collect_traefik(client)
+
+    assert [r.name for r in info.routers] == ["ping-router"]
+    assert info.file_provider_error == "traefik_dynamic_extra_v2: config not found"
+
+
+def test_a_config_served_static_file_behind_a_failed_listing_says_the_listing_failed():
+    service = _SpecService(
+        "traefik_traefik",
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yml"],
+            "Configs": [
+                {"ConfigName": "traefik_static_v1", "File": {"Name": "/etc/traefik/traefik.yml"}}
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_ConfigsTimeOut(services=[service]))
+
+    assert info.entrypoints == []
+    assert info.static_problem == (
+        "entrypoints are configured in /etc/traefik/traefik.yml,"
+        " traefik_static_v1: Docker configs could not be listed"
+    )
+    assert info.file_provider_error == "TimeoutError: Read timed out."

@@ -269,8 +269,8 @@ def test_a_traefik_only_panel_shows_a_real_verdict_not_a_dot(isolated_cli, capsy
     )
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
-        routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"], service="kafbat-ui")],
+        entrypoints=[TraefikEntrypoint(name="adminpanel", address=":2020", port=2020)],
+        routers=[TraefikRouter(name="kafbat-ui", entrypoints=["adminpanel"], service="kafbat-ui")],
         services={
             "kafbat-ui": TraefikServiceRef(name="kafbat-ui", docker_service="kafbat-ui_kafbat-ui")
         },

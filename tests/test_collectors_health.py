@@ -24,7 +24,9 @@ def test_collect_health_gathers_all_three_groups(monkeypatch):
     monkeypatch.setattr(
         health_collector,
         "collect_peers",
-        lambda names, timeout: [PeerReachability(name="ccn-01", method="wireguard", ok=True)],
+        lambda names, timeout: [
+            PeerReachability(name="swarm01-wrk-01", method="wireguard", ok=True)
+        ],
     )
     monkeypatch.setattr(
         health_collector,
@@ -33,12 +35,12 @@ def test_collect_health_gathers_all_three_groups(monkeypatch):
     )
     health = health_collector.collect_health(
         _config(enabled=["postgres"]),
-        peer_names=["ccn-01"],
+        peer_names=["swarm01-wrk-01"],
         client=object(),
         resolve_fqdn=_fqdn,
     )
     assert [service.kind for service in health.clusters] == ["postgres"]
-    assert health.peers[0].name == "ccn-01"
+    assert health.peers[0].name == "swarm01-wrk-01"
     assert health.dns[0].label == "Resolver"
     assert health.truncated == []
     assert health.clusters_probed is True
@@ -239,7 +241,7 @@ def test_the_peer_list_is_fetched_once_and_inside_the_budget(monkeypatch):
 
     def resolve():
         callers.append(threading.current_thread())
-        return ["ccn-01"]
+        return ["swarm01-wrk-01"]
 
     seen = {}
     monkeypatch.setattr(
@@ -261,8 +263,8 @@ def test_the_peer_list_is_fetched_once_and_inside_the_budget(monkeypatch):
     )
     assert len(callers) == 1
     assert callers[0] is not main_thread
-    assert seen["peers"] == ["ccn-01"]
-    assert seen["dns"] == ["ccn-01"]
+    assert seen["peers"] == ["swarm01-wrk-01"]
+    assert seen["dns"] == ["swarm01-wrk-01"]
     # A resolved peer list is something to ask about, so the block counts as
     # probed even though no peer answered.
     assert health.peers_probed is True
@@ -279,7 +281,7 @@ def test_a_known_peer_list_is_not_fetched_again(monkeypatch):
 
     health_collector.collect_health(
         _config(enabled=[]),
-        peer_names=["ccn-01"],
+        peer_names=["swarm01-wrk-01"],
         client=None,
         resolve_fqdn=_fqdn,
         resolve_peer_names=resolve,
@@ -305,12 +307,12 @@ def test_collect_health_passes_the_configured_dns_expectations(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_dns", capture)
     health_collector.collect_health(
         _config(dns_expect=[DnsExpectation(name="login.example.net", addresses=["10.9.9.9"])]),
-        peer_names=["ccn-01"],
+        peer_names=["swarm01-wrk-01"],
         client=object(),
         resolve_fqdn=_fqdn,
     )
     assert captured["expectations"] == [("login.example.net", ["10.9.9.9"])]
-    assert captured["peer_names"] == ["ccn-01"]
+    assert captured["peer_names"] == ["swarm01-wrk-01"]
 
 
 def test_peers_probed_is_false_without_names_or_answers(monkeypatch):
@@ -362,7 +364,7 @@ def test_peers_probed_is_true_when_names_were_available(monkeypatch):
     monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
     monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
     health = health_collector.collect_health(
-        _config(), peer_names=["ccn-01"], client=object(), resolve_fqdn=_fqdn
+        _config(), peer_names=["swarm01-wrk-01"], client=object(), resolve_fqdn=_fqdn
     )
     assert health.peers == []
     assert health.peers_probed is True

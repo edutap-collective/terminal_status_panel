@@ -433,16 +433,22 @@ def _read_host_file(path: str, root: str) -> str:
     return data.decode("utf-8", "replace")
 
 
-def read_located(located: Located, *, configs: dict[str, str | None], placement: Placement) -> str:
+def read_located(
+    located: Located, *, configs: dict[str, str | None] | None, placement: Placement
+) -> str:
     """The file's text, or ``Unreadable`` saying why not.
 
     *configs* maps a config name to its decoded body, ``None`` for one that
-    could not be decoded. *placement* is only consulted for a bind mount.
+    could not be decoded. *configs* itself is ``None`` when the Docker configs
+    could not be listed at all: a config is then unread, not missing. The
+    placement is only consulted for a bind mount.
     """
     mount = located.mount
     if mount is None:
         raise Unreadable(f"{located.path} is not mounted")
     if mount.kind == "config":
+        if configs is None:
+            raise Unreadable(f"{mount.source}: Docker configs could not be listed")
         if mount.source not in configs:
             raise Unreadable(f"{mount.source}: config not found")
         text = configs[mount.source]
@@ -521,8 +527,16 @@ def _bind_presence(host_path: str, mount: Mount, target: str) -> Presence:
 
 
 def format_of(path: str) -> str | None:
-    """``"yaml"`` or ``"toml"`` by extension, ``None`` for anything else."""
-    return _DYNAMIC_EXTENSIONS.get(posixpath.splitext(path)[1].lower())
+    """``"yaml"`` or ``"toml"`` by extension, ``None`` for anything else.
+
+    The extension as Go's ``filepath.Ext`` takes it, which is what Traefik's
+    file provider matches on: from the last dot of the last path element. A
+    file named just ``.yml`` has one there; ``posixpath.splitext`` would count
+    that leading dot as part of the name and find none.
+    """
+    name = posixpath.basename(path)
+    dot = name.rfind(".")
+    return _DYNAMIC_EXTENSIONS.get(name[dot:].lower()) if dot >= 0 else None
 
 
 @dataclass
@@ -604,12 +618,19 @@ def _walk_tree(top: str, scan: _Scan) -> Iterator[tuple[str, list[str]]]:
         pending.extend(path for path in reversed(below) if not os.path.islink(path))
 
 
-def _is_regular_file(path: str) -> bool:
-    """Whether *path* names a plain file -- never a FIFO, socket or device."""
+def _not_listed_reason(path: str) -> str | None:
+    """Why *path* is not listed as a plain file, ``None`` when it is one.
+
+    A path that cannot be ``stat``'ed -- a dangling link, a permission
+    problem -- is named by the system's own reason. Only a path that exists
+    and is not a regular file (a FIFO, a socket, a device) is "not a regular
+    file".
+    """
     try:
-        return stat.S_ISREG(os.stat(path).st_mode)
-    except (OSError, ValueError):
-        return False
+        info = os.stat(path)
+    except (OSError, ValueError) as exc:
+        return _os_error_text(exc)
+    return None if stat.S_ISREG(info.st_mode) else "not a regular file"
 
 
 def _walked_file(
@@ -624,8 +645,9 @@ def _walked_file(
     """The walked entry *name* in *current*, when the provider reads it from *mount*.
 
     A file shadowed by a more specific mount is left to that mount's own
-    entry. A non-regular dirent (a FIFO, a socket) is reported in a note
-    rather than listed.
+    entry. An entry that is not a regular file (a FIFO, a socket), or that
+    cannot be ``stat``'ed (a dangling link, a permission problem), is
+    reported in a note with its reason rather than listed.
     """
     if format_of(name) is None:
         return None
@@ -644,8 +666,9 @@ def _walked_file(
     except Unreadable as exc:
         listing.notes.append(f"{container_path}: {exc}")
         return None
-    if not _is_regular_file(resolved_file):
-        listing.notes.append(f"{container_path}: not a regular file — not listed")
+    reason = _not_listed_reason(resolved_file)
+    if reason is not None:
+        listing.notes.append(f"{container_path}: {reason} — not listed")
         return None
     located = locate(workload, container_path)
     return located if located.mount == mount else None
@@ -755,23 +778,34 @@ def _covering_bind_files(
     return _walk(workload, mount, host_root, directory, listing, scan)
 
 
-def _empty_directory_note(workload: Workload, directory: str) -> str | None:
-    """Why nothing was found under *directory* at all, when that has an explanation."""
+def _owner_note(workload: Workload, directory: str) -> str | None:
+    """The note for the mount that owns *directory* itself, when the panel cannot list it.
+
+    A volume, a tmpfs, or any other kind but a bind mount (walked instead)
+    and a config (a single file, not a directory). Traefik reads the files on
+    it and the panel cannot, whether or not mounts below *directory* added
+    files of their own: without this note a partial listing would pass for a
+    whole one.
+    """
     owner = locate(workload, directory).mount
-    if owner is None:
-        # A mount nested below *directory* (rather than covering it) already
-        # explains an empty result in its own right -- it may just be an
-        # empty, perfectly readable directory. "Not mounted" is only true
-        # when nothing lies at or under *directory* at all.
-        under_directory = any(
-            _covers(directory, posixpath.normpath(mount.target)) for mount in workload.mounts
-        )
-        return None if under_directory else f"{directory} is not mounted — nothing to read"
-    if owner.kind == "volume":
-        return f"{directory} is on volume {owner.source} — not readable"
-    if owner.kind == "tmpfs":
-        return f"{directory} is on a tmpfs mount — not readable"
-    return None
+    if owner is None or owner.kind in ("bind", "config"):
+        return None
+    return _unreadable_mount_note(owner, directory)
+
+
+def _unmounted_note(workload: Workload, directory: str) -> str | None:
+    """The "not mounted" note, when nothing at all lies at or under *directory*.
+
+    A mount nested below *directory* (rather than covering it) already
+    explains an empty result in its own right -- it may just be an empty,
+    perfectly readable directory.
+    """
+    if locate(workload, directory).mount is not None:
+        return None
+    under_directory = any(
+        _covers(directory, posixpath.normpath(mount.target)) for mount in workload.mounts
+    )
+    return None if under_directory else f"{directory} is not mounted — nothing to read"
 
 
 def _unreadable_mount_note(mount: Mount, target: str) -> str:
@@ -843,9 +877,10 @@ def provider_files(
 
     listing.files = _capped([found[path] for path in sorted(found)], directory, listing)
 
-    if not listing.files and not listing.notes:
-        note = _empty_directory_note(workload, directory)
-        if note:
-            listing.notes.append(note)
+    # First among the notes: it is the main reason, and the file-provider line
+    # shows the first note in full.
+    note = _owner_note(workload, directory) or _unmounted_note(workload, directory)
+    if note:
+        listing.notes.insert(0, note)
 
     return listing

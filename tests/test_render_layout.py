@@ -181,11 +181,11 @@ def _traefik_data():
         ),
         traefik=TraefikInfo(
             reachable=True,
-            entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
+            entrypoints=[TraefikEntrypoint(name="adminpanel", address=":2020", port=2020)],
             routers=[
                 TraefikRouter(
                     name="kafbat-ui",
-                    entrypoints=["portalmgmt"],
+                    entrypoints=["adminpanel"],
                     rule="PathPrefix(`/portale/kafka-ui`)",
                     service="kafbat-ui",
                 )

@@ -143,7 +143,7 @@ def test_traefik_api_can_be_configured(tmp_path):
         'url = "https://localhost:8082/traefik/api/rawdata"\n'
         'cert = "/etc/ssl/panel.pem"\n'
         'key = "/etc/ssl/panel.key"\n'
-        'ca = "/etc/ssl/webfe-ca.pem"\n'
+        'ca = "/etc/ssl/traefik-ca.pem"\n'
     )
     cfg = load_config(str(path))
     assert cfg.traefik.url.endswith("/rawdata")
