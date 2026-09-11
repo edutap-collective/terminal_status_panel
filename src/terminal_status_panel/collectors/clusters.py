@@ -508,7 +508,13 @@ def _probe_postgres_standalone(container, extras: int) -> ClusterService:
 
 
 def probe_postgres(index: ContainerIndex, settings: ProbeSettings | None = None) -> ClusterService:
-    """``pg_autoctl show state`` — works from any data node, not only the monitor."""
+    """Run the command for the configured mode and report what it found.
+
+    In the default ``pg_auto_failover`` mode: ``pg_autoctl show state``, which
+    works from any data node, not only the monitor, and reports every member.
+    In ``standalone`` mode: ``pg_isready``, which asks the one server whether
+    it accepts connections and makes no claim about topology or replication.
+    """
     settings = settings or ProbeSettings()
     container, verdict, extras = locate_member(
         index, "postgres", settings.postgres.match, settings.exclude

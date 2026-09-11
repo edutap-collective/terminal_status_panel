@@ -602,6 +602,11 @@ _HEALTH_KIND_KEYS: dict[str, set[str]] = {
 #: Every table ``[health]`` may contain. Anything else is a misspelling.
 _HEALTH_TABLES = {"timeout", "dns", *_HEALTH_KIND_KEYS}
 
+#: The non-table keys ``[health]`` itself accepts. Anything else -- a scalar
+#: this block does not read -- is as much a misspelling as an unknown table,
+#: and is reported the same way.
+_HEALTH_SCALAR_KEYS = {"budget", "enabled"}
+
 
 def _health_config(data: dict, reader: _Reader) -> HealthConfig:
     """Parse the [health] block. A malformed value falls back to its default."""
@@ -638,10 +643,20 @@ def _health_config(data: dict, reader: _Reader) -> HealthConfig:
             )
 
     for name, value in health.items():
-        if isinstance(value, dict) and name not in _HEALTH_TABLES:
+        if isinstance(value, dict):
+            if name not in _HEALTH_TABLES:
+                reader.problems.append(
+                    ConfigProblem(
+                        key=f"health.{name}",
+                        found=repr(value),
+                        used="ignored",
+                        reason="unknown table",
+                    )
+                )
+        elif name not in _HEALTH_SCALAR_KEYS:
             reader.problems.append(
                 ConfigProblem(
-                    key=f"health.{name}", found=repr(value), used="ignored", reason="unknown table"
+                    key=f"health.{name}", found=repr(value), used="ignored", reason="unknown key"
                 )
             )
     for kind, known in _HEALTH_KIND_KEYS.items():

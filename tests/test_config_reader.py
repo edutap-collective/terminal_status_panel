@@ -373,6 +373,20 @@ def test_the_known_health_subtables_are_not_reported(tmp_path):
     assert load_config(path).problems == []
 
 
+def test_an_unknown_scalar_key_directly_under_health_is_reported(tmp_path):
+    path = _write(tmp_path, "[health]\nprobe_nmae = true\n")
+
+    cfg = load_config(path)
+
+    assert any(p.key == "health.probe_nmae" and p.reason == "unknown key" for p in cfg.problems)
+
+
+def test_the_known_health_scalar_keys_are_not_reported(tmp_path):
+    path = _write(tmp_path, '[health]\nbudget = 5.0\nenabled = ["postgres"]\n')
+
+    assert load_config(path).problems == []
+
+
 def test_rustfs_and_mongodb_defaults_are_exported_unchanged():
     assert DEFAULT_RUSTFS_MATCH == ("rustfs_rustfs",)
     assert DEFAULT_MONGODB_MATCH == ("mongodb",)
