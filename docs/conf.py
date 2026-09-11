@@ -32,3 +32,8 @@ linkcheck_ignore = [
     r"https://pypi\.org/project/terminal-status-panel",
 ]
 linkcheck_timeout = 15
+# GitHub draws its line anchors (#L37-L49) in the browser, so they are never
+# in the HTML linkcheck fetches and every such link reads as broken. Only that
+# anchor shape is exempt; every other anchor, on GitHub or elsewhere, is still
+# checked. "^!" is Sphinx's own default and stays.
+linkcheck_anchors_ignore = ["^!", r"^L\d+(-L\d+)?$"]
