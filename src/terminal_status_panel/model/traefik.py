@@ -88,3 +88,12 @@ class TraefikInfo:
     # permanent on a host with no Swarm manager to ask -- see how the
     # renderer decides whether this is worth a line.
     service_error: str | None = None
+    #: Where the static configuration came from: a container path, "command-line
+    #: flags", or "environment". ``None`` when none could be read.
+    static_source: str | None = None
+    #: Why no entrypoints could be read, as one sentence the banner shows.
+    #: ``None`` when they were read, or when nobody looked.
+    static_problem: str | None = None
+    #: Findings that do not stop the tree from being drawn -- flags Traefik
+    #: ignores because a file was found.
+    static_notes: list[str] = field(default_factory=list)

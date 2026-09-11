@@ -147,7 +147,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     traefik_info = None
     if traefik:
         client = _docker_client(cfg)
-        traefik_info = collect_traefik(client, timeout=cfg.docker_timeout)
+        traefik_info = collect_traefik(client, timeout=cfg.docker_timeout, match=cfg.traefik.match)
         # The API cross-check is optional (see TraefikApiConfig) and, when
         # unreachable, `fetch_accepted` returns None rather than an empty set —
         # so an unreachable API leaves every router unconsulted, not rejected.

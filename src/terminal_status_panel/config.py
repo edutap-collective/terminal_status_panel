@@ -209,6 +209,11 @@ DEFAULT_HEALTH_TIMEOUTS = {
 }
 
 
+#: The Traefik Swarm service's name in the deployment the panel was written
+#: for. Any other host states its own under ``[traefik] match``.
+DEFAULT_TRAEFIK_MATCH: tuple[str, ...] = ("traefik_traefik",)
+
+
 @dataclass
 class TraefikApiConfig:
     """Everything under ``[traefik]``.
@@ -226,6 +231,9 @@ class TraefikApiConfig:
     #: cannot derive this: Traefik's routers match on path alone, so no
     #: hostname appears in the routing configuration at all.
     links: dict[str, str] = field(default_factory=dict)
+    #: Name substrings identifying the Traefik workload: Swarm service names,
+    #: and the names of plain containers when no service matches.
+    match: tuple[str, ...] = DEFAULT_TRAEFIK_MATCH
 
 
 @dataclass
@@ -761,6 +769,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         key=traefik_section.get("key") or None,
         ca=traefik_section.get("ca") or None,
         links=links,
+        match=reader.patterns(traefik_section, "traefik.match", DEFAULT_TRAEFIK_MATCH),
     )
     health_config = _health_config(data, reader)
     follow_section = _section(data, "follow")

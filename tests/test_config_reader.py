@@ -390,3 +390,16 @@ def test_the_known_health_scalar_keys_are_not_reported(tmp_path):
 def test_rustfs_and_mongodb_defaults_are_exported_unchanged():
     assert DEFAULT_RUSTFS_MATCH == ("rustfs_rustfs",)
     assert DEFAULT_MONGODB_MATCH == ("mongodb",)
+
+
+def test_traefik_match_defaults_to_the_old_service_pattern():
+    assert Config().traefik.match == ("traefik_traefik",)
+
+
+def test_traefik_match_is_read_like_the_health_patterns(tmp_path):
+    path = _write(tmp_path, '[traefik]\nmatch = ["demo_traefik", ""]\n')
+
+    cfg = load_config(path)
+
+    assert cfg.traefik.match == ("demo_traefik",)
+    assert [p.key for p in cfg.problems] == ["traefik.match"]
