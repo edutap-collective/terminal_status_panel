@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import posixpath
+import stat
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -186,17 +187,59 @@ class Unreadable(Exception):
     """Why a located file could not be read here. The message is rendered as is."""
 
 
+def _os_error_text(exc: OSError | ValueError) -> str:
+    """A human-readable reason -- ``strerror`` for an ``OSError``, else the message.
+
+    A path holding a NUL byte fails as ``ValueError`` before any syscall runs
+    at all (``strerror`` does not apply); a missing file or a permission
+    problem fails as ``OSError``, and ``strerror`` is the useful part of it.
+    """
+    return exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc)
+
+
 def _read_host_file(path: str, root: str) -> str:
-    real, real_root = os.path.realpath(path), os.path.realpath(root)
+    """The text at *path*, refusing anything that is not a plain, contained file.
+
+    Opened ``O_NONBLOCK`` so a FIFO cannot block the login waiting for a
+    writer that never comes; ``fstat`` then refuses anything that is not a
+    regular file (a FIFO, a socket, a device) before a byte is read from it.
+    """
+    try:
+        real, real_root = os.path.realpath(path), os.path.realpath(root)
+    except (OSError, ValueError) as exc:
+        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
     if real != real_root and not real.startswith(real_root.rstrip(os.sep) + os.sep):
         raise Unreadable(f"{path} leads outside {root} — not followed")
     try:
-        if os.path.getsize(real) > MAX_FILE_BYTES:
+        is_symlink = os.path.islink(path)
+        link_target = os.readlink(path) if is_symlink else None
+    except (OSError, ValueError) as exc:
+        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
+    if link_target is not None and os.path.isabs(link_target):
+        # Resolved on the host, this stays inside the bind source only by
+        # coincidence -- inside the container, the same absolute target
+        # resolves under a different root and names a different file.
+        raise Unreadable(
+            f"{path} is an absolute symlink — resolves differently inside "
+            "the container, not followed"
+        )
+    try:
+        descriptor = os.open(real, os.O_RDONLY | os.O_NONBLOCK)
+    except (OSError, ValueError) as exc:
+        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise Unreadable(f"{path} is not a regular file — not read")
+        if info.st_size > MAX_FILE_BYTES:
             raise Unreadable(f"{path} is larger than 1 MiB — not read")
-        with open(real, "rb") as handle:
-            data = handle.read(MAX_FILE_BYTES + 1)
+        data = os.read(descriptor, MAX_FILE_BYTES + 1)
     except OSError as exc:
-        raise Unreadable(f"{path}: {exc.strerror or exc}") from exc
+        raise Unreadable(f"{path}: {_os_error_text(exc)}") from exc
+    finally:
+        os.close(descriptor)
+    if len(data) > MAX_FILE_BYTES:
+        raise Unreadable(f"{path} is larger than 1 MiB — not read")
     return data.decode("utf-8", "replace")
 
 
@@ -246,37 +289,140 @@ def _not_readable_note(start: str, host_root: str, placement: Placement) -> str:
     return f"{start}: a bind mount of {host_root} — not readable on this node{where}"
 
 
+def _reraise(exc: OSError) -> None:
+    """An ``onerror`` callback for ``os.walk`` -- a scan failure becomes a note, not silence."""
+    raise exc
+
+
+def _is_regular_file(path: str) -> bool:
+    """Whether *path* names a plain file -- never a FIFO, socket or device."""
+    try:
+        return stat.S_ISREG(os.stat(path).st_mode)
+    except (OSError, ValueError):
+        return False
+
+
 def _walk(
+    workload: Workload, mount: Mount, host_root: str, start: str, listing: ProviderListing
+) -> list[Located]:
+    """Files under *start* that come from the bind *mount*, recursively.
+
+    *host_root* is *mount*'s own host-side subtree for *start* -- the caller
+    has already resolved which mount owns *start* and that the task runs
+    here. Symlinked directories are not descended into -- Traefik's
+    ``os.ReadDir`` does not either. A file shadowed by a more specific mount
+    is left to that mount's own entry. A non-regular dirent (a FIFO, a
+    socket) is reported in a note rather than listed.
+    """
+    found: list[Located] = []
+    try:
+        walker = os.walk(host_root, followlinks=False, onerror=_reraise)
+        for current, dirs, files in walker:
+            dirs.sort()
+            relative_dir = os.path.relpath(current, host_root)
+            for name in sorted(files):
+                if format_of(name) is None:
+                    continue
+                relative = name if relative_dir == "." else f"{relative_dir}/{name}"
+                container_path = posixpath.join(start, relative)
+                if not _is_regular_file(os.path.join(current, name)):
+                    listing.notes.append(f"{container_path}: not a regular file — not listed")
+                    continue
+                located = locate(workload, container_path)
+                if located.mount == mount:
+                    found.append(located)
+    except (OSError, ValueError) as exc:
+        listing.notes.append(f"{start}: {_os_error_text(exc)} — not listed")
+        return []
+    return found
+
+
+def _nested_bind_files(
+    workload: Workload,
+    mount: Mount,
+    target: str,
+    placement: Placement,
+    listing: ProviderListing,
+) -> list[Located]:
+    """Files from a bind mount nested inside the provider directory.
+
+    *target* has no dynamic extension here (a recognised extension is
+    handled by the caller as a single file), so it is either a directory or
+    something Traefik would not read either way.
+    """
+    if not placement.here:
+        listing.notes.append(_not_readable_note(target, mount.source, placement))
+        return []
+    if not os.path.isdir(mount.source):
+        return []
+    return _walk(workload, mount, mount.source, target, listing)
+
+
+def _covering_bind_files(
     workload: Workload,
     mount: Mount,
     directory: str,
     placement: Placement,
     listing: ProviderListing,
 ) -> list[Located]:
-    """Files under *directory* that come from the bind *mount*, recursively.
+    """Files from a bind mount whose target covers the whole provider directory.
 
-    Symlinked directories are not descended into -- Traefik's ``os.ReadDir``
-    does not either. A file shadowed by a more specific mount is left to that
-    mount's own entry.
+    A more specific mount may already own *directory* itself -- that mount
+    lists its own subtree in its own turn, and this one lists nothing.
     """
     base = locate(workload, directory)
-    host_root = base.host_path if base.mount == mount else mount.source
-    start = directory if base.mount == mount else posixpath.normpath(mount.target)
-    if not placement.here:
-        listing.notes.append(_not_readable_note(start, host_root or "", placement))
+    if base.mount != mount:
         return []
-    found: list[Located] = []
-    for current, dirs, files in os.walk(host_root or "", followlinks=False):
-        dirs.sort()
-        relative_dir = os.path.relpath(current, host_root)
-        for name in sorted(files):
-            if format_of(name) is None:
-                continue
-            relative = name if relative_dir == "." else f"{relative_dir}/{name}"
-            located = locate(workload, posixpath.join(start, relative))
-            if located.mount == mount:
-                found.append(located)
-    return found
+    host_root = base.host_path or mount.source
+    if not placement.here:
+        listing.notes.append(_not_readable_note(directory, host_root, placement))
+        return []
+    return _walk(workload, mount, host_root, directory, listing)
+
+
+def _empty_directory_note(workload: Workload, directory: str) -> str | None:
+    """Why nothing was found under *directory* at all, when that has an explanation."""
+    owner = locate(workload, directory).mount
+    if owner is None:
+        return f"{directory} is not mounted — nothing to read"
+    if owner.kind == "volume":
+        return f"{directory} is on volume {owner.source} — not readable"
+    if owner.kind == "tmpfs":
+        return f"{directory} is on a tmpfs mount — not readable"
+    return None
+
+
+def _files_from_mount(
+    workload: Workload,
+    mount: Mount,
+    directory: str,
+    placement: Placement,
+    listing: ProviderListing,
+) -> list[Located]:
+    """What this one mount contributes to *directory*'s listing, if anything."""
+    target = posixpath.normpath(mount.target)
+    inside = _covers(directory, target) and target != directory
+    if mount.kind == "config":
+        return [locate(workload, target)] if inside and format_of(target) else []
+    if mount.kind != "bind":
+        return []
+    if inside:
+        if format_of(target):
+            return [locate(workload, target)]
+        return _nested_bind_files(workload, mount, target, placement, listing)
+    if _covers(target, directory):
+        return _covering_bind_files(workload, mount, directory, placement, listing)
+    return []
+
+
+def _capped(ordered: list[Located], directory: str, listing: ProviderListing) -> list[Located]:
+    """*ordered*, truncated to ``MAX_PROVIDER_FILES`` with a note about the rest."""
+    if len(ordered) <= MAX_PROVIDER_FILES:
+        return ordered
+    listing.notes.append(
+        f"more than {MAX_PROVIDER_FILES} files under {directory} — the rest not read"
+    )
+    return ordered[:MAX_PROVIDER_FILES]
 
 
 def provider_files(
@@ -292,21 +438,14 @@ def provider_files(
     directory = posixpath.normpath(provider.directory)
     found: dict[str, Located] = {}
     for mount in workload.mounts:
-        target = posixpath.normpath(mount.target)
-        inside = _covers(directory, target) and target != directory
-        if mount.kind == "config" and inside and format_of(target):
-            found.setdefault(target, locate(workload, target))
-        elif mount.kind == "bind" and (inside or _covers(target, directory)):
-            if inside and format_of(target):
-                found.setdefault(target, locate(workload, target))
-            elif not inside or os.path.isdir(mount.source):
-                for located in _walk(workload, mount, directory, placement, listing):
-                    found.setdefault(located.path, located)
-    ordered = [found[path] for path in sorted(found)]
-    if len(ordered) > MAX_PROVIDER_FILES:
-        listing.notes.append(
-            f"more than {MAX_PROVIDER_FILES} files under {directory} — the rest not read"
-        )
-        ordered = ordered[:MAX_PROVIDER_FILES]
-    listing.files = ordered
+        for located in _files_from_mount(workload, mount, directory, placement, listing):
+            found.setdefault(located.path, located)
+
+    listing.files = _capped([found[path] for path in sorted(found)], directory, listing)
+
+    if not listing.files and not listing.notes:
+        note = _empty_directory_note(workload, directory)
+        if note:
+            listing.notes.append(note)
+
     return listing

@@ -1,5 +1,7 @@
 """Where a path inside the Traefik container comes from, and whether it can be read here."""
 
+import os
+
 import pytest
 
 from terminal_status_panel.collectors import traefik_mounts as mounts
@@ -267,3 +269,187 @@ def test_provider_filename_is_the_one_path():
 )
 def test_the_format_follows_the_extension(path, fmt):
     assert mounts.format_of(path) == fmt
+
+
+# --- Fix round 1 -------------------------------------------------------
+
+
+def test_a_nested_bind_does_not_leak_files_from_outside_the_provider_directory(tmp_path):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / "acme.yaml").write_text("")
+    (outer / "traefik.yml").write_text("")
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    (inner / "x.yml").write_text("")
+    workload = _workload(
+        mounts.Mount("bind", "/etc/traefik", str(outer)),
+        mounts.Mount("bind", "/etc/traefik/dynamic", str(inner)),
+    )
+
+    listing = mounts.provider_files(
+        workload, FileProvider(directory="/etc/traefik/dynamic"), placement=HERE
+    )
+
+    paths = [located.path for located in listing.files]
+    assert paths == ["/etc/traefik/dynamic/x.yml"]
+    assert all(p == "/etc/traefik/dynamic" or p.startswith("/etc/traefik/dynamic/") for p in paths)
+
+
+def test_a_nested_bind_directory_on_another_node_gives_a_note():
+    workload = _workload(
+        mounts.Mount("config", "/dyn/a.yml", "cfg_a"),
+        mounts.Mount("bind", "/dyn/extra", "/nonexistent/extra"),
+    )
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=ELSEWHERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/a.yml"]
+    assert any("not readable on this node" in note for note in listing.notes)
+
+
+def test_a_missing_bind_source_gives_a_note_not_silence(tmp_path):
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path / "missing")))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert "not listed" in listing.notes[0]
+
+
+def test_a_fifo_is_not_read_and_does_not_block(tmp_path):
+    fifo = tmp_path / "traefik.yaml"
+    os.mkfifo(fifo)
+    located = mounts.locate(
+        _workload(mounts.Mount("bind", "/d/traefik.yaml", str(fifo))), "/d/traefik.yaml"
+    )
+
+    with pytest.raises(mounts.Unreadable, match="not a regular file"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_fifo_is_skipped_in_the_walk_with_a_note(tmp_path):
+    os.mkfifo(tmp_path / "pipe.yml")
+    workload = _workload(mounts.Mount("bind", "/dyn", str(tmp_path)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert any("not a regular file" in note for note in listing.notes)
+
+
+def test_a_nul_byte_in_a_bind_source_does_not_raise_out():
+    located = mounts.locate(
+        _workload(mounts.Mount("bind", "/d/x.yml", "/tmp/abc\x00def")), "/d/x.yml"
+    )
+
+    with pytest.raises(mounts.Unreadable):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_nul_byte_in_a_bind_directory_source_does_not_raise_out():
+    workload = _workload(mounts.Mount("bind", "/dyn", "/tmp/abc\x00def"))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes
+
+
+def test_an_absolute_symlink_is_not_followed_even_when_it_stays_inside(tmp_path):
+    root = tmp_path / "dynamic"
+    root.mkdir()
+    (root / "traefik.yml").write_text("x: 1\n")
+    (root / "abs.yml").symlink_to(root / "traefik.yml")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root))), "/d/abs.yml")
+
+    with pytest.raises(mounts.Unreadable, match="absolute symlink"):
+        mounts.read_located(located, configs={}, placement=HERE)
+
+
+def test_a_relative_symlink_inside_the_bind_source_is_still_followed(tmp_path):
+    root = tmp_path / "dynamic"
+    root.mkdir()
+    (root / "traefik.yml").write_text("x: 1\n")
+    (root / "rel.yml").symlink_to("traefik.yml")
+    located = mounts.locate(_workload(mounts.Mount("bind", "/d", str(root))), "/d/rel.yml")
+
+    assert mounts.read_located(located, configs={}, placement=HERE) == "x: 1\n"
+
+
+def test_provider_directory_on_a_volume_is_a_note():
+    workload = _workload(mounts.Mount("volume", "/dyn", "dyn_data"))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes == ["/dyn is on volume dyn_data — not readable"]
+
+
+def test_provider_directory_on_a_tmpfs_is_a_note():
+    workload = _workload(mounts.Mount("tmpfs", "/dyn", ""))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes == ["/dyn is on a tmpfs mount — not readable"]
+
+
+def test_provider_directory_not_mounted_at_all_is_a_note():
+    workload = _workload()
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+    assert listing.notes == ["/dyn is not mounted — nothing to read"]
+
+
+def test_a_symlinked_directory_is_not_descended_into(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "secret.yml").write_text("")
+    root = tmp_path / "dyn"
+    root.mkdir()
+    (root / "linked").symlink_to(real_dir)
+    workload = _workload(mounts.Mount("bind", "/dyn", str(root)))
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert listing.files == []
+
+
+def test_a_config_inside_a_bind_directory_shadows_the_bind_file(tmp_path):
+    (tmp_path / "a.yml").write_text("from bind\n")
+    workload = _workload(
+        mounts.Mount("bind", "/dyn", str(tmp_path)),
+        mounts.Mount("config", "/dyn/a.yml", "cfg_a"),
+    )
+
+    listing = mounts.provider_files(workload, FileProvider(directory="/dyn"), placement=HERE)
+
+    assert [located.path for located in listing.files] == ["/dyn/a.yml"]
+    assert listing.files[0].mount.kind == "config"
+
+
+def test_dot_dot_in_a_mount_target_is_normalised():
+    workload = _workload(mounts.Mount("bind", "/etc/traefik/../secrets", "/srv/secrets"))
+
+    located = mounts.locate(workload, "/etc/secrets/x.yml")
+
+    assert located.host_path == "/srv/secrets/x.yml"
+
+
+def test_dot_dot_in_the_lookup_path_is_normalised():
+    workload = _workload(mounts.Mount("bind", "/etc/traefik", "/srv/traefik"))
+
+    located = mounts.locate(workload, "/etc/traefik/dynamic/../x.yml")
+
+    assert located.host_path == "/srv/traefik/x.yml"
+
+
+def test_dot_dot_does_not_escape_a_sibling_with_a_similar_name():
+    workload = _workload(mounts.Mount("bind", "/etc/traefik", "/srv/traefik"))
+
+    located = mounts.locate(workload, "/etc/traefik/../traefik2/x.yml")
+
+    assert located.mount is None
