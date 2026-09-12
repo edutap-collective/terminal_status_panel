@@ -1160,6 +1160,8 @@ def test_an_empty_match_wins_over_a_collection_error():
 #: 0.12.2's own wording.
 _STATIC_PROBLEMS = [
     "no Traefik service or container matches traefik.match (traefik_traefik)",
+    "no Traefik service matches traefik.match (traefik_traefik);"
+    " containers could not be listed: TimeoutError: Read timed out.",
     "--configFile=traefik.yaml is relative and the container's working directory"
     " is not declared — not read",
     "--configFile=/etc/traefik/traefik.yaml is not mounted — it may be part of the image,"
