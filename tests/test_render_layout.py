@@ -186,7 +186,7 @@ def _traefik_data():
                 TraefikRouter(
                     name="kafbat-ui",
                     entrypoints=["adminpanel"],
-                    rule="PathPrefix(`/portale/kafka-ui`)",
+                    rule="PathPrefix(`/tools/kafka-ui`)",
                     service="kafbat-ui",
                 )
             ],
