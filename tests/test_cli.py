@@ -269,8 +269,8 @@ def test_a_traefik_only_panel_shows_a_real_verdict_not_a_dot(isolated_cli, capsy
     )
     info = TraefikInfo(
         reachable=True,
-        entrypoints=[TraefikEntrypoint(name="portalmgmt", address=":2020", port=2020)],
-        routers=[TraefikRouter(name="kafbat-ui", entrypoints=["portalmgmt"], service="kafbat-ui")],
+        entrypoints=[TraefikEntrypoint(name="adminpanel", address=":2020", port=2020)],
+        routers=[TraefikRouter(name="kafbat-ui", entrypoints=["adminpanel"], service="kafbat-ui")],
         services={
             "kafbat-ui": TraefikServiceRef(name="kafbat-ui", docker_service="kafbat-ui_kafbat-ui")
         },
@@ -416,3 +416,49 @@ def test_the_flag_survives_into_follow_mode(isolated_cli, monkeypatch):
     )
     cli.main(["--sections", "server", "--processes", "7", "--follow", "--no-color"])
     assert limits == [7, 7]
+
+
+def test_collect_all_passes_the_configured_match_to_the_traefik_collector(isolated_cli):
+    from terminal_status_panel.config import TraefikApiConfig
+    from terminal_status_panel.model import TraefikInfo
+
+    seen = {}
+
+    def fake(client, **kwargs):
+        seen.update(kwargs)
+        return TraefikInfo()
+
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: None)
+    isolated_cli.setattr(cli, "collect_traefik", fake)
+    cfg = Config(traefik=TraefikApiConfig(match=("demo_traefik",)))
+
+    cli.collect_all(cfg, sections=("traefik",))
+
+    assert seen["match"] == ("demo_traefik",)
+
+
+def test_an_empty_traefik_match_skips_every_traefik_read(isolated_cli):
+    called = []
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: called.append("docker"))
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append("traefik"))
+    isolated_cli.setattr(cli, "fetch_accepted", lambda *a, **k: called.append("api"))
+    cfg = Config()
+    cfg.traefik.match = ()
+
+    data = cli.collect_all(cfg, sections=("traefik",))
+
+    assert called == []
+    assert data.traefik is None
+
+
+def test_an_empty_traefik_match_leaves_the_docker_section_alone(isolated_cli):
+    called = []
+    isolated_cli.setattr(cli, "collect_docker", lambda *a, **k: called.append("docker"))
+    isolated_cli.setattr(cli, "collect_traefik", lambda *a, **k: called.append("traefik"))
+    isolated_cli.setattr(cli, "fetch_accepted", lambda *a, **k: called.append("api"))
+    cfg = Config()
+    cfg.traefik.match = ()
+
+    cli.collect_all(cfg, sections=("docker", "traefik"))
+
+    assert called == ["docker"]

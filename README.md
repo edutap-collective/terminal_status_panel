@@ -71,6 +71,13 @@ the service containers** (`pg_autoctl show state` or `pg_isready`,
 `db.hello()`, `kafka-metadata-quorum.sh`, a `/health` curl). GlusterFS is
 queried on the host via `sudo -n` and is skipped when that is unavailable.
 
+To draw Traefik's wiring it reads Traefik's static and dynamic configuration:
+Docker configs through the API, and **files bind-mounted into the Traefik
+container**, from the host, as the logged-in user — only on the node the
+Traefik task runs on, at most 1 MiB per file and 64 files for the whole
+provider directory — its tree, across every mount under it — and never more
+than 10,000 directory entries scanned.
+
 ## Documentation
 
 The full documentation lives in [`docs/`](docs/index.md) and builds with Sphinx

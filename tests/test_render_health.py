@@ -162,8 +162,8 @@ def test_peer_panel_shows_method_and_handshake_age():
     health = HealthInfo(
         peers_probed=True,
         peers=[
-            PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
-            PeerReachability(name="ccn-02", method="wireguard", ok=False, detail="6:02"),
+            PeerReachability(name="swarm01-wrk-01", method="wireguard", ok=True, detail="0:31"),
+            PeerReachability(name="swarm01-wrk-02", method="wireguard", ok=False, detail="6:02"),
         ],
     )
     output = _render(health)
@@ -175,7 +175,7 @@ def test_peer_panel_shows_method_and_handshake_age():
 def test_tcp_fallback_is_labelled_as_such():
     health = HealthInfo(
         peers_probed=True,
-        peers=[PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377")],
+        peers=[PeerReachability(name="swarm01-wrk-01", method="tcp", ok=True, detail="tcp/2377")],
     )
     assert "tcp" in _render(health).lower()
 
@@ -196,7 +196,7 @@ def test_narrow_width_still_renders():
         peers_probed=True,
         dns_probed=True,
         clusters=[ClusterService(kind="postgres", name="PostgreSQL-18", reachable=True)],
-        peers=[PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31")],
+        peers=[PeerReachability(name="swarm01-wrk-01", method="wireguard", ok=True, detail="0:31")],
         dns=[DnsCheck(label="Resolver", ok=True, detail="3 ms")],
     )
     assert "CLUSTER HEALTH" in _render(health, width=60)
@@ -209,8 +209,8 @@ def test_mixed_peer_methods_render_as_mixed():
     health = HealthInfo(
         peers_probed=True,
         peers=[
-            PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
-            PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
+            PeerReachability(name="swarm01-wrk-01", method="wireguard", ok=True, detail="0:31"),
+            PeerReachability(name="swarm01-wrk-02", method="tcp", ok=True, detail="tcp/2377"),
         ],
     )
     assert "mixed" in _render(health)
@@ -220,8 +220,8 @@ def test_all_wireguard_peers_still_render_wg():
     health = HealthInfo(
         peers_probed=True,
         peers=[
-            PeerReachability(name="ccn-01", method="wireguard", ok=True, detail="0:31"),
-            PeerReachability(name="ccn-02", method="wireguard", ok=True, detail="1:02"),
+            PeerReachability(name="swarm01-wrk-01", method="wireguard", ok=True, detail="0:31"),
+            PeerReachability(name="swarm01-wrk-02", method="wireguard", ok=True, detail="1:02"),
         ],
     )
     output = _render(health)
@@ -233,8 +233,8 @@ def test_all_tcp_peers_still_render_tcp():
     health = HealthInfo(
         peers_probed=True,
         peers=[
-            PeerReachability(name="ccn-01", method="tcp", ok=True, detail="tcp/2377"),
-            PeerReachability(name="ccn-02", method="tcp", ok=True, detail="tcp/2377"),
+            PeerReachability(name="swarm01-wrk-01", method="tcp", ok=True, detail="tcp/2377"),
+            PeerReachability(name="swarm01-wrk-02", method="tcp", ok=True, detail="tcp/2377"),
         ],
     )
     output = _render(health)

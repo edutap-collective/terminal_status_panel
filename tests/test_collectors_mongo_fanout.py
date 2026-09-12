@@ -24,7 +24,7 @@ from terminal_status_panel.collectors import clusters
 
 FANOUT = json.dumps(
     {
-        "set": "lrz_app",
+        "set": "app_rs",
         "me": "mongodb-app-1:27017",
         "primary": "mongodb-app-1:27017",
         "hosts": [f"mongodb-app-{n}:27017" for n in range(1, 6)],
@@ -92,7 +92,7 @@ def test_a_member_the_deadline_cut_off_stays_unmeasured():
 def test_an_arbiter_is_listed_even_though_hosts_omits_it():
     """`hello` reports arbiters in their own field, not in `hosts`.
 
-    The set on the cluster has none today -- measured, the field is absent --
+    The set this was measured on had none -- the field was absent --
     but a set that has one would have shown a member short, with no hint that
     a vote was missing from the display.
     """

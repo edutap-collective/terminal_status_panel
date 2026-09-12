@@ -22,6 +22,18 @@ guesswork dressed as a record.
   `kafka.command_config` (`""` omits it) and `rustfs.scheme`. Every default is
   the behaviour of 0.12.2. Unknown keys and tables under `[health]` are
   reported by `--debug`.
+- `traefik.match`: the Traefik workload is found by configurable,
+  case-insensitive name patterns, as a Swarm service or as a plain container.
+  An empty list reads nothing on the host: no Docker call, no API cross-check.
+- Traefik's static configuration is read from the source Traefik itself uses —
+  a file (`--configFile` or a default location), else the command-line flags,
+  else `TRAEFIK_*` variables — and the file provider by the path that
+  configuration names. Files come from Docker configs or, on the node the
+  Traefik task runs on, from bind mounts. YAML and TOML. A bind-mounted file
+  is opened component by component, never through a symlink below the bind
+  source. A provider directory yields at most 64 files — its walk stops once
+  a 65th is known — and scans at most 10,000 directory entries; either limit
+  leaves a note.
 
 ### Changed
 
@@ -29,6 +41,29 @@ guesswork dressed as a record.
   match — the probe's container search and the crash-loop check as well as the
   DOCKER INFOS join — and the join reads the configured list instead of the
   built-in one.
+- When no entrypoints can be read, the banner names the reason instead of
+  "no entrypoints found" wherever the panel knows it. A Swarm worker, which
+  cannot list services, keeps the old banner.
+- A Traefik configured by command-line flags with a file-provider directory
+  has its dynamic configs chosen by mount path now, as Traefik chooses them:
+  a config mounted under that directory with a `.yml`, `.yaml` or `.toml`
+  file name is read whatever the config is called; a `*traefik_dynamic*`
+  config mounted elsewhere, or without such an extension, is no longer read;
+  and the files are read in path order, which decides between two files
+  declaring the same name. A config the service mounts but a successful
+  configs listing does not contain is reported as `<name>: config not
+  found`; a listing that failed stays one note.
+- A Docker config read under the config-generation rule that contains `{{` is
+  noted as templated and no longer parsed, as on the file-provider path.
+- The file-provider warning counts further failures, `(+N more)`, instead of
+  showing only the first.
+
+### Fixed
+
+- On a host where Swarm is not active, the file provider is no longer
+  reported unreadable because Docker configs — a Swarm-only object — could
+  not be listed; they are not asked for there. A Swarm node lists them as
+  before, a worker included.
 
 ## [0.12.2] - 2026-09-10
 

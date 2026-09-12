@@ -8,20 +8,24 @@ captured from a production cluster.
 from __future__ import annotations
 
 import re
+import tomllib
 
 import yaml
 
 from ..model import TraefikEntrypoint, TraefikMiddleware, TraefikRouter, TraefikServiceRef
 
-# The four default entrypoints are declared '--entrypoints.…' and the five
-# vhost ones '--entryPoints.…', because different parts of the Ansible role
-# build them. Case-sensitivity here silently drops five of nine.
+# A deployment's default entrypoints and its per-vhost ones can end up
+# declared with different casing -- '--entrypoints.…' versus
+# '--entryPoints.…' -- when different parts of the automation that built the
+# command line disagree on the spelling. Case-sensitivity here would silently
+# drop whichever group used the other casing.
 _ENTRYPOINT_ADDRESS = re.compile(
     r"^--entrypoints\.(?P<name>[^.]+)\.address=(?P<address>.+)$", re.IGNORECASE
 )
 
 
-def _port_of(address: str) -> int | None:
+def port_of(address: str) -> int | None:
+    """Extract the port number from an address string like ':80' or 'localhost:443'."""
     _, _, tail = address.rpartition(":")
     try:
         return int(tail)
@@ -35,11 +39,12 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
     In the order the arguments declare them.
 
     Declaration order is the deployment's own grouping and reads better than
-    the port number: the Ansible role lists the four entrypoints every cluster
-    has — ``dashboard``, ``ping``, ``default``, ``https`` — before the per-vhost
-    ones it appends for this cluster, so that grouping survives into the panel.
-    Sorting by port would interleave them (``https`` at 443 first, ``dashboard``
-    at 8082 last) and scatter what belongs together.
+    the port number: a deployment's automation typically lists its baseline
+    entrypoints — such as ``dashboard``, ``ping``, ``default``, ``https`` —
+    before appending its own per-vhost ones, so that grouping survives into
+    the panel. Sorting by port would interleave them (``https``, on the low
+    port 443, first; ``dashboard``, on the high port 8082, last) and scatter
+    what belongs together.
     """
     found: list[TraefikEntrypoint] = []
     seen: set[str] = set()
@@ -52,7 +57,7 @@ def parse_entrypoints(args: list[str]) -> list[TraefikEntrypoint]:
             continue
         seen.add(name)
         address = match.group("address")
-        found.append(TraefikEntrypoint(name=name, address=address, port=_port_of(address)))
+        found.append(TraefikEntrypoint(name=name, address=address, port=port_of(address)))
     return found
 
 
@@ -245,22 +250,24 @@ def _mapping(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def parse_dynamic_yaml(
-    text: str, origin: str
+def parse_dynamic(
+    text: str, origin: str, fmt: str = "yaml"
 ) -> tuple[list[TraefikRouter], dict[str, TraefikMiddleware], dict[str, TraefikServiceRef]]:
     """Routers, middlewares and services from a file-provider config.
 
-    The api and ping-router entries live only here. Without them the dashboard
-    entrypoint looks empty and the /_traefik_ping_ path every webfe health
-    check depends on is invisible.
+    The api and ping-router entries may live only here. Without them the
+    dashboard entrypoint looks empty and a ping path an upstream health check
+    depends on is invisible.
 
-    The services matter for the same reason in reverse: ``account-api`` points
-    at ``account-api-placeholder``, which is declared here and not in Swarm at
-    all. Read only from labels, it looks like a router pointing at nothing —
-    the panel would report a missing service it had never looked for.
+    The services matter for the same reason in reverse: a router can point at
+    a service declared here and not in Swarm at all. Read only from labels, it
+    looks like a router pointing at nothing — the panel would report a missing
+    service it had never looked for.
+
+    *fmt* is ``yaml`` or ``toml``.
     """
     try:
-        data = yaml.safe_load(text)
+        data = tomllib.loads(text) if fmt == "toml" else yaml.safe_load(text)
     except Exception:
         return [], {}, {}
 
@@ -304,6 +311,31 @@ def parse_dynamic_yaml(
         )
 
     return routers, middlewares, services
+
+
+def parse_error(text: str, fmt: str) -> str | None:
+    """Why *text* parsed to nothing, when the reason is broken syntax.
+
+    Only consulted for a file that yielded neither router nor middleware:
+    valid text with no ``http`` section is a real, empty answer.
+    """
+    try:
+        if fmt == "toml":
+            tomllib.loads(text)
+        else:
+            yaml.safe_load(text)
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def is_templated(text: str) -> bool:
+    """Whether Traefik would evaluate *text* as a Go template.
+
+    Traefik runs every dynamic file through ``text/template``; the panel
+    cannot, and a partial parse would present guesses as configuration.
+    """
+    return "{{" in text
 
 
 def parse_api_rawdata(payload: dict) -> set[str]:

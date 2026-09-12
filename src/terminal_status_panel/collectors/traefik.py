@@ -1,9 +1,11 @@
 """Read Traefik's wiring from the Docker API.
 
-Everything the dashboard shows is derivable here: the entrypoints from the
-Traefik service's own arguments, the routers and services from the labels of
-every Swarm service, and the file-provider routers from the mounted Docker
-configs. No client certificate, no change to the Traefik deployment.
+Everything the dashboard shows is derivable here: the entrypoints from
+Traefik's static configuration -- a file, its flags or its environment,
+whichever Traefik itself reads -- the routers and services from the labels of
+every Swarm service and container, and the file-provider routers from the
+files its file provider reads, Docker configs and bind-mounted host files
+alike. No client certificate, no change to the Traefik deployment.
 
 What this cannot see is Traefik's runtime opinion — a rule that failed to
 parse still appears here as configured. The optional API path answers that.
@@ -12,23 +14,49 @@ parse still appears here as configured. The optional API path answers that.
 from __future__ import annotations
 
 import base64
+import posixpath
 import ssl
 from contextlib import contextmanager
+from typing import Any
 
 import httpx2
-import yaml
 
+from ..config import DEFAULT_TRAEFIK_MATCH
 from ..model import TraefikInfo, TraefikRouter
 from ._labels import SWARM_SERVICE_LABEL, compose_identity, container_labels
+from .traefik_mounts import (
+    KnownPlacement,
+    Located,
+    Placement,
+    Unreadable,
+    Workload,
+    format_of,
+    locate,
+    presence,
+    provider_files,
+    read_located,
+    workload_from_container,
+    workload_from_service,
+)
 from .traefik_parse import (
+    is_templated,
     parse_api_rawdata,
-    parse_dynamic_yaml,
-    parse_entrypoints,
+    parse_dynamic,
+    parse_error,
     parse_labels,
-    parse_ping_entrypoint,
+)
+from .traefik_static import (
+    FileProvider,
+    StaticConfig,
+    candidate_paths,
+    config_file_arg,
+    has_static_env,
+    ignored_flags,
+    parse_static_args,
+    parse_static_document,
+    parse_static_env,
 )
 
-TRAEFIK_SERVICE_PATTERNS = ("traefik_traefik",)
 DYNAMIC_CONFIG_PREFIX = "traefik_dynamic"
 
 _MISSING = object()
@@ -58,38 +86,8 @@ def _spec_of(obj) -> dict:
     return _mapping(_mapping(getattr(obj, "attrs", None)).get("Spec"))
 
 
-def _args_of(service) -> list[str]:
-    task_template = _mapping(_spec_of(service).get("TaskTemplate"))
-    container = _mapping(task_template.get("ContainerSpec"))
-    args = container.get("Args")
-    return [str(arg) for arg in args] if isinstance(args, list) else []
-
-
 def _labels_of(service) -> dict:
     return _mapping(_spec_of(service).get("Labels"))
-
-
-def _mounted_config_names(service) -> set[str]:
-    """The Docker configs this service actually mounts.
-
-    Swarm keeps every generation of a config — ``traefik_dynamic_yml_v1``
-    through ``_v4`` may all exist — and only the ones named in the
-    service spec are the ones Traefik reads. Selecting by name prefix instead
-    parses the superseded generations too, which is how the panel came to show
-    ``ping-router`` four times per entrypoint and to invent orphans out of
-    entrypoints that were removed two revisions ago.
-    """
-    task_template = _mapping(_spec_of(service).get("TaskTemplate"))
-    container = _mapping(task_template.get("ContainerSpec"))
-    refs = container.get("Configs")
-    if not isinstance(refs, list):
-        return set()
-    names = set()
-    for ref in refs:
-        name = _mapping(ref).get("ConfigName")
-        if isinstance(name, str) and name:
-            names.add(name)
-    return names
 
 
 def _config_text(config) -> str | None:
@@ -101,24 +99,17 @@ def _config_text(config) -> str | None:
         return None
 
 
-def _yaml_error(text: str) -> str | None:
-    """Why this config parsed to nothing, when the reason is broken YAML.
-
-    Only consulted for a config that yielded neither router nor middleware:
-    valid YAML with no ``http`` section is a real, empty answer, and must not
-    be reported as a read failure.
-    """
-    try:
-        yaml.safe_load(text)
-    except Exception as exc:
-        return f"{type(exc).__name__}: {exc}"
-    return None
-
-
 def _note_file_provider_error(info: TraefikInfo, message: str) -> None:
-    """Record the first read failure; the field holds one line, not a list."""
-    if info.file_provider_error is None:
-        info.file_provider_error = message
+    """Record a file-provider failure: the field shows the first, and how many more.
+
+    The field is one line in the panel, so it cannot hold them all; counting
+    the rest keeps a later failure from vanishing without a trace. Every note
+    is kept in ``file_provider_notes``.
+    """
+    info.file_provider_notes.append(message)
+    first = info.file_provider_notes[0]
+    more = len(info.file_provider_notes) - 1
+    info.file_provider_error = first if more == 0 else f"{first} (+{more} more)"
 
 
 def _combined_listing_error(service_error: str | None, container_error: str | None) -> str:
@@ -176,14 +167,19 @@ def _socket_timeout(client, timeout: float):
                 pass
 
 
-def _absorb_swarm_services(client, info: TraefikInfo) -> set[str] | None:
-    """List Swarm services, take their wiring, and report the mounted configs.
+def _matches(name: str, match: tuple[str, ...]) -> bool:
+    """Whether *name* contains one of *match* -- case-insensitively, as documented."""
+    folded = name.casefold()
+    return any(pattern.casefold() in folded for pattern in match)
 
-    Returns the set of config generations the Traefik service actually mounts,
-    or ``None`` when that could not be determined -- either because the listing
-    failed or because no service matched ``TRAEFIK_SERVICE_PATTERNS``. The
-    caller treats both the same way, and deliberately: in neither case is there
-    a way to tell a live config generation from a superseded one.
+
+def _absorb_swarm_services(client, info: TraefikInfo, match: tuple[str, ...]) -> Any:
+    """List Swarm services, take their wiring, and return the Traefik service.
+
+    ``None`` when the listing failed or no service matched *match*. Last match
+    wins, as it did before. The service is returned as docker-py handed it:
+    turning it into a ``Workload`` is part of reading Traefik's own
+    configuration, which the caller guards.
     """
     try:
         services = client.services.list()
@@ -196,16 +192,13 @@ def _absorb_swarm_services(client, info: TraefikInfo) -> set[str] | None:
         return None
 
     info.reachable = True
-    mounted: set[str] | None = None
+    traefik = None
     for service in services:
         name = getattr(service, "name", "") or ""
-        if any(pattern in name for pattern in TRAEFIK_SERVICE_PATTERNS):
-            args = _args_of(service)
-            info.entrypoints = parse_entrypoints(args)
-            info.ping_entrypoint = parse_ping_entrypoint(args)
-            mounted = _mounted_config_names(service)
+        if _matches(name, match):
+            traefik = service
         _absorb(info, parse_labels(_labels_of(service), origin=name))
-    return mounted
+    return traefik
 
 
 def _list_containers(client, info: TraefikInfo) -> list:
@@ -251,20 +244,298 @@ def _absorb_containers(info: TraefikInfo, containers: list) -> None:
         _absorb(info, parse_labels(labels, origin=name, docker_name=compose_identity(labels, name)))
 
 
-def _list_configs(client, info: TraefikInfo) -> list:
-    """List Swarm configs, or record why the file provider could not be read."""
+def _traefik_container(containers: list, match: tuple[str, ...]) -> Any:
+    """A plain (non-Swarm) Traefik container, when no Swarm service matched."""
+    for container in containers:
+        if SWARM_SERVICE_LABEL in container_labels(container):
+            continue
+        if _matches(getattr(container, "name", "") or "", match):
+            return container
+    return None
+
+
+class _DaemonInfo:
+    """``docker info``, asked at most once per collection, and only when needed.
+
+    Two questions go to it -- whether Swarm is active here, and which node
+    this is -- and both read the same answer rather than asking twice.
+    """
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self._asked = False
+        self._swarm: dict | None = None
+
+    def swarm(self) -> dict | None:
+        """The answer's ``Swarm`` block; ``None`` when ``docker info`` could not be asked."""
+        if not self._asked:
+            self._asked = True
+            try:
+                self._swarm = _mapping(_mapping(self._client.info()).get("Swarm"))
+            except Exception:
+                self._swarm = None
+        return self._swarm
+
+    def swarm_state(self) -> str | None:
+        """``LocalNodeState`` (``"active"``, ``"inactive"``, ...), ``None`` when unknown."""
+        state = (self.swarm() or {}).get("LocalNodeState")
+        return state if isinstance(state, str) and state else None
+
+    def node_id(self) -> str | None:
+        """The Swarm node ID of the node asked, ``None`` when unknown."""
+        node = (self.swarm() or {}).get("NodeID")
+        return node if isinstance(node, str) and node else None
+
+
+class _SwarmPlacement:
+    """Where the Traefik service's tasks run -- asked once, and only if needed.
+
+    A bind mount is the only thing that needs it, so a deployment without one
+    pays no extra Docker call.
+    """
+
+    def __init__(self, client, daemon: _DaemonInfo, workload: Workload) -> None:
+        self._client = client
+        self._daemon = daemon
+        self._workload = workload
+        self._answer: tuple[bool, str | None] | None = None
+
+    def _ask(self) -> tuple[bool, str | None]:
+        if self._answer is None:
+            self._answer = _runs_here(self._client, self._daemon, self._workload)
+        return self._answer
+
+    @property
+    def here(self) -> bool:
+        """Whether a running Traefik task is on this node."""
+        return self._ask()[0]
+
+    @property
+    def node(self) -> str | None:
+        """The node a Traefik task runs on, when it is not this one."""
+        return self._ask()[1]
+
+
+def _node_name(client, node_id: str) -> str:
+    """The node's hostname where a manager can say, its ID otherwise."""
+    try:
+        return client.nodes.get(node_id).attrs["Description"]["Hostname"]
+    except Exception:
+        return node_id
+
+
+def _runs_here(client, daemon: _DaemonInfo, workload: Workload) -> tuple[bool, str | None]:
+    """Whether a running task of *workload* is on this node, and where it is if not.
+
+    Anything that cannot be asked, or answers in a shape that cannot be read,
+    counts as "not here": a bind mount is then reported as unreadable rather
+    than read from a host that may not be the one Traefik runs on.
+    """
+    if workload.service is None:
+        # A plain container runs on the daemon that listed it.
+        return True, None
+    if daemon.swarm() is None:
+        return False, None
+    node_id = daemon.node_id()
+    try:
+        tasks = workload.service.tasks(filters={"desired-state": "running"})
+        nodes = [
+            task.get("NodeID") for task in tasks if isinstance(task, dict) and task.get("NodeID")
+        ]
+    except Exception:
+        return False, None
+    if node_id and node_id in nodes:
+        return True, None
+    return False, (_node_name(client, nodes[0]) if nodes else None)
+
+
+def _unchecked_names(paths: list[str], index: int, target: str, explicit: bool) -> str:
+    """The file names an undecidable check leaves open, relative to the mount *target*.
+
+    For ``--configFile``, its one name. For a default location, every
+    extension Traefik would still try there: ``traefik.toml/.yaml/.yml``.
+    """
+    path = paths[index]
+    name = posixpath.relpath(path, posixpath.normpath(target))
+    if name == posixpath.curdir:
+        name = posixpath.basename(path)
+    if explicit:
+        return name
+    stem = posixpath.splitext(path)[0]
+    extensions = dict.fromkeys(
+        posixpath.splitext(later)[1]
+        for later in paths[index:]
+        if posixpath.splitext(later)[0] == stem
+    )
+    return posixpath.splitext(name)[0] + "/".join(extensions)
+
+
+def _find_static_file(workload: Workload, placement: Placement) -> Located | str | None:
+    """The file Traefik reads its static configuration from, searched as Traefik searches.
+
+    Returns the located file; a sentence saying why the search cannot be
+    decided from here; or ``None`` when there is no file, and the flags or
+    the environment apply. A candidate that is not there is passed over, as
+    Traefik passes over it -- a missing ``--configFile`` included. One that no
+    mount provides counts as not there, except ``--configFile``: that one may
+    live in the image, so it cannot be decided either way.
+    """
+    explicit = config_file_arg(workload.args)
+    explicit_index = 0 if explicit else -1
+    paths = candidate_paths(workload.args, workload.env, workload.workdir)
+    if explicit and not posixpath.isabs(paths[0]):
+        return (
+            f"--configFile={explicit} is relative and the container's working directory"
+            " is not declared — not read"
+        )
+    for index, path in enumerate(paths):
+        located = locate(workload, path)
+        mount = located.mount
+        if mount is None:
+            if index == explicit_index:
+                return (
+                    f"--configFile={explicit} is not mounted — it may be part of the image,"
+                    " or absent (then Traefik falls back to its default locations and flags)"
+                )
+            continue
+        found = presence(located, placement=placement)
+        if found.state == "present":
+            return located
+        if found.state == "unknown":
+            names = _unchecked_names(paths, index, mount.target, index == explicit_index)
+            return f"{found.reason} — whether it holds {names} cannot be checked from here"
+    return None
+
+
+def _read_static_file(
+    info: TraefikInfo,
+    workload: Workload,
+    located: Located,
+    configs: dict[str, str | None] | None,
+    placement: Placement,
+) -> StaticConfig:
+    """The static file Traefik reads, or the reason it cannot be read here.
+
+    Never the flags instead: Traefik reads the file, and the flags would show
+    a configuration it ignores.
+    """
+    path = located.path
+    try:
+        text = read_located(located, configs=configs, placement=placement)
+        static = parse_static_document(text, format_of(path) or "yaml")
+    except Unreadable as exc:
+        info.static_problem = f"entrypoints are configured in {path}, {exc}"
+        return StaticConfig()
+    except ValueError as exc:
+        info.static_problem = f"{path}: {exc}"
+        return StaticConfig()
+    info.static_source = path
+    ignored = ignored_flags(workload.args)
+    if ignored:
+        info.static_notes.append(
+            f"static configuration from {path}; Traefik ignores {ignored} other"
+            f" command-line flag{'' if ignored == 1 else 's'}"
+        )
+    if not static.entrypoints:
+        info.static_problem = f"{path} declares no entrypoints"
+    return static
+
+
+def _read_static(
+    info: TraefikInfo,
+    workload: Workload,
+    configs: dict[str, str | None] | None,
+    placement: Placement,
+) -> StaticConfig:
+    """The static configuration, from the source Traefik itself would use.
+
+    The first file found, else the flags, else the ``TRAEFIK_`` variables. A
+    search that cannot be decided draws nothing: the flags would show a
+    configuration Traefik may be ignoring.
+    """
+    found = _find_static_file(workload, placement)
+    if isinstance(found, str):
+        info.static_problem = found
+        return StaticConfig()
+    if found is not None:
+        return _read_static_file(info, workload, found, configs, placement)
+    if workload.args:
+        info.static_source = "command-line flags"
+        return parse_static_args(workload.args)
+    if has_static_env(workload.env):
+        info.static_source = "environment"
+        return parse_static_env(workload.env)
+    info.static_problem = "no static configuration found — no file, no flags, no TRAEFIK_ variables"
+    return StaticConfig()
+
+
+def _anchored_provider(
+    info: TraefikInfo, workload: Workload, provider: FileProvider
+) -> FileProvider | None:
+    """*provider* with relative paths resolved as Traefik resolves them, or ``None``.
+
+    Traefik opens a relative path against its own working directory. That is
+    known only where the workload declares one: an image's ``WORKDIR`` is not
+    visible from the Docker API, and guessing it would read a directory
+    Traefik may never look at. ``None`` -- with the reason noted -- is the
+    honest answer then, and nothing is read from the file provider at all.
+    """
+    path = provider.path or ""
+    if posixpath.isabs(path):
+        return provider
+    workdir = workload.workdir
+    if not workdir:
+        _note_file_provider_error(
+            info,
+            f"{path} is relative and the container's working directory is not declared — not read",
+        )
+        return None
+
+    def anchor(value: str | None) -> str | None:
+        if value is None or posixpath.isabs(value):
+            return value
+        return posixpath.join(workdir, value)
+
+    return FileProvider(directory=anchor(provider.directory), filename=anchor(provider.filename))
+
+
+def _list_configs(client, info: TraefikInfo) -> list | None:
+    """List Swarm configs; ``None``, with the reason recorded, when that failed.
+
+    ``None`` is not an empty listing. A config the service mounts is then
+    unread, not missing, and must not be reported as "config not found".
+    """
     try:
         return client.configs.list()
     except Exception as exc:
         # The file provider is optional, but a read failure is not the same as
         # "no dynamic config exists" — the caller must be able to tell them
         # apart, since api@internal and ping-router live only there.
-        info.file_provider_error = f"{type(exc).__name__}: {exc}"
-        return []
+        _note_file_provider_error(info, f"{type(exc).__name__}: {exc}")
+        return None
+
+
+def _decoded_configs(configs: list | None) -> dict[str, str | None] | None:
+    """Every config's decoded body by name, ``None`` for one that could not be decoded.
+
+    ``None`` as a whole when the configs could not be listed.
+    """
+    if configs is None:
+        return None
+    return {getattr(config, "name", "") or "": _config_text(config) for config in configs}
 
 
 def _live_configs(info: TraefikInfo, configs: list, mounted: set[str] | None) -> list:
     """The config generations Traefik actually mounts, or none at all.
+
+    The rule for a Traefik whose static configuration names no file-provider
+    path. Swarm keeps every generation of a config --
+    ``traefik_dynamic_yml_v1`` through ``_v4`` may all exist -- and only the
+    ones named in the service spec (*mounted*) are the ones Traefik reads.
+    Selecting by name prefix alone parses the superseded generations too,
+    which is how the panel came to show ``ping-router`` four times per
+    entrypoint and to invent orphans out of entrypoints that were removed two
+    revisions ago.
 
     Without the Traefik service there is no way to tell a live generation from
     a superseded one, and guessing by name would put routers on screen that
@@ -290,6 +561,28 @@ def _live_configs(info: TraefikInfo, configs: list, mounted: set[str] | None) ->
     ]
 
 
+def _absorb_text(info: TraefikInfo, text: str, origin: str, fmt: str) -> None:
+    """Take one dynamic file's wiring, or say why it yielded none."""
+    if not text.strip():
+        # An empty body decodes cleanly and parses cleanly to nothing, so
+        # neither the decode guard nor `parse_error` below sees it -- but a
+        # dynamic config with no content is a read that came back empty, not a
+        # file provider that declares no routers.
+        _note_file_provider_error(info, f"{origin}: config data is empty")
+        return
+    routers, middlewares, refs = parse_dynamic(text, origin=origin, fmt=fmt)
+    if not routers and not middlewares and not refs:
+        error = parse_error(text, fmt)
+        if error is not None:
+            _note_file_provider_error(info, f"{origin}: {error}")
+    info.routers.extend(routers)
+    info.middlewares.update(middlewares)
+    # Labels win: a Swarm service that also carries a file-provider entry of
+    # the same name is the one that can actually be measured.
+    for ref_name, ref in refs.items():
+        info.services.setdefault(ref_name, ref)
+
+
 def _absorb_config(info: TraefikInfo, config) -> None:
     """Take one dynamic config's wiring, or say why it yielded none."""
     name = getattr(config, "name", "") or ""
@@ -300,24 +593,128 @@ def _absorb_config(info: TraefikInfo, config) -> None:
         # instead of "not read".
         _note_file_provider_error(info, f"{name}: config data is not decodable")
         return
-    if not text.strip():
-        # An empty body decodes cleanly and parses cleanly to nothing, so
-        # neither the guard above nor `_yaml_error` below sees it -- but a
-        # dynamic config with no content is a read that came back empty, not a
-        # file provider that declares no routers.
-        _note_file_provider_error(info, f"{name}: config data is empty")
+    if is_templated(text):
+        # Traefik runs every dynamic file through Go's text/template; the panel
+        # cannot, here as on the provider-path branch.
+        _note_file_provider_error(info, f"{name}: templated — not evaluated")
         return
-    routers, middlewares, refs = parse_dynamic_yaml(text, origin=name)
-    if not routers and not middlewares and not refs:
-        error = _yaml_error(text)
-        if error is not None:
-            _note_file_provider_error(info, f"{name}: {error}")
-    info.routers.extend(routers)
-    info.middlewares.update(middlewares)
-    # Labels win: a Swarm service that also carries a file-provider entry of
-    # the same name is the one that can actually be measured.
-    for ref_name, ref in refs.items():
-        info.services.setdefault(ref_name, ref)
+    _absorb_text(info, text, name, "yaml")
+
+
+def _absorb_located(
+    info: TraefikInfo,
+    located: Located,
+    configs: dict[str, str | None] | None,
+    placement: Placement,
+) -> None:
+    """Take the wiring of one file the provider path selects, config or host file."""
+    mount = located.mount
+    is_config = mount is not None and mount.kind == "config"
+    if is_config and configs is None:
+        # The configs listing failed, and its own note already says so. A note
+        # per mounted config on top would turn that one failure into several
+        # reasons, each claiming something about a config nobody could see.
+        return
+    # A config keeps its name as the origin, as it always has; a host file is
+    # named by its host path, which is where somebody would go to edit it.
+    if mount is not None and is_config:
+        origin = mount.source
+    else:
+        origin = located.host_path or located.path
+    try:
+        text = read_located(located, configs=configs, placement=placement)
+    except Unreadable as exc:
+        # A config's reason already names the config, in the words 0.12.2
+        # used; any other mount is named by its path in the container.
+        _note_file_provider_error(info, str(exc) if is_config else f"{located.path}: {exc}")
+        return
+    if is_templated(text):
+        _note_file_provider_error(info, f"{origin}: templated — not evaluated")
+        return
+    _absorb_text(info, text, origin, format_of(located.path) or "yaml")
+
+
+def _absorb_generations(info: TraefikInfo, configs: list | None, mounted: set[str] | None) -> None:
+    """Take the wiring of the live config generations (see ``_live_configs``).
+
+    A failed configs listing (``None``) has its note already and yields none.
+    """
+    for config in _live_configs(info, configs or [], mounted):
+        _absorb_config(info, config)
+
+
+def _absorb_file_provider(
+    info: TraefikInfo,
+    workload: Workload,
+    provider: FileProvider,
+    configs: dict[str, str | None] | None,
+    placement: Placement,
+) -> None:
+    """Take the wiring of every file Traefik's file provider reads, by its path."""
+    anchored = _anchored_provider(info, workload, provider)
+    if anchored is None:
+        return
+    listing = provider_files(workload, anchored, placement=placement)
+    for note in listing.notes:
+        _note_file_provider_error(info, note)
+    for located in listing.files:
+        _absorb_located(info, located, configs, placement)
+
+
+def _absorb_workload(
+    client, daemon: _DaemonInfo, info: TraefikInfo, workload: Workload, configs: list | None
+) -> None:
+    """The static configuration and the file provider, both as Traefik reads them."""
+    decoded = _decoded_configs(configs)
+    placement: Placement = (
+        _SwarmPlacement(client, daemon, workload)
+        if workload.service is not None
+        else KnownPlacement(here=True)
+    )
+    static = _read_static(info, workload, decoded, placement)
+    info.entrypoints = static.entrypoints
+    info.ping_entrypoint = static.ping_entrypoint
+
+    provider = static.file_provider
+    if provider is not None and provider.path:
+        _absorb_file_provider(info, workload, provider, decoded, placement)
+        return
+    # No provider path: the config-generation rule of 0.12.2. A plain
+    # container mounts no Swarm config, so nothing qualifies for it.
+    mounted = (
+        {mount.source for mount in workload.mounts if mount.kind == "config"}
+        if workload.service is not None
+        else set()
+    )
+    _absorb_generations(info, configs, mounted)
+
+
+def _absorb_traefik(
+    client,
+    daemon: _DaemonInfo,
+    info: TraefikInfo,
+    service: Any,
+    container: Any,
+    configs: list | None,
+) -> None:
+    """Read Traefik's own configuration; a failure nobody foresaw is a problem, not a crash.
+
+    Everything below is written not to raise. This guard is for the shape
+    nobody thought of: it keeps the promise that the collector never raises,
+    and says what happened instead of drawing half a tree.
+    """
+    try:
+        if service is not None:
+            workload = workload_from_service(service)
+        else:
+            workload = workload_from_container(container)
+        _absorb_workload(client, daemon, info, workload, configs)
+    except Exception as exc:
+        info.entrypoints = []
+        info.ping_entrypoint = None
+        info.static_problem = (
+            f"Traefik's configuration could not be read: {type(exc).__name__}: {exc}"
+        )
 
 
 def _absorb(info: TraefikInfo, parsed) -> None:
@@ -328,19 +725,32 @@ def _absorb(info: TraefikInfo, parsed) -> None:
     info.services.update(refs)
 
 
-def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
+def collect_traefik(
+    client, timeout: float = 5.0, match: tuple[str, ...] = DEFAULT_TRAEFIK_MATCH
+) -> TraefikInfo:
     """The wiring as configured, within ``timeout`` per Docker call.
 
     Three sources, in the order their answers depend on each other: the Swarm
-    services (which also say which config generations are live), the plain
-    containers, and the file provider's configs. Each degrades on its own; only
+    services (which also say where Traefik runs and what it mounts), the plain
+    containers, and the file provider's files. Each degrades on its own; only
     both listings failing together means nothing could be read at all.
+
+    The Traefik workload is found by *match*: a Swarm service first, a plain
+    container otherwise. Its static configuration is read from the source
+    Traefik itself would use, and the file provider by the path that
+    configuration names.
+
+    An empty *match* states that there is no Traefik to read on this host:
+    nothing is asked of Docker at all.
 
     Never raises.
     """
     info = TraefikInfo()
+    if not match:
+        return info
+    daemon = _DaemonInfo(client)
     with _socket_timeout(client, timeout):
-        mounted = _absorb_swarm_services(client, info)
+        service = _absorb_swarm_services(client, info, match)
         containers = _list_containers(client, info)
         if not info.reachable:
             # Both listings failed: there is no wiring left to show, unlike
@@ -348,10 +758,35 @@ def collect_traefik(client, timeout: float = 5.0) -> TraefikInfo:
             info.error = _combined_listing_error(info.service_error, info.container_error)
             return info
         _absorb_containers(info, containers)
-        configs = _list_configs(client, info)
-
-    for config in _live_configs(info, configs, mounted):
-        _absorb_config(info, config)
+        container = _traefik_container(containers, match) if service is None else None
+        services_listed = info.service_error is None
+        # Swarm configs exist only on a Swarm daemon. When the services listing
+        # failed, the daemon is asked once whether Swarm is active: a worker --
+        # which can never list services -- or a manager whose listing failed
+        # lists configs exactly as 0.12.2 did, and a failure there is reported
+        # as it always was. Where Swarm is not active, or that cannot be asked,
+        # configs are not asked for: the "not a swarm manager" answer would
+        # blame the file provider for a Compose-only host.
+        list_configs = services_listed or daemon.swarm_state() == "active"
+        configs = _list_configs(client, info) if list_configs else []
+        # The file reads happen inside the timeout too: where Traefik runs is
+        # a Docker call, and host files are bounded by the mount resolver's
+        # own size and count limits.
+        if service is None and container is None:
+            # "Nothing matches" is said only where it was looked for: every
+            # service was listed, or `docker info` reports Swarm inactive here,
+            # so there are none. A worker cannot list services -- its Traefik
+            # task container carries the Swarm label and is skipped above --
+            # and where `docker info` reports any other state, or cannot be
+            # asked, whether a service matches is unknown. Those keep 0.12.2's
+            # banner, which claims no reason.
+            if services_listed or daemon.swarm_state() == "inactive":
+                info.static_problem = (
+                    f"no Traefik service or container matches traefik.match ({', '.join(match)})"
+                )
+            _absorb_generations(info, configs, None)
+        else:
+            _absorb_traefik(client, daemon, info, service, container, configs)
 
     info.routers.sort(key=lambda r: (r.source != "swarm", r.name))
     return info

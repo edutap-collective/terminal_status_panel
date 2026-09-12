@@ -57,13 +57,13 @@ def test_the_repository_and_detail_are_read(tmp_path):
         tmp_path,
         "[managed]\n"
         'by = "Ansible"\n'
-        'repository = "https://gitlab.example.de/group/ansible-app-server"\n'
+        'repository = "https://git.example.net/ops/servers"\n'
         'detail = "no local changes"\n',
     )
 
     managed = load_config(path).managed
 
-    assert managed.repository == "https://gitlab.example.de/group/ansible-app-server"
+    assert managed.repository == "https://git.example.net/ops/servers"
     assert managed.detail == "no local changes"
 
 
@@ -136,13 +136,13 @@ def test_the_block_names_the_tool_in_upper_case():
 def test_the_repository_renders_as_its_last_path_segment():
     """A GitLab URL is some sixty characters and would break the column."""
     managed = ManagedConfig(
-        by="Ansible", repository="https://gitlab.example.de/LMU-Dez-VI/Ref-VI.5/ansible-app-server"
+        by="Ansible", repository="https://git.example.net/operations/infrastructure/app-servers"
     )
 
     out = _text(panels.managed_panel(managed))
 
-    assert "ansible-app-server" in out
-    assert "gitlab.example.de" not in out, "the full URL belongs in the link, not on screen"
+    assert "app-servers" in out
+    assert "git.example.net" not in out, "the full URL belongs in the link, not on screen"
 
 
 def test_the_detail_line_is_rendered():

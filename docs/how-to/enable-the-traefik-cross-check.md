@@ -6,16 +6,15 @@ The `[traefik]` config section (`url`, `cert`, `key`, `ca` — see
 certificate, the collector asks Traefik what it actually accepted and
 records the answer per router.
 
-**It is dormant on every app server today, and should stay unset.** Reaching
-that endpoint needs a client certificate signed by the **webfe CA**, and the
-Ansible role that provisions app servers currently issues only
-**app-server TinyCA** certificates — for Traefik→service mTLS, a different
-trust chain than the one the dashboard's own listener expects. Configuring
-`traefik.url` without a certificate the dashboard accepts does not error: an
-unreachable or rejected connection is treated the same as "not configured"
-(see `fetch_accepted` in `collectors/traefik.py`) and the check is silently
-skipped, so no test will surface the mistake. Leave the section unset until
-the app servers have a certificate from the right CA.
+**It works only with a client certificate the dashboard accepts.** Where
+Traefik's dashboard router requires a client certificate, the deployment has
+to issue the panel one from the CA that router trusts. A certificate from
+another chain — one issued for Traefik→service mTLS, say — does not do.
+Configuring `traefik.url` without a certificate the dashboard accepts does
+not error: an unreachable or rejected connection is treated the same as "not
+configured" (see `fetch_accepted` in `collectors/traefik.py`) and the check
+is silently skipped, so no test will surface the mistake. Leave the section
+unset until the host has a certificate from the right CA.
 
 When the cross-check does run, the tree shows its answer: a router Traefik
 reported as *not* enabled is marked `💀 rejected by Traefik` on its own line

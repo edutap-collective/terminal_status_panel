@@ -1236,7 +1236,7 @@ def test_a_small_lag_and_a_large_one_read_differently():
     small_lag = [m for m in small.members if m.name == "pg18-swarm01-wrk-03"][0].lag_bytes
     large_lag = [m for m in large.members if m.name == "pg18-swarm01-wrk-03"][0].lag_bytes
     assert small_lag is not None and large_lag is not None
-    assert large_lag > small_lag * 100, "die Groessenordnungen muessen sich unterscheiden"
+    assert large_lag > small_lag * 100, "the orders of magnitude must differ"
 
 
 def test_an_identical_lsn_warns_about_nothing():
@@ -1252,7 +1252,7 @@ def test_an_unreadable_lsn_yields_no_size_rather_than_a_wrong_one():
     service = clusters.parse_pg_state(broken)
     behind = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
     assert behind.warning == "lag"
-    assert behind.lag_bytes is None, "eine falsche Distanz waere schlimmer als keine"
+    assert behind.lag_bytes is None, "a wrong distance would be worse than none"
 
 
 def test_a_secondary_ahead_of_the_primary_is_not_reported_as_lagging():
@@ -1265,7 +1265,7 @@ def test_a_secondary_ahead_of_the_primary_is_not_reported_as_lagging():
     service = clusters.parse_pg_state(ahead)
     member = [m for m in service.members if m.name == "pg18-swarm01-wrk-03"][0]
     assert member.warning == "lag"
-    assert member.lag_bytes is None, "eine negative Distanz waere Unsinn"
+    assert member.lag_bytes is None, "a negative distance would be nonsense"
 
 
 # --- configured patterns and the infra-UI exclusion -------------------------

@@ -81,14 +81,39 @@ class _FakeClient:
         return self._Coll(self._containers)
 
 
+class _SpecService:
+    """A Swarm service with a full ContainerSpec, and the tasks it runs."""
+
+    def __init__(self, name, container_spec, labels=None, task_nodes=("node-1",)):
+        self.name = name
+        self.attrs = {
+            "Spec": {"Labels": labels or {}, "TaskTemplate": {"ContainerSpec": container_spec}}
+        }
+        self._task_nodes = task_nodes
+
+    def tasks(self, filters=None):
+        return [{"NodeID": node} for node in self._task_nodes]
+
+
+class _NodeClient(_FakeClient):
+    """A client that knows which node it is asking from."""
+
+    def __init__(self, *a, node_id="node-1", **k):
+        super().__init__(*a, **k)
+        self._node_id = node_id
+
+    def info(self):
+        return {"Swarm": {"NodeID": self._node_id}}
+
+
 def test_unknown_entrypoints_reports_only_the_missing_ones():
-    router = TraefikRouter(name="r", entrypoints=["portalmgmt", "websecure"])
-    assert collector.unknown_entrypoints(router, {"portalmgmt"}) == ["websecure"]
+    router = TraefikRouter(name="r", entrypoints=["adminpanel", "websecure"])
+    assert collector.unknown_entrypoints(router, {"adminpanel"}) == ["websecure"]
 
 
 def test_a_router_with_only_known_entrypoints_has_no_orphans():
-    router = TraefikRouter(name="r", entrypoints=["portalmgmt"])
-    assert collector.unknown_entrypoints(router, {"portalmgmt"}) == []
+    router = TraefikRouter(name="r", entrypoints=["adminpanel"])
+    assert collector.unknown_entrypoints(router, {"adminpanel"}) == []
 
 
 def test_a_router_with_no_entrypoints_is_not_an_orphan():
@@ -99,22 +124,22 @@ def test_a_router_with_no_entrypoints_is_not_an_orphan():
 def test_collect_reads_entrypoints_from_the_traefik_service():
     client = _FakeClient(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
         ]
     )
     info = collector.collect_traefik(client)
     assert info.reachable is True
-    assert [ep.name for ep in info.entrypoints] == ["portalmgmt"]
+    assert [ep.name for ep in info.entrypoints] == ["adminpanel"]
 
 
 def test_collect_joins_labels_from_every_service():
     client = _FakeClient(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
             _FakeService(
                 "kafbat-ui_kafbat-ui",
                 labels={
-                    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
+                    "traefik.http.routers.kafbat-ui.entrypoints": "adminpanel",
                     "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
                     "traefik.http.services.kafbat-ui.loadbalancer.server.port": "8080",
                 },
@@ -352,11 +377,11 @@ def test_a_broken_file_provider_is_reported_but_labels_still_stand():
 
     client = _ConfigsBreak(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
             _FakeService(
                 "kafbat-ui_kafbat-ui",
                 labels={
-                    "traefik.http.routers.kafbat-ui.entrypoints": "portalmgmt",
+                    "traefik.http.routers.kafbat-ui.entrypoints": "adminpanel",
                     "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/x`)",
                 },
             ),
@@ -382,7 +407,7 @@ def test_a_mis_cased_entrypoints_label_still_reaches_the_orphan_block():
     the finding turns into "wired to all nine ports"."""
     client = _FakeClient(
         services=[
-            _FakeService("traefik_traefik", args=["--entryPoints.portalmgmt.address=:2020"]),
+            _FakeService("traefik_traefik", args=["--entryPoints.adminpanel.address=:2020"]),
             _FakeService(
                 "mystack_image_api",
                 labels={
@@ -395,7 +420,7 @@ def test_a_mis_cased_entrypoints_label_still_reaches_the_orphan_block():
     info = collector.collect_traefik(client)
     router = next(r for r in info.routers if r.name == "image_api")
     assert router.entrypoints == ["websecure"]
-    assert collector.unknown_entrypoints(router, {"portalmgmt"}) == ["websecure"]
+    assert collector.unknown_entrypoints(router, {"adminpanel"}) == ["websecure"]
 
 
 def test_a_service_whose_attrs_are_not_a_mapping_does_not_raise():
@@ -591,7 +616,7 @@ def test_fetch_accepted_returns_none_not_empty_set_when_unreachable():
 def test_fetch_accepted_parses_a_successful_response():
     payload = {
         "routers": {
-            "kafbat-ui@swarm": {"entryPoints": ["portalmgmt"], "status": "enabled"},
+            "kafbat-ui@swarm": {"entryPoints": ["adminpanel"], "status": "enabled"},
             "broken@swarm": {"status": "disabled", "error": ["bad rule"]},
         }
     }
@@ -685,18 +710,18 @@ def test_only_the_config_generations_the_service_mounts_are_read():
         services=[
             _FakeService(
                 "traefik_traefik",
-                args=["--entryPoints.portalmgmt.address=:2020"],
+                args=["--entryPoints.adminpanel.address=:2020"],
                 configs=["traefik_dynamic_yml_v4"],
             )
         ],
         configs=[
             _FakeConfig("traefik_dynamic_yml_v1", body.format(eps="db-ui, kafbat")),
-            _FakeConfig("traefik_dynamic_yml_v4", body.format(eps="portalmgmt")),
+            _FakeConfig("traefik_dynamic_yml_v4", body.format(eps="adminpanel")),
         ],
     )
     info = collector.collect_traefik(client)
     assert [r.name for r in info.routers] == ["ping-router"]
-    assert info.routers[0].entrypoints == ["portalmgmt"]
+    assert info.routers[0].entrypoints == ["adminpanel"]
     assert info.file_provider_error is None
 
 
@@ -886,3 +911,942 @@ def test_the_request_never_leaves_the_trust_decision_to_the_library(monkeypatch,
     collector.fetch_accepted(cfg)
 
     assert isinstance(seen["verify"], ssl.SSLContext)
+
+
+# --------------------------------------------------------------------------- #
+# Finding Traefik by `traefik.match`, and reading its configuration the way
+# Traefik does
+# --------------------------------------------------------------------------- #
+
+STATIC_YAML = """\
+entryPoints:
+  http:
+    address: ":80"
+  https:
+    address: ":443"
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+"""
+
+DYNAMIC_MIDDLEWARES = """\
+http:
+  middlewares:
+    tools-auth:
+      basicAuth:
+        usersFile: /run/secrets/htpasswd
+"""
+
+PING_ROUTER = (
+    "http:\n  routers:\n    ping-router:\n"
+    "      rule: PathPrefix(`/ping`)\n      service: ping@internal\n"
+)
+
+
+def _file_based_traefik(tmp_path, task_nodes=("node-1",)):
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    dynamic_file = tmp_path / "dynamic.yaml"
+    dynamic_file.write_text(DYNAMIC_MIDDLEWARES)
+    return _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yaml"],
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Target": "/etc/traefik/traefik.yaml",
+                },
+                {
+                    "Type": "bind",
+                    "Source": str(dynamic_file),
+                    "Target": "/etc/traefik/dynamic/dynamic.yaml",
+                },
+            ],
+        },
+        task_nodes=task_nodes,
+    )
+
+
+def test_a_file_configured_traefik_yields_its_entrypoints(tmp_path):
+    client = _NodeClient(services=[_file_based_traefik(tmp_path)])
+
+    info = collector.collect_traefik(client, match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["http", "https"]
+    assert info.static_problem is None
+    assert info.static_source == "/etc/traefik/traefik.yaml"
+
+
+def test_the_bind_mounted_dynamic_file_is_read_by_path(tmp_path):
+    client = _NodeClient(services=[_file_based_traefik(tmp_path)])
+
+    info = collector.collect_traefik(client, match=("demo_traefik",))
+
+    assert "tools-auth" in info.middlewares
+    assert info.file_provider_error is None
+
+
+def test_a_bind_mount_on_another_node_is_reported_not_guessed(tmp_path):
+    client = _NodeClient(services=[_file_based_traefik(tmp_path, task_nodes=("node-2",))])
+
+    info = collector.collect_traefik(client, match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert "not readable on this node" in info.static_problem
+    assert "/etc/traefik/traefik.yaml" in info.static_problem
+
+
+def test_an_unmounted_config_file_is_undecidable_and_no_flags_are_drawn():
+    service = _SpecService(
+        "demo_traefik",
+        {"Args": ["--configFile=/etc/traefik/traefik.yaml", "--entrypoints.web.address=:80"]},
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert "is not mounted" in info.static_problem
+
+
+def test_flags_beside_a_found_file_are_noted(tmp_path):
+    service = _file_based_traefik(tmp_path)
+    service.attrs["Spec"]["TaskTemplate"]["ContainerSpec"]["Args"].append("--log.level=DEBUG")
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.static_notes == [
+        "static configuration from /etc/traefik/traefik.yaml;"
+        " Traefik ignores 1 other command-line flag"
+    ]
+
+
+def test_without_a_file_the_flags_and_config_generations_work_as_before():
+    """The CLI + Docker-config shape: the unit-level stand-in for the live diff."""
+    service = _SpecService(
+        "traefik_traefik",
+        {
+            "Args": ["--entrypoints.https.address=:443", "--providers.file.directory=/dynamic/"],
+            "Configs": [
+                {
+                    "ConfigName": "traefik_dynamic_yml_v3",
+                    "File": {"Name": "/dynamic/00-cluster.yml"},
+                },
+                {"ConfigName": "traefik_rootca_x_v1", "File": {"Name": "/certs/rootca_x.pem"}},
+            ],
+        },
+    )
+    client = _NodeClient(
+        services=[service],
+        configs=[
+            _FakeConfig("traefik_dynamic_yml_v2", "http:\n  routers:\n    stale: {}\n"),
+            _FakeConfig("traefik_dynamic_yml_v3", PING_ROUTER),
+            _FakeConfig("traefik_rootca_x_v1", "-----BEGIN CERTIFICATE-----"),
+        ],
+    )
+
+    info = collector.collect_traefik(client)
+
+    assert [ep.name for ep in info.entrypoints] == ["https"]
+    assert [r.name for r in info.routers] == ["ping-router"]
+    assert info.routers[0].origin == "traefik_dynamic_yml_v3"
+    assert info.static_source == "command-line flags"
+    assert info.file_provider_error is None
+
+
+def test_environment_configuration_is_used_when_there_is_neither_file_nor_flag():
+    service = _SpecService("demo_traefik", {"Env": ["TRAEFIK_ENTRYPOINTS_WEB_ADDRESS=:80"]})
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+def test_no_matching_workload_names_the_configured_pattern():
+    info = collector.collect_traefik(
+        _NodeClient(services=[_FakeService("demo_other")]), match=("demo_traefik",)
+    )
+
+    assert info.static_problem == (
+        "no Traefik service or container matches traefik.match (demo_traefik)"
+    )
+
+
+def test_a_compose_traefik_container_is_found_and_read(tmp_path):
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    container = _FakeContainer("demo-traefik-1")
+    container.attrs.update(
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yaml"],
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Destination": "/etc/traefik/traefik.yaml",
+                }
+            ],
+        }
+    )
+
+    info = collector.collect_traefik(_FakeClient(containers=[container]), match=("demo-traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["http", "https"]
+
+
+def test_a_templated_dynamic_file_is_noted_and_not_parsed(tmp_path):
+    service = _file_based_traefik(tmp_path)
+    (tmp_path / "dynamic.yaml").write_text(
+        'http:\n  routers:\n    r:\n      rule: Host(`{{ env "H" }}`)\n'
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.routers == []
+    assert "templated — not evaluated" in info.file_provider_error
+
+
+def test_a_relative_provider_path_is_resolved_against_the_declared_working_directory():
+    """Traefik resolves a relative path against its own working directory."""
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--entrypoints.web.address=:80", "--providers.file.directory=dynamic"],
+            "Dir": "/etc/traefik",
+            "Configs": [
+                {
+                    "ConfigName": "demo_routes_v1",
+                    "File": {"Name": "/etc/traefik/dynamic/routes.yml"},
+                }
+            ],
+        },
+    )
+    client = _NodeClient(services=[service], configs=[_FakeConfig("demo_routes_v1", PING_ROUTER)])
+
+    info = collector.collect_traefik(client, match=("demo_traefik",))
+
+    assert [r.name for r in info.routers] == ["ping-router"]
+    assert info.routers[0].origin == "demo_routes_v1"
+    assert info.file_provider_error is None
+
+
+def test_a_relative_provider_path_without_a_working_directory_reads_nothing():
+    """The image's own WORKDIR is not visible from the spec, so the directory
+    Traefik reads is unknown. Neither a guessed working directory nor the
+    config-generation rule may stand in for it -- the prefixed, mounted config
+    below is exactly what that rule would have drawn."""
+    service = _SpecService(
+        "traefik_traefik",
+        {
+            "Args": ["--entrypoints.web.address=:80", "--providers.file.directory=dynamic"],
+            "Configs": [
+                {"ConfigName": "traefik_dynamic_yml_v1", "File": {"Name": "/dynamic/routes.yml"}}
+            ],
+        },
+    )
+    client = _NodeClient(
+        services=[service], configs=[_FakeConfig("traefik_dynamic_yml_v1", PING_ROUTER)]
+    )
+
+    info = collector.collect_traefik(client)
+
+    assert info.routers == []
+    assert info.file_provider_error == (
+        "dynamic is relative and the container's working directory is not declared — not read"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Looking for the static file the way Traefik does: a candidate under a
+# bind-mounted directory is there only if the file is
+# --------------------------------------------------------------------------- #
+
+
+def _dir_based_traefik(tmp_path, args=(), task_nodes=("node-1",)):
+    """Traefik with /etc/traefik bind-mounted from a host directory."""
+    host_dir = tmp_path / "etc-traefik"
+    host_dir.mkdir()
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": list(args),
+            "Mounts": [{"Type": "bind", "Source": str(host_dir), "Target": "/etc/traefik"}],
+        },
+        task_nodes=task_nodes,
+    )
+    return service, host_dir
+
+
+def test_a_bind_mounted_directory_is_searched_for_the_extension_it_holds(tmp_path):
+    service, host_dir = _dir_based_traefik(tmp_path)
+    (host_dir / "traefik.yml").write_text(STATIC_YAML)
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["http", "https"]
+    assert info.static_source == "/etc/traefik/traefik.yml"
+    assert info.static_problem is None
+
+
+def test_a_bind_mounted_directory_without_a_static_file_leaves_the_flags_in_charge(tmp_path):
+    service, _ = _dir_based_traefik(tmp_path, args=["--entrypoints.web.address=:80"])
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+    assert info.static_source == "command-line flags"
+    assert info.static_problem is None
+
+
+def test_a_bind_mounted_directory_on_another_node_makes_the_search_undecidable(tmp_path):
+    service, host_dir = _dir_based_traefik(
+        tmp_path, args=["--entrypoints.web.address=:80"], task_nodes=("node-2",)
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_source is None
+    assert info.static_problem == (
+        f"/etc/traefik is a bind mount of {host_dir}, not readable on this node"
+        " (Traefik runs on node-2) — whether it holds traefik.toml/.yaml/.yml"
+        " cannot be checked from here"
+    )
+
+
+def test_a_volume_over_the_default_location_makes_the_search_undecidable():
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--entrypoints.web.address=:80"],
+            "Mounts": [{"Type": "volume", "Source": "traefik_conf", "Target": "/etc/traefik"}],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == (
+        "/etc/traefik is on volume traefik_conf — whether it holds traefik.toml/.yaml/.yml"
+        " cannot be checked from here"
+    )
+
+
+def test_a_missing_config_file_under_a_checkable_bind_falls_through_like_traefik(tmp_path):
+    """Traefik skips a --configFile that does not exist, tries its default
+    locations, and then takes its flags."""
+    service, _ = _dir_based_traefik(
+        tmp_path,
+        args=["--configFile=/etc/traefik/custom.yaml", "--entrypoints.web.address=:80"],
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+    assert info.static_source == "command-line flags"
+    assert info.static_problem is None
+
+
+# --------------------------------------------------------------------------- #
+# 0.12.2's texts in the unchanged shape
+# --------------------------------------------------------------------------- #
+
+
+def test_an_undecodable_config_in_the_flags_and_config_shape_keeps_the_old_text():
+    class _Undecodable:
+        name = "traefik_dynamic_yml_v3"
+        attrs = {"Spec": {"Data": "not base64 %%%"}}
+
+    service = _SpecService(
+        "traefik_traefik",
+        {
+            "Args": ["--entrypoints.https.address=:443", "--providers.file.directory=/dynamic/"],
+            "Configs": [
+                {
+                    "ConfigName": "traefik_dynamic_yml_v3",
+                    "File": {"Name": "/dynamic/00-cluster.yml"},
+                }
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service], configs=[_Undecodable()]))
+
+    assert info.routers == []
+    assert info.file_provider_error == "traefik_dynamic_yml_v3: config data is not decodable"
+
+
+# --------------------------------------------------------------------------- #
+# A relative --configFile
+# --------------------------------------------------------------------------- #
+
+
+def test_a_relative_config_file_is_resolved_against_the_declared_working_directory(tmp_path):
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--configFile=traefik.yaml"],
+            "Dir": "/etc/traefik",
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Target": "/etc/traefik/traefik.yaml",
+                }
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["http", "https"]
+    assert info.static_source == "/etc/traefik/traefik.yaml"
+
+
+def test_a_relative_config_file_without_a_working_directory_is_not_guessed():
+    service = _SpecService(
+        "demo_traefik",
+        {"Args": ["--configFile=traefik.yaml", "--entrypoints.web.address=:80"]},
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == (
+        "--configFile=traefik.yaml is relative and the container's working directory"
+        " is not declared — not read"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Never raises: shapes the Docker API should not send, but might
+# --------------------------------------------------------------------------- #
+
+
+def test_a_tasks_listing_of_the_wrong_shape_counts_as_not_here(tmp_path):
+    service = _file_based_traefik(tmp_path)
+    service.tasks = lambda filters=None: None
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert "not readable on this node" in info.static_problem
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"Mounts": 5},
+        {"Configs": 5},
+        {"Args": 5},
+        {"Dir": 5},
+        {"Mounts": [{"Type": "bind", "Source": 5, "Target": "/etc/traefik/traefik.yaml"}]},
+        {"Mounts": [{"Type": "bind", "Source": "/srv/traefik", "Target": 5}]},
+    ],
+    ids=["mounts", "configs", "args", "dir", "source", "target"],
+)
+def test_a_traefik_spec_of_the_wrong_shape_is_ignored_not_raised(spec):
+    service = _SpecService("demo_traefik", {"Env": ["TRAEFIK_ENTRYPOINTS_WEB_ADDRESS=:80"], **spec})
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.error is None
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+def test_an_unexpected_failure_reading_traefik_s_configuration_is_a_problem(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(collector, "candidate_paths", boom)
+    traefik = _SpecService("demo_traefik", {"Args": ["--entrypoints.web.address=:80"]})
+    app = _FakeService("demo_app", labels={"traefik.http.routers.app.entrypoints": "web"})
+
+    info = collector.collect_traefik(_NodeClient(services=[traefik, app]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == "Traefik's configuration could not be read: RuntimeError: boom"
+    # The labels were read before, and stay.
+    assert [r.name for r in info.routers] == ["app"]
+
+
+# --------------------------------------------------------------------------- #
+# Paths the first round left untested
+# --------------------------------------------------------------------------- #
+
+
+def test_an_unparseable_static_file_names_the_parser_s_reason(tmp_path):
+    from terminal_status_panel.collectors.traefik_static import parse_static_document
+
+    broken = "entryPoints: [unclosed\n"
+    service = _file_based_traefik(tmp_path)
+    (tmp_path / "traefik.yaml").write_text(broken)
+    with pytest.raises(ValueError) as parsed:
+        parse_static_document(broken, "yaml")
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == f"/etc/traefik/traefik.yaml: {parsed.value}"
+
+
+def test_a_static_file_without_entrypoints_says_so_and_the_provider_is_still_read(tmp_path):
+    service = _file_based_traefik(tmp_path)
+    (tmp_path / "traefik.yaml").write_text(
+        "providers:\n  file:\n    directory: /etc/traefik/dynamic\n"
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.entrypoints == []
+    assert info.static_problem == "/etc/traefik/traefik.yaml declares no entrypoints"
+    assert "tools-auth" in info.middlewares
+
+
+def test_a_matching_service_wins_over_a_matching_container():
+    service = _SpecService("demo_traefik", {"Args": ["--entrypoints.web.address=:80"]})
+    container = _FakeContainer("demo_traefik-compose-1")
+    container.attrs["Args"] = ["--entrypoints.other.address=:81"]
+
+    info = collector.collect_traefik(
+        _NodeClient(services=[service], containers=[container]), match=("demo_traefik",)
+    )
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+# --------------------------------------------------------------------------- #
+# Copilot round 1 (#41)
+# --------------------------------------------------------------------------- #
+
+
+def test_traefik_match_ignores_case_for_a_service():
+    service = _SpecService("Demo_Traefik", {"Args": ["--entrypoints.web.address=:80"]})
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+def test_traefik_match_ignores_case_for_a_container():
+    container = _FakeContainer("Demo-Traefik-1")
+    container.attrs["Args"] = ["--entrypoints.web.address=:80"]
+
+    info = collector.collect_traefik(_FakeClient(containers=[container]), match=("DEMO-traefik",))
+
+    assert [ep.name for ep in info.entrypoints] == ["web"]
+
+
+def test_a_templated_config_generation_is_noted_and_not_parsed():
+    client = _FakeClient(
+        services=[_FakeService("traefik_traefik", args=[], configs=["traefik_dynamic_yml_v2"])],
+        configs=[
+            _FakeConfig(
+                "traefik_dynamic_yml_v2",
+                'http:\n  routers:\n    r:\n      rule: Host(`{{ env "H" }}`)\n',
+            )
+        ],
+    )
+
+    info = collector.collect_traefik(client)
+
+    assert info.routers == []
+    assert info.file_provider_error == "traefik_dynamic_yml_v2: templated — not evaluated"
+
+
+def test_a_daemon_without_swarm_lists_no_configs_and_blames_nothing_on_them(tmp_path):
+    """Swarm configs exist only on a Swarm daemon. Asking a Compose-only one
+    records its "not a swarm manager" answer as an unreadable file provider,
+    although the bind-mounted files it actually reads were read fine."""
+    calls = []
+
+    class _ComposeOnly(_FakeClient):
+        @property
+        def services(self):
+            raise RuntimeError("This node is not a swarm manager")
+
+        @property
+        def configs(self):
+            calls.append("configs")
+            raise RuntimeError("This node is not a swarm manager")
+
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    dynamic_file = tmp_path / "dynamic.yaml"
+    dynamic_file.write_text(DYNAMIC_MIDDLEWARES)
+    container = _FakeContainer("demo-traefik-1")
+    container.attrs.update(
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yaml"],
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Destination": "/etc/traefik/traefik.yaml",
+                },
+                {
+                    "Type": "bind",
+                    "Source": str(dynamic_file),
+                    "Destination": "/etc/traefik/dynamic/dynamic.yaml",
+                },
+            ],
+        }
+    )
+
+    info = collector.collect_traefik(_ComposeOnly(containers=[container]), match=("demo-traefik",))
+
+    assert calls == []
+    assert info.file_provider_error is None
+    assert "tools-auth" in info.middlewares
+
+
+def test_an_empty_match_makes_no_docker_call_at_all():
+    class _Untouchable:
+        def __getattr__(self, name):
+            raise AssertionError(f"Docker was asked for {name}")
+
+    info = collector.collect_traefik(_Untouchable(), match=())
+
+    assert info.reachable is False
+    assert info.entrypoints == []
+    assert info.routers == []
+
+
+def test_more_than_one_file_provider_failure_is_counted_not_dropped(tmp_path):
+    from rich.console import Console
+
+    from terminal_status_panel.render.traefik import traefik_section
+
+    static_file = tmp_path / "traefik.yaml"
+    static_file.write_text(STATIC_YAML)
+    dynamic_dir = tmp_path / "dynamic"
+    dynamic_dir.mkdir()
+    templated = 'http:\n  routers:\n    r:\n      rule: Host(`{{ env "H" }}`)\n'
+    (dynamic_dir / "a.yml").write_text(templated)
+    (dynamic_dir / "b.yml").write_text(templated)
+    service = _SpecService(
+        "demo_traefik",
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yaml"],
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(static_file),
+                    "Target": "/etc/traefik/traefik.yaml",
+                },
+                {"Type": "bind", "Source": str(dynamic_dir), "Target": "/etc/traefik/dynamic"},
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_NodeClient(services=[service]), match=("demo_traefik",))
+
+    assert info.file_provider_error == (
+        f"{dynamic_dir / 'a.yml'}: templated — not evaluated (+1 more)"
+    )
+    console = Console(width=400, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(info, Config()))
+    assert "templated — not evaluated (+1 more)" in capture.get()
+
+
+# --------------------------------------------------------------------------- #
+# Copilot round 2 (#41): configs are asked for where Swarm is active
+# --------------------------------------------------------------------------- #
+
+_NOT_A_MANAGER = (
+    "This node is not a swarm manager. Worker nodes can't be used to view or modify"
+    " cluster state. Please run this command on a manager node or promote the current"
+    " node to a manager."
+)
+
+
+def _non_manager_client(state, calls):
+    """A daemon whose services and configs listings answer "not a swarm manager"."""
+
+    class _NonManager(_FakeClient):
+        def info(self):
+            calls.append("info")
+            return {"Swarm": {"LocalNodeState": state}}
+
+        @property
+        def services(self):
+            raise RuntimeError(_NOT_A_MANAGER)
+
+        @property
+        def configs(self):
+            calls.append("configs")
+            raise RuntimeError(_NOT_A_MANAGER)
+
+    return _NonManager()
+
+
+def test_a_daemon_where_swarm_is_inactive_is_not_asked_for_configs():
+    calls = []
+
+    info = collector.collect_traefik(_non_manager_client("inactive", calls))
+
+    assert calls == ["info"]
+    assert info.file_provider_error is None
+
+
+def test_a_swarm_worker_reports_the_configs_it_cannot_list_as_0_12_2_did():
+    calls = []
+
+    info = collector.collect_traefik(_non_manager_client("active", calls))
+
+    assert calls == ["info", "configs"]
+    assert info.file_provider_error == f"RuntimeError: {_NOT_A_MANAGER}"
+
+
+def test_a_manager_whose_services_listing_succeeded_is_not_asked_about_swarm():
+    calls = []
+
+    class _Manager(_FakeClient):
+        def info(self):
+            calls.append("info")
+            return {"Swarm": {"LocalNodeState": "active"}}
+
+    info = collector.collect_traefik(_Manager(services=[_FakeService("traefik_traefik", args=[])]))
+
+    assert calls == []
+    assert info.file_provider_error is None
+
+
+# --------------------------------------------------------------------------- #
+# Final review (0.13.0): a Swarm worker states nothing it did not look at
+# --------------------------------------------------------------------------- #
+
+_SWARM_TASK = "com.docker.swarm.service.name"
+
+
+class _Worker(_FakeClient):
+    """A Swarm worker: it cannot list services or configs, and its Traefik
+    task container carries the Swarm label, as every task container does."""
+
+    def __init__(self, state="active"):
+        super().__init__(
+            containers=[
+                _FakeContainer("traefik_traefik.1.abc", {_SWARM_TASK: "traefik_traefik"}),
+                _FakeContainer(
+                    "myapp_api.1.def",
+                    {_SWARM_TASK: "myapp_api", "traefik.http.routers.api.entrypoints": "https"},
+                ),
+                _FakeContainer(
+                    "dev-web-1",
+                    {
+                        "traefik.http.routers.web.entrypoints": "https",
+                        "traefik.http.routers.web.rule": "PathPrefix(`/web`)",
+                        "traefik.http.services.web.loadbalancer.server.port": "8000",
+                    },
+                ),
+            ]
+        )
+        self.state = state
+        self.calls = []
+
+    def info(self):
+        self.calls.append("info")
+        if self.state is None:
+            raise RuntimeError("info unavailable")
+        return {"Swarm": {"LocalNodeState": self.state, "NodeID": "swarm01-wrk-02"}}
+
+    @property
+    def services(self):
+        raise RuntimeError(_NOT_A_MANAGER)
+
+    @property
+    def configs(self):
+        self.calls.append("configs")
+        raise RuntimeError(_NOT_A_MANAGER)
+
+
+def test_a_swarm_worker_collects_exactly_what_0_12_2_collected():
+    """The worker could not look at any service, so it names no reason of its
+    own: every field is what 0.12.2 produced for the same daemon."""
+    from terminal_status_panel.model import TraefikServiceRef
+
+    worker = _Worker()
+
+    info = collector.collect_traefik(worker)
+
+    not_a_manager = f"RuntimeError: {_NOT_A_MANAGER}"
+    assert info.entrypoints == []
+    assert info.ping_entrypoint is None
+    assert info.routers == [
+        TraefikRouter(
+            name="web",
+            entrypoints=["https"],
+            rule="PathPrefix(`/web`)",
+            service="web",
+            source="swarm",
+            origin="dev-web-1",
+        )
+    ]
+    assert info.middlewares == {}
+    assert info.services == {
+        "web": TraefikServiceRef(name="web", port=8000, docker_service="dev-web-1")
+    }
+    assert info.file_provider_error == not_a_manager
+    assert info.service_error == not_a_manager
+    assert info.container_error is None
+    assert info.error is None
+    assert info.static_problem is None
+    # One answer from `docker info` serves every question asked of it.
+    assert worker.calls == ["info", "configs"]
+
+
+#: 0.12.2's TRAEFIK WIRING for `_Worker`, rendered from the 0.12.2 tree.
+_WORKER_0_12_2 = {
+    80: [
+        "TRAEFIK WIRING " + "─" * 65,
+        "⚠️  no entrypoints found — the tree cannot be drawn, the routers below could not",
+        "be placed",
+        "",
+        "⚠️  file provider unreadable: RuntimeError: This node is not a swarm manager.",
+        "Worker nodes can't be used to view or modify cluster state. Please run this",
+        "command on a manager node or promote the current node to a manager. — routers",
+        "defined there are missing",
+        "",
+        "⚠️  Swarm service labels unreadable: RuntimeError: This node is not a swarm",
+        "manager. Worker nodes can't be used to view or modify cluster state. Please run",
+        "this command on a manager node or promote the current node to a manager. —",
+        "routers declared by Swarm services are missing",
+        "",
+        "ORPHANED ROUTERS",
+        "  ⚠️  web        entrypoint `https` — no entrypoint could be read   [dev-web-1]",
+        "     PathPrefix(`/web`)",
+        "     └─ → web :8000  ✗ no such service",
+    ],
+    215: [
+        "TRAEFIK WIRING " + "─" * 200,
+        "⚠️  no entrypoints found — the tree cannot be drawn, the routers below could not be placed",
+        "",
+        "⚠️  file provider unreadable: RuntimeError: This node is not a swarm manager. Worker"
+        " nodes can't be used to view or modify cluster state. Please run this command on a"
+        " manager node or promote the current node to a",
+        "manager. — routers defined there are missing",
+        "",
+        "⚠️  Swarm service labels unreadable: RuntimeError: This node is not a swarm manager."
+        " Worker nodes can't be used to view or modify cluster state. Please run this command"
+        " on a manager node or promote the current node",
+        "to a manager. — routers declared by Swarm services are missing",
+        "",
+        "ORPHANED ROUTERS",
+        "  ⚠️  web        entrypoint `https` — no entrypoint could be read   [dev-web-1]",
+        "     PathPrefix(`/web`)",
+        "     └─ → web :8000  ✗ no such service",
+    ],
+}
+
+
+@pytest.mark.parametrize("width", [80, 215])
+def test_a_swarm_worker_renders_0_12_2_s_banner(width):
+    from rich.console import Console
+
+    from terminal_status_panel.model import SwarmInfo
+    from terminal_status_panel.render.traefik import traefik_section
+
+    info = collector.collect_traefik(_Worker())
+    console = Console(width=width, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(traefik_section(info, Config(), SwarmInfo(reachable=True, enabled=True)))
+
+    assert [line.rstrip() for line in capture.get().splitlines()] == _WORKER_0_12_2[width]
+
+
+@pytest.mark.parametrize("state", [None, "pending", "locked"], ids=["no-info", "pending", "locked"])
+def test_a_swarm_state_other_than_inactive_after_a_failed_listing_claims_no_match(state):
+    """`docker info` failed, or reports a state that may still hold services:
+    whether a Traefik service exists is unknown."""
+    info = collector.collect_traefik(_Worker(state=state))
+
+    assert info.static_problem is None
+
+
+def test_a_host_without_swarm_and_without_traefik_names_the_pattern():
+    """Swarm is not active, so there are no services; no container matches."""
+    info = collector.collect_traefik(_Worker(state="inactive"))
+
+    assert info.static_problem == (
+        "no Traefik service or container matches traefik.match (traefik_traefik)"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Final review (0.13.0): a failed configs listing is one note, not one per config
+# --------------------------------------------------------------------------- #
+
+
+class _ConfigsTimeOut(_NodeClient):
+    @property
+    def configs(self):
+        class _Failing:
+            def list(self, *a, **k):
+                raise TimeoutError("Read timed out.")
+
+        return _Failing()
+
+
+def _flags_and_configs_traefik():
+    """The CLI flags + Docker-config shape of 0.12.2, with two dynamic configs."""
+    return _SpecService(
+        "traefik_traefik",
+        {
+            "Args": [
+                "--ping.entryPoint=ping",
+                "--providers.file.directory=/dynamic/",
+                "--entrypoints.ping.address=:8080",
+                "--entrypoints.https.address=:443",
+            ],
+            "Configs": [
+                {"ConfigName": "traefik_dynamic_yml_v3", "File": {"Name": "/dynamic/00-base.yml"}},
+                {"ConfigName": "traefik_dynamic_extra_v2", "File": {"Name": "/dynamic/extra.yml"}},
+                {"ConfigName": "traefik_rootca_v1", "File": {"Name": "/certs/rootca.pem"}},
+            ],
+        },
+    )
+
+
+def test_a_failed_configs_listing_in_the_0_12_2_shape_is_its_single_note():
+    info = collector.collect_traefik(_ConfigsTimeOut(services=[_flags_and_configs_traefik()]))
+
+    assert [ep.name for ep in info.entrypoints] == ["ping", "https"]
+    assert info.file_provider_error == "TimeoutError: Read timed out."
+    assert info.file_provider_notes == ["TimeoutError: Read timed out."]
+
+
+def test_a_config_missing_from_a_successful_listing_is_named():
+    client = _NodeClient(
+        services=[_flags_and_configs_traefik()],
+        configs=[_FakeConfig("traefik_dynamic_yml_v3", PING_ROUTER)],
+    )
+
+    info = collector.collect_traefik(client)
+
+    assert [r.name for r in info.routers] == ["ping-router"]
+    assert info.file_provider_error == "traefik_dynamic_extra_v2: config not found"
+
+
+def test_a_config_served_static_file_behind_a_failed_listing_says_the_listing_failed():
+    service = _SpecService(
+        "traefik_traefik",
+        {
+            "Args": ["--configFile=/etc/traefik/traefik.yml"],
+            "Configs": [
+                {"ConfigName": "traefik_static_v1", "File": {"Name": "/etc/traefik/traefik.yml"}}
+            ],
+        },
+    )
+
+    info = collector.collect_traefik(_ConfigsTimeOut(services=[service]))
+
+    assert info.entrypoints == []
+    assert info.static_problem == (
+        "entrypoints are configured in /etc/traefik/traefik.yml,"
+        " traefik_static_v1: Docker configs could not be listed"
+    )
+    assert info.file_provider_error == "TimeoutError: Read timed out."
