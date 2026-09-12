@@ -371,7 +371,7 @@ were listed, because that listing is then partial. A walked `.yml`,
 `.yaml` or `.toml` entry that is not listed says why — not a regular file,
 or the system's reason when it cannot even be checked, such as a dangling
 link or a permission problem. An entry without one of those extensions is
-skipped silently: it is not one Traefik's file provider would read either.
+skipped silently: it is not one that Traefik's file provider would read either.
 Each file is capped at 1 MiB, the same limit a bind-mounted static file
 has. A file containing `{{` is noted as templated and not evaluated —
 Traefik runs every dynamic file through Go's `text/template`
