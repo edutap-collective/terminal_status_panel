@@ -780,9 +780,22 @@ def collect_traefik(
             # and where `docker info` reports any other state, or cannot be
             # asked, whether a service matches is unknown. Those keep 0.12.2's
             # banner, which claims no reason.
-            if services_listed or daemon.swarm_state() == "inactive":
+            #
+            # The containers are their own half of that sentence. A listing
+            # that failed leaves an unread list, not an empty one, and naming
+            # it would report a gap in coverage as a finding -- so the reason
+            # then speaks of services alone and says why the other half is
+            # missing. Reaching this with an unread container list means the
+            # services were read: both listings failing returns above.
+            patterns = ", ".join(match)
+            if info.container_error is not None:
                 info.static_problem = (
-                    f"no Traefik service or container matches traefik.match ({', '.join(match)})"
+                    f"no Traefik service matches traefik.match ({patterns}); "
+                    f"containers could not be listed: {info.container_error}"
+                )
+            elif services_listed or daemon.swarm_state() == "inactive":
+                info.static_problem = (
+                    f"no Traefik service or container matches traefik.match ({patterns})"
                 )
             _absorb_generations(info, configs, None)
         else:
