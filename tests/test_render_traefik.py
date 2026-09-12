@@ -52,7 +52,7 @@ def _wired():
             TraefikRouter(
                 name="kafbat-ui",
                 entrypoints=["adminpanel", "kafbat"],
-                rule="PathPrefix(`/portale/kafka-ui`)",
+                rule="PathPrefix(`/tools/kafka-ui`)",
                 service="kafbat-ui",
                 origin="kafbat-ui_kafbat-ui",
             ),

@@ -110,7 +110,7 @@ def test_no_arguments_yield_no_entrypoints():
 KAFBAT_LABELS = {
     "traefik.enable": "true",
     "traefik.http.routers.kafbat-ui.entrypoints": "adminpanel,kafbat",
-    "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/portale/kafka-ui`)",
+    "traefik.http.routers.kafbat-ui.rule": "PathPrefix(`/tools/kafka-ui`)",
     "traefik.http.routers.kafbat-ui.tls": "true",
     "traefik.http.services.kafbat-ui.loadbalancer.server.port": "8080",
     "traefik.http.services.kafbat-ui.loadbalancer.server.scheme": "http",
@@ -133,7 +133,7 @@ def test_a_router_on_several_entrypoints_keeps_all_of_them():
     routers, _, _ = parse.parse_labels(KAFBAT_LABELS, origin="kafbat-ui_kafbat-ui")
     assert len(routers) == 1
     assert routers[0].entrypoints == ["adminpanel", "kafbat"]
-    assert routers[0].rule == "PathPrefix(`/portale/kafka-ui`)"
+    assert routers[0].rule == "PathPrefix(`/tools/kafka-ui`)"
     assert routers[0].tls is True
     assert routers[0].origin == "kafbat-ui_kafbat-ui"
     assert routers[0].source == "swarm"
