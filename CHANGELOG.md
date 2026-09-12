@@ -15,6 +15,13 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Fixed
+
+- The banner no longer says that no container matches on a host where the
+  container listing failed: an unread list is not an empty one. Where the
+  services were listed and the containers could not be, the reason names the
+  services alone and says why the other half is missing.
+
 ## [0.13.0] - 2026-09-12
 
 ### Added

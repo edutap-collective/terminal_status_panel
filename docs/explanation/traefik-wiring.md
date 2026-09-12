@@ -395,7 +395,8 @@ entrypoint list to check against, the code cannot tell "not on this one" from
 
 | State | Reason stated in the banner | Where it is produced |
 |---|---|---|
-| No Traefik service or container matches `traefik.match` — where the services were listed, or `docker info` reports Swarm inactive on this node | `no Traefik service or container matches traefik.match (<patterns>)` | `collect_traefik`, `collectors/traefik.py` |
+| No Traefik service or container matches `traefik.match` — where the containers were listed, and either the services were too or `docker info` reports Swarm inactive on this node | `no Traefik service or container matches traefik.match (<patterns>)` | `collect_traefik`, `collectors/traefik.py` |
+| No service matches and the container listing failed — the containers are an unread list, not an empty one, so only the services are spoken for | `no Traefik service matches traefik.match (<patterns>); containers could not be listed: <reason>` | `collect_traefik`, `collectors/traefik.py` |
 | A relative `--configFile` with no declared working directory | `--configFile=<path> is relative and the container's working directory is not declared — not read` | `_find_static_file`, `collectors/traefik.py` |
 | `--configFile` not backed by any checkable mount | `--configFile=<path> is not mounted — it may be part of the image, or absent (then Traefik falls back to its default locations and flags)` | `_find_static_file`, `collectors/traefik.py` |
 | A candidate's presence cannot be decided — a bind mount on another node, a volume, a tmpfs, or a check that failed | `<reason> — whether it holds <name(s)> cannot be checked from here` | `_find_static_file`, using `presence()` in `collectors/traefik_mounts.py` |

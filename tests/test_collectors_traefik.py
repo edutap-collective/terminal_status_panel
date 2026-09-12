@@ -1777,6 +1777,64 @@ def test_a_host_without_swarm_and_without_traefik_names_the_pattern():
 
 
 # --------------------------------------------------------------------------- #
+# The reason may only name what was actually looked at
+# --------------------------------------------------------------------------- #
+
+
+class _ServicesEmptyContainersFail(_FakeClient):
+    """Every service listed and none matched, while the container listing failed.
+
+    Reachable, because one of the two listings answered -- so the collector
+    carries on and has to say something about a host where containers were
+    never seen.
+    """
+
+    def __init__(self):
+        super().__init__(services=[])
+
+    @property
+    def containers(self):
+        class _Failing:
+            def list(self, *a, **k):
+                raise TimeoutError("Read timed out.")
+
+        return _Failing()
+
+
+def test_a_failed_container_listing_is_not_reported_as_no_container_matching():
+    """Claiming no container matches would report an unread list as an empty one."""
+    info = collector.collect_traefik(_ServicesEmptyContainersFail())
+
+    assert info.static_problem == (
+        "no Traefik service matches traefik.match (traefik_traefik); "
+        "containers could not be listed: TimeoutError: Read timed out."
+    )
+
+
+def test_both_listings_failing_stops_before_any_reason_is_formed():
+    """Nothing was read at all. That is the combined listing error, and no claim
+    about what does or does not match belongs beside it -- which is also why the
+    reason above may assume the services were read whenever the containers were
+    not."""
+
+    class _BothFail(_ServicesEmptyContainersFail):
+        @property
+        def services(self):
+            class _Failing:
+                def list(self, *a, **k):
+                    raise TimeoutError("Read timed out.")
+
+            return _Failing()
+
+    info = collector.collect_traefik(_BothFail())
+
+    assert info.static_problem is None
+    assert info.error == (
+        "services: TimeoutError: Read timed out.; containers: TimeoutError: Read timed out."
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Final review (0.13.0): a failed configs listing is one note, not one per config
 # --------------------------------------------------------------------------- #
 
