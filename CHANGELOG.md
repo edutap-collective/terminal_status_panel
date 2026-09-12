@@ -15,6 +15,8 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-12
+
 ### Added
 
 - `[health.postgres]`, `[health.mongodb]`, `[health.kafka]`, `[health.rustfs]`:
@@ -50,9 +52,12 @@ guesswork dressed as a record.
   file name is read whatever the config is called; a `*traefik_dynamic*`
   config mounted elsewhere, or without such an extension, is no longer read;
   and the files are read in path order, which decides between two files
-  declaring the same name. A config the service mounts but a successful
-  configs listing does not contain is reported as `<name>: config not
-  found`; a listing that failed stays one note.
+  declaring the same name. A config under the provider directory, or
+  serving as Traefik's static configuration file, that the service mounts
+  but a successful configs listing does not contain is reported as
+  `<name>: config not found`; a mounted config outside the directory, or
+  one taken by the config-generation rule instead, is skipped silently. A
+  listing that failed stays one note.
 - A Docker config read under the config-generation rule that contains `{{` is
   noted as templated and no longer parsed, as on the file-provider path.
 - The file-provider warning counts further failures, `(+N more)`, instead of
@@ -236,7 +241,8 @@ guesswork dressed as a record.
 
 See the git history and the release tags.
 
-[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.11.0...v0.12.0

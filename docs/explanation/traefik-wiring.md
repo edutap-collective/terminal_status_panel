@@ -367,10 +367,13 @@ nested inside the provider directory is named in a note — Traefik reads the
 files in it, the panel cannot — rather than left out as if it were not
 there. The same goes for such a mount holding the provider directory
 itself: its note stands first, even when configs or bind mounts below it
-were listed, because that listing is then partial. A walked entry that is
-not listed says why — not a regular file, or the system's reason when it
-cannot even be checked, such as a dangling link or a permission problem. Each file is capped at 1 MiB, the same limit a bind-mounted static
-file has. A file containing `{{` is noted as templated and not evaluated —
+were listed, because that listing is then partial. A walked `.yml`,
+`.yaml` or `.toml` entry that is not listed says why — not a regular file,
+or the system's reason when it cannot even be checked, such as a dangling
+link or a permission problem. An entry without one of those extensions is
+skipped silently: it is not one that Traefik's file provider would read either.
+Each file is capped at 1 MiB, the same limit a bind-mounted static file
+has. A file containing `{{` is noted as templated and not evaluated —
 Traefik runs every dynamic file through Go's `text/template`
 ([`file.go` L125-156](https://github.com/traefik/traefik/blob/v3.7.13/pkg/provider/file/file.go#L125-L156)),
 which the panel cannot do without presenting a guess as configuration.
