@@ -15,6 +15,15 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Added
+
+- DOCKER INFOS opens with a legend naming every glyph the section can show,
+  the row markers `📌` and `⚑` included. It wraps between entries, never
+  inside one. Where the clusters were not probed — `status-docker` alone
+  collects no health — the `⬜` entry says "cluster not checked" and names
+  `status-health`: a clustered row read `⬜ 5/5` there with nothing on screen
+  to explain it. `docker.legend = false` removes the line.
+
 ### Fixed
 
 - The banner no longer says that no container matches on a host where the

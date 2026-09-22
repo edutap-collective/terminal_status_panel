@@ -280,6 +280,11 @@ class Config:
     #: column that answers "which version is deployed here", and the one that
     #: costs the description its width on a narrow terminal -- hence a switch.
     show_image: bool = True
+    #: Whether DOCKER INFOS opens with a line naming every glyph it can show.
+    #: `⬜` beside a clean `5/5` reads as a contradiction to anyone who has not
+    #: read the icon reference -- and nobody at a login prompt has. Kept as a
+    #: switch for the reader who has learnt the vocabulary and wants the line.
+    docker_legend: bool = True
     infrastructure_stacks: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRASTRUCTURE_STACKS)
     )
@@ -790,6 +795,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         ),
         group_label=reader.text(docker, "docker.group_label", DEFAULT_GROUP_LABEL),
         show_image=reader.flag(docker, "docker.show_image", True),
+        docker_legend=reader.flag(docker, "docker.legend", True),
         infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),
         ignore_mountpoints=_list_setting(ignore, platform_defaults.ignore_mountpoints()),

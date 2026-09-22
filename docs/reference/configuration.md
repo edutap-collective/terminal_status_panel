@@ -14,6 +14,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `docker.group_label` | `"status.group"` | Docker **service label** naming the row a service belongs in. Services of one stack sharing a value render as one row, whatever their names. Where it is absent the name heuristic decides instead — see {doc}`Grouping services into one row </explanation/docker-panel>`. Read for presence, not truthiness: a service setting it to `""` groups with no one. |
 | `docker.df_timeout` | `4.0` | Seconds to wait for `/system/df`, the Docker disk reading — deliberately larger than `docker.timeout` and spent on a **separate client**. The call was measured at 510 ms against a daemon holding 47 images and 185 volumes, and it grows with the object count. Overrunning it costs the one line, never the whole DOCKER INFOS section. See {doc}`Docker\'s own disk footprint </explanation/docker-panel>`. |
 | `docker.show_image` | `true` | Whether the DOCKER INFOS rows carry an **Image** column right of the description (see {doc}`The image column </explanation/docker-panel>`). It is the column that answers "which version is deployed here", and the one that costs the description its width on a narrow terminal — `false` removes it. |
+| `docker.legend` | `true` | Whether DOCKER INFOS opens with a legend naming every glyph the section can show (see {doc}`Icon vocabulary </reference/icon-vocabulary>`). All of them, always, wrapped between entries rather than inside one. Where the clusters were not probed — `status-docker` alone collects no health — the `⬜` entry says so and names `status-health`. `false` removes the line. |
 | `resources.ignore_mountpoints` | platform-dependent | Mountpoint prefixes hidden from the filesystem table. Defaults to `["/System/Volumes/", "/Library/Developer/CoreSimulator/"]` on macOS and to `[]` elsewhere. An explicitly empty list hides nothing rather than falling back to the default. |
 | `resources.process_sample` | `0.3` | Seconds to sample process CPU usage over for the TOP CPU row (see {doc}`Top processes </explanation/top-processes>`). `0` or less disables the CPU ranking; TOP RAM is unaffected. |
 | `resources.top_processes` | `5` | Rows per process table in the TOP CPU / TOP RAM row (see {doc}`Top processes </explanation/top-processes>`). `--processes N` on the command line wins over this. A value that cannot be read as a whole number falls back to `5`; a negative value means `0`. `0` removes the whole row, and with it the `process_sample` sampling wait — a different switch from `process_sample`, which only removes the CPU ranking and leaves TOP RAM in place. |
@@ -54,6 +55,7 @@ width = 200
 timeout = 1.5
 description_label = "status.description"
 show_image = true
+legend = true
 infrastructure_stacks = ["postgresql", "kafka", "mongodb", "rustfs", "portainer", "traefik", "registry"]
 infra_ui_services = ["kafbat-ui", "cloudbeaver", "mongo-express", "rustfs-console"]
 

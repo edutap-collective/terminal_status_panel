@@ -15,6 +15,15 @@ measure.
 | `✗` | the check itself failed (a command errored, a connection was refused) |
 | `n/a here` | not applicable — this node runs no member of the service |
 
+DOCKER INFOS repeats this vocabulary in a legend above its tables, together
+with its two row markers: `📌` for a row whose instances are pinned to their
+nodes, and `⚑` for a memory figure measured against a reservation rather than
+a limit. The legend always names every glyph, not only those in use, and its
+`⬜` entry names the cause where the section knows it: without the health
+section, every clustered row is `⬜` beside a clean replica count, and the
+legend points to `status-health`. `docker.legend = false` turns it off (see
+{doc}`Configuration </reference/configuration>`).
+
 `…` and `✗` mean different things and must not be conflated: a budget
 timeout says nothing about the service's health, only that the panel gave up
 waiting for it; a failed check (`✗`) is a statement about the service, or
