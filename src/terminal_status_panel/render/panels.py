@@ -35,6 +35,7 @@ from ..model import (
     SystemInfo,
     UpdateInfo,
 )
+from . import icons
 from .bars import STATUS_COLORS, classify, format_bytes, render_bar
 from .icons import DEAD as _DEAD
 from .icons import OK as _OK
@@ -1412,6 +1413,60 @@ def _disk_row(disk, resources) -> Table:
     return grid
 
 
+_LEGEND_SEPARATOR = "  ·  "
+
+
+class _Legend:
+    """One line naming every glyph DOCKER INFOS can show, wrapped by entry.
+
+    All of them, always -- not only those this render uses. A legend that
+    changes with the cluster state teaches a different vocabulary on each
+    login, and the day it first shows `💀` is not the day to learn the word.
+
+    Wrapped between entries, never inside one: rich's word wrap would split
+    "scaled to 0" across two lines, and a glyph separated from its meaning is
+    exactly the puzzle this line exists to solve.
+    """
+
+    def __init__(self, entries: Sequence[str]) -> None:
+        self._entries = entries
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        lines: list[str] = []
+        for entry in self._entries:
+            candidate = f"{lines[-1]}{_LEGEND_SEPARATOR}{entry}" if lines else entry
+            if lines and Text(candidate).cell_len <= options.max_width:
+                lines[-1] = candidate
+            else:
+                lines.append(entry)
+        for line in lines:
+            yield Text(line, style="dim")
+
+
+def _legend(health: HealthInfo | None) -> _Legend:
+    """The legend, with the one entry whose cause the section knows.
+
+    Where the clusters were never probed -- `status-docker` alone collects no
+    health -- every clustered row renders `⬜` beside a clean replica count,
+    and the legend says so, with the command that takes the measurement.
+    """
+    unprobed = health is None or not health.clusters_probed
+    unknown = "cluster not checked (see status-health)" if unprobed else "not observable"
+    return _Legend(
+        [
+            f"{icons.OK} healthy",
+            f"{icons.WARN.rstrip()} degraded",
+            f"{icons.DEAD} down",
+            f"{icons.FAILED} check failed",
+            f"{icons.UNKNOWN} {unknown}",
+            f"{icons.PAUSED} scaled to 0",
+            f"{icons.JOB} job, last run ok",
+            f"{_PINNED} pinned to its node",
+            f"{_RESERVED} vs. reservation",
+        ]
+    )
+
+
 def services_section(
     swarm: SwarmInfo | None,
     cfg: Config,
@@ -1420,9 +1475,10 @@ def services_section(
 ) -> Group:
     """The DOCKER INFOS block: Swarm stacks, containers and their verdicts.
 
-    *health* is optional: without it the Working cells fall back to Docker's
-    own replica measurement rather than claiming a cluster verdict nobody
-    took.
+    *health* is optional. Without it a clustered row's Working cell renders
+    `⬜` -- no cluster verdict was taken, and "every container is up" is not
+    the claim that cell makes -- unless Docker itself measured the row dead
+    or degraded, which still shows as `💀`/`⚠️`. The legend says which.
 
     *resources* is optional in the same spirit, and used for one thing only:
     deciding whether Docker's disk footprint sits on a filesystem under
@@ -1432,12 +1488,14 @@ def services_section(
     if swarm is None or not swarm.reachable:
         return section("DOCKER INFOS", Text("Docker not reachable", style="dim"))
 
+    legend = [_legend(health)] if cfg.docker_legend else []
+
     if not swarm.enabled:
         # No SWARM block to hang it under, so the line leads the section. The
         # width pressure that argues for brevity comes from a cluster panel
         # with dozens of services; a host without a swarm has the room, and an
         # accumulated Docker is likelier there, not less.
-        plain: list[RenderableType] = [_disk_row(swarm.disk, resources), Text("")]
+        plain: list[RenderableType] = [*legend, _disk_row(swarm.disk, resources), Text("")]
         trouble = _trouble_block(swarm.trouble)
         if trouble is not None:
             plain += [trouble, Text("")]
@@ -1445,6 +1503,7 @@ def services_section(
         return section("DOCKER INFOS", Group(*plain))
 
     parts: list[RenderableType] = [
+        *legend,
         _subhead("SWARM"),
         _swarm_body(swarm, health.peers if health else None, resources),
         Text(""),

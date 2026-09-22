@@ -421,7 +421,8 @@ def test_swarm_summary_omits_capacity_note_when_all_nodes_are_active():
             SwarmNode("srv-02", reachable=True, state="ready", availability="active"),
         ],
     )
-    out = _text(panels.services_section(swarm, Config()), width=170)
+    # Without the legend, which carries "💀 down" as a word of its own.
+    out = _text(panels.services_section(swarm, Config(docker_legend=False)), width=170)
     assert "2 nodes  ·" in out
     assert "drain" not in out and "down" not in out
 
@@ -2234,7 +2235,9 @@ def _pin_out(services):
         nodes=[_mgr("srv-01", leader=True), _wrk("srv-02")],
         services=list(services),
     )
-    return _text(panels.services_section(swarm, Config()), width=200)
+    # Without the legend, which names `📌` itself: these tests ask whether a
+    # *row* carries the pin.
+    return _text(panels.services_section(swarm, Config(docker_legend=False)), width=200)
 
 
 #: A second, unrelated service in the stack, so the stack renders as a header
@@ -2387,3 +2390,103 @@ def test_a_service_running_nowhere_is_not_called_elsewhere():
     line = next(line for line in out.splitlines() if line.strip().startswith("web"))
     assert "elsewhere" not in line
     assert "—" in line
+
+
+# --- glyph legend ----------------------------------------------------------
+
+
+def _legend_swarm() -> SwarmInfo:
+    return _image_swarm(
+        ServiceStatus("shop_api", 1, 1, stack="shop", tasks=[ServiceTask(_N1, "running")])
+    )
+
+
+def _first_lines(out: str, count: int) -> list[str]:
+    return out.splitlines()[:count]
+
+
+def test_the_legend_explains_every_glyph_the_section_can_show():
+    """All of them, always -- not only the ones this render happens to use.
+
+    A reader meeting `⬜` next to `5/5` for the first time has no other place
+    to learn what it means; a legend that changes with the cluster state
+    would teach a different vocabulary on each login.
+    """
+    out = _text(panels.services_section(_legend_swarm(), Config()), width=170)
+
+    for glyph in (
+        icons.OK,
+        icons.WARN.strip(),
+        icons.DEAD,
+        icons.FAILED,
+        icons.UNKNOWN,
+        icons.PAUSED,
+        icons.JOB,
+        "📌",
+        "⚑",
+    ):
+        assert glyph in out, glyph
+
+
+def test_the_legend_leads_the_section():
+    """Above the SWARM block, where it is read before the table it explains."""
+    out = _text(panels.services_section(_legend_swarm(), Config()), width=170)
+    lines = out.splitlines()
+    swarm_at = next(i for i, line in enumerate(lines) if line.startswith("SWARM"))
+
+    assert "DOCKER INFOS" in lines[0]
+    assert all("  ·  " in line for line in lines[1:swarm_at])
+    assert icons.UNKNOWN in "".join(lines[1:swarm_at])
+
+
+def test_the_legend_wraps_between_entries_not_inside_one():
+    """A glyph torn from its meaning is the puzzle the legend exists to solve."""
+    for width in (60, 80, 120):
+        out = _text(panels.services_section(_legend_swarm(), Config()), width=width)
+        lines = out.splitlines()
+        swarm_at = next(i for i, line in enumerate(lines) if line.startswith("SWARM"))
+        legend = [line.rstrip() for line in lines[1:swarm_at]]
+
+        assert any(line.endswith("scaled to 0") or "scaled to 0  ·" in line for line in legend)
+        assert all(len(line) <= width for line in legend)
+        for line in legend[1:]:
+            assert not line.startswith(("to 0", "node", "checked")), (width, line)
+
+
+def test_the_legend_says_why_a_cluster_went_unchecked():
+    """Without the health section, `⬜` on a clustered row has one cause.
+
+    `status-docker` collects no health, so every clustered service renders
+    `⬜` beside a clean replica count. The legend names that cause and the
+    command that removes it.
+    """
+    without_health = _text(panels.services_section(_legend_swarm(), Config()), width=170)
+    with_health = _text(
+        panels.services_section(_legend_swarm(), Config(), HealthInfo(clusters_probed=True)),
+        width=170,
+    )
+
+    assert "status-health" in without_health
+    assert "status-health" not in with_health
+    assert icons.UNKNOWN in with_health
+
+
+def test_the_legend_can_be_switched_off():
+    out = _text(panels.services_section(_legend_swarm(), Config(docker_legend=False)), width=170)
+
+    assert "DOCKER INFOS" in out
+    assert icons.UNKNOWN not in out
+
+
+def test_the_legend_also_leads_a_host_without_a_swarm():
+    swarm = SwarmInfo(reachable=True, enabled=False)
+    out = _text(panels.services_section(swarm, Config()), width=170)
+
+    assert icons.UNKNOWN in "".join(_first_lines(out, 3)[1:])
+
+
+def test_no_legend_when_docker_is_unreachable():
+    """Nothing is tabulated, so there is nothing to explain."""
+    out = _text(panels.services_section(SwarmInfo(reachable=False), Config()), width=170)
+
+    assert icons.UNKNOWN not in out

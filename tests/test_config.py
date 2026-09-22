@@ -363,3 +363,10 @@ def test_the_image_column_is_on_unless_switched_off(tmp_path):
 
     path = _write(tmp_path, "\n".join(["[docker]", "show_image = false"]))
     assert load_config(path).show_image is False
+
+
+def test_the_glyph_legend_is_on_unless_switched_off(tmp_path):
+    assert load_config(tmp_path / "does-not-exist.toml").docker_legend is True
+
+    path = _write(tmp_path, "\n".join(["[docker]", "legend = false"]))
+    assert load_config(path).docker_legend is False
