@@ -98,7 +98,7 @@ def test_no_docker_client_still_yields_network_and_dns(monkeypatch):
         lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
     )
     health = health_collector.collect_health(
-        _config(), peer_names=[], client=None, resolve_fqdn=_fqdn
+        _config(), peer_names=[], client=None, resolve_fqdn=_fqdn, docker_present=False
     )
     assert health.dns[0].label == "Resolver"
     # Without a client only the host-run kind (glusterfs) is attempted; the
@@ -417,3 +417,61 @@ def test_host_kinds_run_without_docker(monkeypatch):
     assert "systemd" in kinds and info.docker_present is False
     # Only host-run cluster kinds without Docker.
     assert [c.kind for c in info.clusters] in ([], ["glusterfs"])
+
+
+def _quiet(monkeypatch):
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **k: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda *a, **k: [])
+
+
+def test_unreachable_docker_marks_docker_bound_kinds_unchecked(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
+    )
+    info = health_collector.collect_health(
+        Config(), [], client=None, docker_present=True, resolve_fqdn=_fqdn
+    )
+    marked = {c.kind: c.error for c in info.clusters if c.error}
+    assert marked == dict.fromkeys(
+        ("postgres", "mongodb", "kafka", "rustfs"), "not checked (no Docker client)"
+    )
+
+
+def test_no_docker_here_skips_docker_bound_kinds_silently(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
+    )
+    info = health_collector.collect_health(
+        Config(), [], client=None, docker_present=False, resolve_fqdn=_fqdn
+    )
+    assert [c.kind for c in info.clusters] == ["glusterfs"]
+
+
+def test_probe_cluster_never_receives_host_kinds(monkeypatch):
+    _quiet(monkeypatch)
+    seen = []
+
+    def record(index, kind, timeout, settings=None):
+        seen.append(kind)
+        return ClusterService(kind=kind)
+
+    monkeypatch.setattr(health_collector, "probe_cluster", record)
+    health_collector.collect_health(Config(), [], client=object(), resolve_fqdn=_fqdn)
+    assert seen and not {"systemd", "vrrp", "apache"} & set(seen)
+
+
+def test_truncated_host_task_is_named_without_prefix(monkeypatch):
+    import time
+
+    _quiet(monkeypatch)
+    monkeypatch.setattr(health_collector, "probe_systemd", lambda t, i: time.sleep(5))
+    info = health_collector.collect_health(
+        _config(budget=0.3, enabled=["systemd"]), [], client=None, resolve_fqdn=_fqdn
+    )
+    assert "systemd" in info.truncated

@@ -17,7 +17,7 @@ from __future__ import annotations
 import socket
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 
 from ..budget import run_with_budget
@@ -52,6 +52,9 @@ class _HealthTasks:
     #: had to be resolved counts as having probed the peers even when the
     #: check itself ran out of budget.
     resolved_peers: list[list[str]]
+    #: Docker-bound kinds that could not run for lack of a client on a host that
+    #: has Docker: reported as errors, not silently dropped.
+    unchecked: list[str] = field(default_factory=list)
 
 
 def _build_health_tasks(
@@ -60,6 +63,7 @@ def _build_health_tasks(
     client,
     resolve_fqdn: Callable[[], str] | None,
     resolve_peer_names: Callable[[], list[str]] | None,
+    docker_present: bool = True,
 ) -> _HealthTasks:
     """Everything the budget will run, with the deadline each one gets."""
     health_cfg = cfg.health
@@ -70,7 +74,8 @@ def _build_health_tasks(
     cluster_kinds = [k for k in kinds if k not in HOST_KINDS]
     # Docker-bound kinds need a client; host-run ones (glusterfs) do not.
     runnable = [k for k in cluster_kinds if client is not None or k in HOST_RUN_CLUSTER_KINDS]
-    clusters_probed = bool(runnable)
+    unchecked = [k for k in cluster_kinds if k not in runnable] if docker_present else []
+    clusters_probed = bool(runnable) or bool(unchecked)
     index = ContainerIndex(client) if client is not None else None
     settings = ProbeSettings.from_config(cfg)
     for kind in runnable:
@@ -132,10 +137,13 @@ def _build_health_tasks(
         kinds=runnable,
         clusters_probed=clusters_probed,
         resolved_peers=resolved_peers,
+        unchecked=unchecked,
     )
 
 
-def _clusters_from(outcome, kinds: list[str], clusters_probed: bool) -> list[ClusterService]:
+def _clusters_from(
+    outcome, kinds: list[str], clusters_probed: bool, unchecked: list[str]
+) -> list[ClusterService]:
     """One entry per kind that produced an answer, in configured order.
 
     A kind that ran out of time contributes no entry -- it is named in
@@ -150,6 +158,9 @@ def _clusters_from(outcome, kinds: list[str], clusters_probed: bool) -> list[Clu
             clusters.append(outcome.results[key])
         elif key in outcome.failed:
             clusters.append(ClusterService(kind=kind, error=outcome.failed[key]))
+    clusters.extend(
+        ClusterService(kind=kind, error="not checked (no Docker client)") for kind in unchecked
+    )
     return clusters
 
 
@@ -190,7 +201,9 @@ def collect_health(
     plain list because the caller often already has it for free (the Docker
     section collected it), and using it then costs nothing.
     """
-    plan = _build_health_tasks(cfg, peer_names, client, resolve_fqdn, resolve_peer_names)
+    plan = _build_health_tasks(
+        cfg, peer_names, client, resolve_fqdn, resolve_peer_names, docker_present
+    )
     outcome = run_with_budget(plan.tasks, budget=cfg.health.budget, timeouts=plan.timeouts)
 
     peers, dns = _peers_and_dns_from(outcome)
@@ -207,7 +220,7 @@ def collect_health(
         elif kind == "systemd" and key in outcome.failed:
             host_checks.append(HostCheck("systemd", "error", outcome.failed[key]))
     return HealthInfo(
-        clusters=_clusters_from(outcome, plan.kinds, plan.clusters_probed),
+        clusters=_clusters_from(outcome, plan.kinds, plan.clusters_probed, plan.unchecked),
         peers=peers,
         dns=dns,
         host=host_checks,

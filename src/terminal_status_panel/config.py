@@ -673,6 +673,36 @@ def _optional_number(reader: _Reader, section: dict, key: str) -> float | None:
     return None if value < 0 else value
 
 
+def _host_kind_configs(data: dict, reader: _Reader) -> tuple[ApacheProbe, VrrpProbe, SystemdProbe]:
+    """The three host-kind tables of [health]."""
+    ap = _section(data, "health", "apache")
+    apache_url = _web_url(reader.text(ap, "health.apache.url", "")) if "url" in ap else None
+    if "url" in ap and apache_url is None:
+        reader.problems.append(
+            ConfigProblem(
+                key="health.apache.url",
+                found=repr(ap["url"]),
+                used="kind off",
+                reason="expected an http:// or https:// URL with a host, without query",
+            )
+        )
+    apache = ApacheProbe(
+        url=apache_url,
+        requests_warning=_optional_number(reader, ap, "health.apache.requests_warning"),
+        requests_critical=_optional_number(reader, ap, "health.apache.requests_critical"),
+        slots_warning=reader.number(ap, "health.apache.slots_warning", 80.0, minimum=0.0),
+        slots_critical=reader.number(ap, "health.apache.slots_critical", 95.0, minimum=0.0),
+    )
+    vr = _section(data, "health", "vrrp")
+    vrrp = VrrpProbe(
+        lead_warning=reader.integer(vr, "health.vrrp.lead_warning", 5),
+        lead_critical=reader.integer(vr, "health.vrrp.lead_critical", 0),
+    )
+    sd = _section(data, "health", "systemd")
+    systemd = SystemdProbe(ignore=reader.patterns(sd, "health.systemd.ignore", ()))
+    return apache, vrrp, systemd
+
+
 def _health_config(data: dict, reader: _Reader) -> HealthConfig:
     """Parse the [health] block. A malformed value falls back to its default."""
     health = _section(data, "health")
@@ -750,21 +780,7 @@ def _health_config(data: dict, reader: _Reader) -> HealthConfig:
         scheme=reader.choice(rustfs_section, "health.rustfs.scheme", "https", RUSTFS_SCHEMES),
     )
 
-    ap = _section(data, "health", "apache")
-    apache = ApacheProbe(
-        url=_web_url(reader.text(ap, "health.apache.url", "")) if "url" in ap else None,
-        requests_warning=_optional_number(reader, ap, "health.apache.requests_warning"),
-        requests_critical=_optional_number(reader, ap, "health.apache.requests_critical"),
-        slots_warning=reader.number(ap, "health.apache.slots_warning", 80.0, minimum=0.0),
-        slots_critical=reader.number(ap, "health.apache.slots_critical", 95.0, minimum=0.0),
-    )
-    vr = _section(data, "health", "vrrp")
-    vrrp = VrrpProbe(
-        lead_warning=reader.integer(vr, "health.vrrp.lead_warning", 5),
-        lead_critical=reader.integer(vr, "health.vrrp.lead_critical", 0),
-    )
-    sd = _section(data, "health", "systemd")
-    systemd = SystemdProbe(ignore=reader.patterns(sd, "health.systemd.ignore", ()))
+    apache, vrrp, systemd = _host_kind_configs(data, reader)
 
     return HealthConfig(
         budget=budget,

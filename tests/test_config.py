@@ -397,3 +397,27 @@ def test_host_kind_tables(tmp_path):
     )
     assert cfg.health.vrrp.lead_warning == 5 and cfg.health.systemd.ignore == ("a.service",)
     assert not cfg.problems
+
+
+def _load(tmp_path, text):
+    path = tmp_path / "c.toml"
+    path.write_text(text)
+    return load_config(path)
+
+
+def test_negative_apache_threshold_is_none_and_reported(tmp_path):
+    cfg = _load(tmp_path, "[health.apache]\nurl = 'http://x'\nrequests_warning = -1\n")
+    assert cfg.health.apache.requests_warning is None
+    assert any(p.key == "health.apache.requests_warning" for p in cfg.problems)
+
+
+def test_unknown_vrrp_key_is_reported(tmp_path):
+    cfg = _load(tmp_path, "[health.vrrp]\nlead_warn = 3\n")
+    assert any(p.key == "health.vrrp.lead_warn" for p in cfg.problems)
+
+
+def test_invalid_apache_url_is_reported(tmp_path):
+    for bad in ("ftp://x/status", "http://x/status?auto"):
+        cfg = _load(tmp_path, f"[health.apache]\nurl = '{bad}'\n")
+        assert cfg.health.apache.url is None
+        assert any(p.key == "health.apache.url" and p.used == "kind off" for p in cfg.problems)

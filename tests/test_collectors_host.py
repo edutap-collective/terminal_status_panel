@@ -82,3 +82,38 @@ def test_apache_not_configured_is_not_applicable():
 def test_missing_state_is_an_error_line_not_quiet():
     check = host.check_vrrp(HostStateRead(problem="missing"), VrrpProbe())
     assert check.status == "error" and "collector not running" in check.summary
+
+
+def _run_result(returncode, stdout="", stderr=""):
+    return lambda *a, **k: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def test_systemd_not_booted_is_not_applicable(monkeypatch):
+    err = "System has not been booted with systemd as init system (PID 1). Can't operate."
+    monkeypatch.setattr(host.subprocess, "run", _run_result(1, stderr=err))
+    assert host.probe_systemd(1.0, ()).status == "na"
+
+
+def test_systemd_other_failure_is_an_error(monkeypatch):
+    err = "Failed to connect to bus: Permission denied\nmore"
+    monkeypatch.setattr(host.subprocess, "run", _run_result(1, stderr=err))
+    check = host.probe_systemd(1.0, ())
+    assert (
+        check.status == "error" and check.summary == "Failed to connect to bus: Permission denied"
+    )
+
+
+def test_vrrp_backup_with_non_negative_lead_is_critical():
+    read = _read(vrrp=VrrpState("keepalived-json", [VrrpInstance("vi_1", "BACKUP", 190, 191, 190)]))
+    assert host.check_vrrp(read, VrrpProbe()).status == "crit"
+
+
+def test_apache_requests_at_critical_is_critical():
+    read = _read(apache=ApacheState(30.0, 600.0, 0.1, 0.05, 0))
+    probe = ApacheProbe(url="http://x", requests_warning=400, requests_critical=500)
+    assert host.check_apache(read, probe).status == "crit"
+
+
+def test_apache_slots_band_is_critical_with_defaults():
+    read = _read(apache=ApacheState(30.0, 10.0, 0.96, 0.05, 0))
+    assert host.check_apache(read, ApacheProbe(url="http://x")).status == "crit"

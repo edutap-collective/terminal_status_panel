@@ -49,6 +49,12 @@ def probe_systemd(timeout: float, ignore: tuple[str, ...]) -> HostCheck:
         )
     except FileNotFoundError:
         return HostCheck(kind="systemd", status="na", summary="n/a here")
+    if proc.returncode != 0 and not proc.stdout.strip():
+        stderr = (proc.stderr or "").strip()
+        if "not been booted with systemd" in stderr:
+            return HostCheck(kind="systemd", status="na", summary="n/a here")
+        first = stderr.splitlines()[0] if stderr else f"exit {proc.returncode}"
+        return HostCheck(kind="systemd", status="error", summary=first[:60])
     names = [line.split()[0] for line in proc.stdout.splitlines() if line.strip()]
     failed = [name for name in names if name not in ignore]
     if not failed:
