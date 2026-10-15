@@ -56,3 +56,17 @@ def test_holds_and_lead():
     backup = VrrpInstance("vi_2", "BACKUP", 190, 188, 196)
     assert master.holds and master.lead is None  # a master never learns the backups
     assert not backup.holds and backup.lead == -8
+
+
+def test_unknown_keys_inside_blocks_are_ignored():
+    data = _state().to_dict()
+    data["apache"]["extra"] = 1
+    data["vrrp"]["instances"][0]["extra"] = 1
+    assert HostState.from_dict(data) == _state()
+
+
+def test_non_finite_written_at_is_refused():
+    data = _state().to_dict()
+    data["written_at"] = float("nan")
+    with pytest.raises(ValueError):
+        HostState.from_dict(data)

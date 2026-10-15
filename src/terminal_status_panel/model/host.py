@@ -10,10 +10,33 @@ or a client address: the file is world-readable on purpose.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+import math
+from dataclasses import asdict, dataclass, field, fields
+from typing import TYPE_CHECKING, Any, TypeVar
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
+
+_Block = TypeVar("_Block", bound="DataclassInstance")
 
 SCHEMA_VERSION = 1
 STATE_PATH = "/run/terminal-status-panel/host.json"
+
+
+class UnknownSchemaError(ValueError):
+    """The file was written under a schema this code does not read."""
+
+
+def _entry(cls: type[_Block], value: Any) -> _Block:
+    """Build one block entry from *value*, ignoring keys the dataclass lacks.
+
+    Unknown keys are dropped rather than refused, so an older panel can read a
+    newer collector's file. Anything that is not a mapping is a ValueError.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(f"{cls.__name__} expects an object, got {type(value).__name__}")
+    known = {f.name for f in fields(cls)}
+    return cls(**{key: val for key, val in value.items() if key in known})
 
 
 @dataclass
@@ -100,28 +123,48 @@ class HostState:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict) -> HostState:
-        """Rebuild from the JSON form. Raises ValueError on a foreign schema."""
+    def from_dict(cls, data: Any) -> HostState:
+        """Rebuild from the JSON form.
+
+        Raises UnknownSchemaError for a foreign schema and ValueError for any
+        other malformed content, so the reader can tell the two apart.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("state file must hold a JSON object")
         if data.get("schema") != SCHEMA_VERSION:
-            raise ValueError(f"unknown schema {data.get('schema')!r}")
+            raise UnknownSchemaError(f"unknown schema {data.get('schema')!r}")
+        written_at = float(data["written_at"])
+        if not math.isfinite(written_at):
+            raise ValueError("written_at must be finite")
         vrrp = data.get("vrrp")
         apache = data.get("apache")
         updates = data.get("updates")
+        events = data.get("events") or {}
+        if not isinstance(events, dict):
+            raise ValueError("events must be an object")
         return cls(
-            written_at=float(data["written_at"]),
+            written_at=written_at,
             collector=str(data.get("collector", "")),
-            vrrp=VrrpState(
-                source=vrrp["source"],
-                instances=[VrrpInstance(**entry) for entry in vrrp.get("instances", [])],
-            )
-            if vrrp
-            else None,
-            apache=ApacheState(**apache) if apache else None,
-            updates=UpdateCounts(**updates) if updates else None,
-            events={k: EventCount(**v) for k, v in (data.get("events") or {}).items()},
+            vrrp=_vrrp(vrrp) if vrrp is not None else None,
+            apache=_entry(ApacheState, apache) if apache is not None else None,
+            updates=_entry(UpdateCounts, updates) if updates is not None else None,
+            events={name: _entry(EventCount, value) for name, value in events.items()},
             events_window_s=int(data.get("events_window_s", 12 * 3600)),
             errors=dict(data.get("errors") or {}),
         )
+
+
+def _vrrp(value: Any) -> VrrpState:
+    """The VRRP block: a source and a list of instance objects."""
+    if not isinstance(value, dict):
+        raise ValueError("vrrp must be an object")
+    instances = value.get("instances", [])
+    if not isinstance(instances, list):
+        raise ValueError("vrrp.instances must be a list")
+    return VrrpState(
+        source=value["source"],
+        instances=[_entry(VrrpInstance, entry) for entry in instances],
+    )
 
 
 #: Two collector periods and change. Older than this, a figure is a memory.
