@@ -269,6 +269,24 @@ def _load_text(load_avg, cpu_count, thresholds: Thresholds) -> Text:
     return text
 
 
+def _pressure_text(pressure: dict[str, tuple[float, float]], thresholds: Thresholds) -> Text:
+    """``cpu 4 % · 9 %`` -- avg10 · avg60; coloured by avg60; others only when above zero."""
+    text = Text()
+    for resource in ("cpu", "memory", "io"):
+        if resource not in pressure:
+            continue
+        avg10, avg60 = pressure[resource]
+        if resource != "cpu" and avg10 == 0 and avg60 == 0:
+            continue
+        status = classify(avg60, thresholds.psi_warning, thresholds.psi_critical)
+        if text:
+            text.append("   ")
+        text.append(f"{resource} ", style="dim")
+        text.append(f"{avg10:.0f} % · {avg60:.0f} %", style=STATUS_COLORS.get(status, "white"))
+    text.append("  (10 s · 60 s)", style="dim")
+    return text
+
+
 def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
     head = Table.grid(padding=(0, 1))
     head.add_column(style="bold cyan")
@@ -282,6 +300,8 @@ def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
             render_bar(res.cpu_percent, status, width=44),
             Text(f"{res.cpu_percent:5.1f}%", style=STATUS_COLORS.get(status, "white")),
         )
+    if res.pressure:
+        head.add_row("PSI", _pressure_text(res.pressure, cfg.thresholds), "")
 
     parts: list[RenderableType] = [head]
     if res.cpu_per_core:

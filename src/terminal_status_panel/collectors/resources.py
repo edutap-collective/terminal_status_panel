@@ -7,6 +7,7 @@ import platform
 import psutil
 
 from ..model import FilesystemUsage, ResourceUsage
+from .pressure import read_pressure
 
 PSEUDO_FSTYPES: set[str] = {
     "tmpfs",
@@ -119,6 +120,8 @@ def collect_resources(ignore_mountpoints: list[str] | None = None) -> ResourceUs
         res.cpu_percent = sum(res.cpu_per_core) / len(res.cpu_per_core)
     else:
         res.cpu_percent = _safe(lambda: psutil.cpu_percent(interval=0.1))
+
+    res.pressure = _safe(read_pressure, {}) or {}
 
     load = _safe(lambda: psutil.getloadavg())
     if load is not None:

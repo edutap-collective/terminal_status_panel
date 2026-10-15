@@ -40,6 +40,8 @@ class Thresholds:
     filesystem_critical: float = 90.0
     load_warning: float = 0.8  # per-CPU multiplier
     load_critical: float = 1.0  # per-CPU multiplier
+    psi_warning: float = 10.0  # percent of time stalled, avg60
+    psi_critical: float = 25.0
 
 
 @dataclass
@@ -735,6 +737,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     swap = _section(data, "thresholds", "swap")
     fs = _section(data, "thresholds", "filesystem")
     load = _section(data, "thresholds", "load")
+    psi = _section(data, "thresholds", "psi")
     thresholds = Thresholds(
         memory_warning=reader.number(mem, "thresholds.memory.warning", t.memory_warning),
         memory_critical=reader.number(mem, "thresholds.memory.critical", t.memory_critical),
@@ -745,6 +748,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         ),
         load_warning=reader.number(load, "thresholds.load.warning", t.load_warning),
         load_critical=reader.number(load, "thresholds.load.critical", t.load_critical),
+        psi_warning=reader.number(psi, "thresholds.psi.warning", t.psi_warning, minimum=0.0),
+        psi_critical=reader.number(psi, "thresholds.psi.critical", t.psi_critical, minimum=0.0),
     )
     docker = _section(data, "docker")
     services = _section(data, "services")

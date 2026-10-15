@@ -2490,3 +2490,14 @@ def test_no_legend_when_docker_is_unreachable():
     out = _text(panels.services_section(SwarmInfo(reachable=False), Config()), width=170)
 
     assert icons.UNKNOWN not in out
+
+
+def test_psi_row_shows_cpu_avg10_and_avg60():
+    res = ResourceUsage(load_avg=(1.0, 1.0, 1.0), cpu_count=4, pressure={"cpu": (4.0, 9.0)})
+    text = _text(panels.load_panel(res, Config()))
+    assert "PSI" in text and "4 % · 9 %" in text
+
+
+def test_no_pressure_no_row():
+    res = ResourceUsage(load_avg=(1.0, 1.0, 1.0), cpu_count=4)
+    assert "PSI" not in _text(panels.load_panel(res, Config()))

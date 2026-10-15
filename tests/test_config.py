@@ -370,3 +370,12 @@ def test_the_glyph_legend_is_on_unless_switched_off(tmp_path):
 
     path = _write(tmp_path, "\n".join(["[docker]", "legend = false"]))
     assert load_config(path).docker_legend is False
+
+
+def test_psi_thresholds_are_read(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text("[thresholds.psi]\nwarning = 12\ncritical = 30\n")
+    cfg = load_config(path)
+    assert (cfg.thresholds.psi_warning, cfg.thresholds.psi_critical) == (12.0, 30.0)
