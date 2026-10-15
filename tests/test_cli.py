@@ -108,7 +108,7 @@ def test_collect_all_skips_health_when_not_selected(isolated_cli):
 def test_collect_all_calls_health_when_selected(isolated_cli):
     called = []
 
-    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None):
+    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None, **_):
         called.append((peer_names, resolve_fqdn))
         return None
 
@@ -184,7 +184,7 @@ def test_collect_all_never_reaches_the_docker_daemon_before_the_budget(isolated_
 
     captured = {}
 
-    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None):
+    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None, **_):
         captured["resolve_peer_names"] = resolve_peer_names
         return None
 

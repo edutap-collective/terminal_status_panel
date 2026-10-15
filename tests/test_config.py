@@ -379,3 +379,21 @@ def test_psi_thresholds_are_read(tmp_path):
     path.write_text("[thresholds.psi]\nwarning = 12\ncritical = 30\n")
     cfg = load_config(path)
     assert (cfg.thresholds.psi_warning, cfg.thresholds.psi_critical) == (12.0, 30.0)
+
+
+def test_host_kind_tables(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[health.apache]\nurl = 'http://localhost/server-status'\n"
+        "requests_warning = 400\nrequests_critical = 500\n"
+        "[health.vrrp]\nlead_warning = 5\nlead_critical = 0\n"
+        "[health.systemd]\nignore = ['a.service']\n"
+    )
+    cfg = load_config(path)
+    assert cfg.health.apache.url == "http://localhost/server-status"
+    assert (cfg.health.apache.requests_warning, cfg.health.apache.requests_critical) == (
+        400.0,
+        500.0,
+    )
+    assert cfg.health.vrrp.lead_warning == 5 and cfg.health.systemd.ignore == ("a.service",)
+    assert not cfg.problems

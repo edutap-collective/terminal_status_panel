@@ -105,6 +105,32 @@ class RustfsProbe:
     scheme: str = "https"
 
 
+@dataclass(frozen=True)
+class ApacheProbe:
+    """Where mod_status answers, and when its figures turn yellow or red."""
+
+    url: str | None = None  # e.g. http://localhost/server-status ; None: kind off
+    requests_warning: float | None = None  # req/s per host; None: no colour
+    requests_critical: float | None = None
+    slots_warning: float = 80.0  # percent of scoreboard slots taken
+    slots_critical: float = 95.0
+
+
+@dataclass(frozen=True)
+class VrrpProbe:
+    """How close a BACKUP may come to taking over before it is worth a colour."""
+
+    lead_warning: int = 5
+    lead_critical: int = 0
+
+
+@dataclass(frozen=True)
+class SystemdProbe:
+    """Units that may be failed without turning the line red."""
+
+    ignore: tuple[str, ...] = ()
+
+
 @dataclass
 class HealthConfig:
     """What the CLUSTER HEALTH section may probe, and how long it may take."""
@@ -127,6 +153,9 @@ class HealthConfig:
     mongodb: MongoProbe = field(default_factory=MongoProbe)
     kafka: KafkaProbe = field(default_factory=KafkaProbe)
     rustfs: RustfsProbe = field(default_factory=RustfsProbe)
+    apache: ApacheProbe = field(default_factory=ApacheProbe)
+    vrrp: VrrpProbe = field(default_factory=VrrpProbe)
+    systemd: SystemdProbe = field(default_factory=SystemdProbe)
 
 
 DEFAULT_INFRASTRUCTURE_STACKS = [
@@ -177,7 +206,16 @@ DEFAULT_INFRA_UI_SERVICES = [
     "kibana",
 ]
 
-DEFAULT_HEALTH_KINDS = ("postgres", "mongodb", "kafka", "glusterfs", "rustfs")
+DEFAULT_HEALTH_KINDS = (
+    "postgres",
+    "mongodb",
+    "kafka",
+    "glusterfs",
+    "rustfs",
+    "systemd",
+    "vrrp",
+    "apache",
+)
 
 # One timeout per check. Every check — each cluster kind, the WireGuard peers,
 # DNS — runs as its own task under the shared budget, and its timeout is the
@@ -206,6 +244,7 @@ DEFAULT_HEALTH_TIMEOUTS = {
     "kafka": 4.0,
     "glusterfs": 1.0,
     "rustfs": 2.0,
+    "systemd": 1.0,
     "wireguard": 1.0,
     "dns": 2.5,
 }
@@ -612,6 +651,9 @@ _HEALTH_KIND_KEYS: dict[str, set[str]] = {
     "mongodb": {"match"},
     "kafka": {"match", "command_config"},
     "rustfs": {"match", "scheme"},
+    "apache": {"url", "requests_warning", "requests_critical", "slots_warning", "slots_critical"},
+    "vrrp": {"lead_warning", "lead_critical"},
+    "systemd": {"ignore"},
 }
 
 #: Every table ``[health]`` may contain. Anything else is a misspelling.
@@ -621,6 +663,14 @@ _HEALTH_TABLES = {"timeout", "dns", *_HEALTH_KIND_KEYS}
 #: this block does not read -- is as much a misspelling as an unknown table,
 #: and is reported the same way.
 _HEALTH_SCALAR_KEYS = {"budget", "enabled"}
+
+
+def _optional_number(reader: _Reader, section: dict, key: str) -> float | None:
+    """A threshold that may be absent: absent or invalid means "no colour", not 0."""
+    if key.rsplit(".", 1)[-1] not in section:
+        return None
+    value = reader.number(section, key, -1.0, minimum=0.0)
+    return None if value < 0 else value
 
 
 def _health_config(data: dict, reader: _Reader) -> HealthConfig:
@@ -700,6 +750,22 @@ def _health_config(data: dict, reader: _Reader) -> HealthConfig:
         scheme=reader.choice(rustfs_section, "health.rustfs.scheme", "https", RUSTFS_SCHEMES),
     )
 
+    ap = _section(data, "health", "apache")
+    apache = ApacheProbe(
+        url=_web_url(reader.text(ap, "health.apache.url", "")) if "url" in ap else None,
+        requests_warning=_optional_number(reader, ap, "health.apache.requests_warning"),
+        requests_critical=_optional_number(reader, ap, "health.apache.requests_critical"),
+        slots_warning=reader.number(ap, "health.apache.slots_warning", 80.0, minimum=0.0),
+        slots_critical=reader.number(ap, "health.apache.slots_critical", 95.0, minimum=0.0),
+    )
+    vr = _section(data, "health", "vrrp")
+    vrrp = VrrpProbe(
+        lead_warning=reader.integer(vr, "health.vrrp.lead_warning", 5),
+        lead_critical=reader.integer(vr, "health.vrrp.lead_critical", 0),
+    )
+    sd = _section(data, "health", "systemd")
+    systemd = SystemdProbe(ignore=reader.patterns(sd, "health.systemd.ignore", ()))
+
     return HealthConfig(
         budget=budget,
         timeouts=timeouts,
@@ -709,6 +775,9 @@ def _health_config(data: dict, reader: _Reader) -> HealthConfig:
         mongodb=mongodb,
         kafka=kafka,
         rustfs=rustfs,
+        apache=apache,
+        vrrp=vrrp,
+        systemd=systemd,
     )
 
 

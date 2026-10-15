@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .host import HostCheck
+
 
 @dataclass
 class ClusterMember:
@@ -118,3 +120,12 @@ class HealthInfo:
     # HealthInfo always has this True. It exists so that an empty ``dns`` list
     # on a default instance cannot read as "checked, nothing configured".
     dns_probed: bool = False
+    #: THIS HOST lines, in configured order. Empty when no host kind is enabled.
+    host: list[HostCheck] = field(default_factory=list)
+    #: Whether a Docker socket exists here. Without one the CLUSTERS block is
+    #: left out instead of saying "not checked (no Docker client)" on a host
+    #: that was never meant to have Docker.
+    docker_present: bool = True
+    #: Age of the collector's state, or None when there is none.
+    host_state_age: float | None = None
+    host_state_stale: bool = False

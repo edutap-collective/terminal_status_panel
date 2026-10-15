@@ -149,6 +149,10 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
             peer_names=_peer_names(swarm),
             client=client,
             resolve_peer_names=(None if client is None else lambda: _swarm_node_names(client)),
+            host=host,
+            docker_present=(
+                os.path.exists("/var/run/docker.sock") or bool(os.environ.get("DOCKER_HOST"))
+            ),
         )
 
     traefik_info = None

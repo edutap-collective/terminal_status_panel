@@ -92,14 +92,19 @@ def test_no_docker_client_still_yields_network_and_dns(monkeypatch):
     monkeypatch.setattr(
         health_collector, "collect_dns", lambda **kwargs: [DnsCheck(label="Resolver", ok=True)]
     )
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
+    )
     health = health_collector.collect_health(
         _config(), peer_names=[], client=None, resolve_fqdn=_fqdn
     )
-    assert health.clusters == []
     assert health.dns[0].label == "Resolver"
-    # No client means the clusters check was never attempted, not that it
-    # ran and found nothing.
-    assert health.clusters_probed is False
+    # Without a client only the host-run kind (glusterfs) is attempted; the
+    # Docker-bound kinds are not, and are not reported as having found nothing.
+    assert [c.kind for c in health.clusters] == ["glusterfs"]
+    assert health.clusters_probed is True
 
 
 def test_no_enabled_kinds_means_clusters_never_probed(monkeypatch):
@@ -388,3 +393,27 @@ def test_collect_health_hands_the_probes_the_configured_settings(monkeypatch):
     health_collector.collect_health(cfg, peer_names=[], client=object(), resolve_fqdn=_fqdn)
 
     assert seen[0].kafka.match == ("demo_kafka",)
+
+
+def test_host_kinds_run_without_docker(monkeypatch):
+    from types import SimpleNamespace
+
+    from terminal_status_panel.collectors import host
+    from terminal_status_panel.collectors.hoststate import HostStateRead
+
+    monkeypatch.setattr(
+        host.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="")
+    )
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **k: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda *a, **k: [])
+    info = health_collector.collect_health(
+        Config(),
+        [],
+        client=None,
+        host=HostStateRead(problem="missing"),
+        docker_present=False,
+    )
+    kinds = [c.kind for c in info.host]
+    assert "systemd" in kinds and info.docker_present is False
+    # Only host-run cluster kinds without Docker.
+    assert [c.kind for c in info.clusters] in ([], ["glusterfs"])
