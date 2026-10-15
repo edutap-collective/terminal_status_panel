@@ -1,17 +1,19 @@
 """Compose sections into the final dashboard layout.
 
-The panel is split into four independently selectable sections:
+The panel is split into five independently selectable sections:
 
 - ``server``  — SYSTEM OVERVIEW + UPDATES (top row) and the SYSTEM STATUS block.
-- ``docker``  — the DOCKER INFOS block.
 - ``health``  — the HEALTH block.
+- ``trouble`` — the TROUBLE block: what fell in the last twelve hours,
+  containers and host events together. Empty when there is nothing to report.
+- ``docker``  — the DOCKER INFOS block.
 - ``traefik`` — the TRAEFIK WIRING block.
 
 ``build_layout`` renders whichever sections are requested (default: all of
 ``SECTIONS``), followed by a shared footer, and stretches to the console
 width. ``SECTIONS`` lists every section the layout knows how to build, and
 ``cli.DEFAULT_SECTIONS`` is defined as exactly this tuple — a bare
-``status-full`` renders all four. A section is rendered the same way however
+``status-full`` renders all five. A section is rendered the same way however
 many others accompany it: a builder receives the panel data and the config,
 never the list of its neighbours.
 """
@@ -26,7 +28,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from ..config import Config
+from ..config import SECTION_NAMES, Config
 from ..model import PanelData
 from .health import health_section
 from .panels import (
@@ -37,8 +39,9 @@ from .panels import (
     updates_panel,
 )
 from .traefik import traefik_section
+from .trouble import trouble_section
 
-SECTIONS: tuple[str, ...] = ("server", "docker", "health", "traefik")
+SECTIONS: tuple[str, ...] = SECTION_NAMES
 
 
 def panel_version() -> str:
@@ -116,8 +119,9 @@ def traefik_block(data: PanelData, cfg: Config) -> RenderableType:
 
 _SECTION_BUILDERS = {
     "server": server_section,
-    "docker": docker_section,
     "health": health_block,
+    "trouble": trouble_section,
+    "docker": docker_section,
     "traefik": traefik_block,
 }
 
@@ -133,9 +137,14 @@ def build_layout(data: PanelData, cfg: Config, sections: tuple[str, ...] = SECTI
         builder = _SECTION_BUILDERS.get(name)
         if builder is None:
             continue
+        part = builder(data, cfg)
+        # A builder with nothing to say (TROUBLE on a healthy host) leaves no
+        # stray separator behind.
+        if isinstance(part, Text) and not part.plain:
+            continue
         if parts:
             parts.append(Text(""))
-        parts.append(builder(data, cfg))
+        parts.append(part)
     parts.append(Rule(style="dim blue"))
     parts.append(_footer())
     return Group(*parts)

@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from . import platform_defaults
+from .model.host import HOST_EVENT_KINDS
+
+#: Every section the layout can build, in render order.
+SECTION_NAMES: tuple[str, ...] = ("server", "health", "trouble", "docker", "traefik")
 
 #: Docker service label read as the per-service description column.
 #: Vendor-neutral, as befits a public package.
@@ -349,6 +353,12 @@ class Config:
     #: exec probes -- the Kafka one alone carries roughly 2.6 s of JVM startup
     #: -- so a five-second cadence would keep a JVM starting forever.
     follow_health_interval: float = 20.0
+    #: Sections a bare ``status-full`` renders, from the top-level ``sections``
+    #: key. ``None`` means "decide by what the host has": Docker sections are
+    #: dropped on a host without Docker.
+    sections: tuple[str, ...] | None = None
+    #: Host event kinds the TROUBLE section reports.
+    trouble_host_events: tuple[str, ...] = HOST_EVENT_KINDS
     #: Values in the config file that could not be used, with what was used
     #: instead. Empty for a valid file and for a missing one -- absent is not
     #: malformed. Shown by ``--debug``; the panel itself renders regardless.
@@ -867,6 +877,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         match=reader.patterns(traefik_section, "traefik.match", DEFAULT_TRAEFIK_MATCH),
     )
     health_config = _health_config(data, reader)
+    raw_sections = data.get("sections")
+    sections = None
+    if isinstance(raw_sections, list):
+        known = [s for s in raw_sections if s in SECTION_NAMES]
+        sections = tuple(known) or None
+    trouble_section = _section(data, "trouble")
+    host_events = reader.patterns(trouble_section, "trouble.host_events", HOST_EVENT_KINDS)
     follow_section = _section(data, "follow")
     follow_interval = reader.number(follow_section, "follow.interval", 5.0, minimum=0.1)
     follow_health_interval = reader.number(
@@ -897,5 +914,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         top_processes=top_processes,
         follow_interval=follow_interval,
         follow_health_interval=follow_health_interval,
+        sections=sections,
+        trouble_host_events=host_events,
         problems=reader.problems,
     )

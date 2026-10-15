@@ -22,6 +22,7 @@ PANELS = {
     "docker": "status-docker",
     "health": "status-health",
     "traefik": "status-traefik",
+    "trouble": "status-trouble",
 }
 
 _BEGIN = "# >>> terminal-status-panel >>>"

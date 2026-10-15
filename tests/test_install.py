@@ -96,3 +96,4 @@ def test_install_panel_can_wire_up_traefik(tmp_path, monkeypatch):
     from terminal_status_panel import install
 
     assert install.PANELS["traefik"] == "status-traefik"
+    assert install.PANELS["trouble"] == "status-trouble"

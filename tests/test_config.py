@@ -421,3 +421,23 @@ def test_invalid_apache_url_is_reported(tmp_path):
         cfg = _load(tmp_path, f"[health.apache]\nurl = '{bad}'\n")
         assert cfg.health.apache.url is None
         assert any(p.key == "health.apache.url" and p.used == "kind off" for p in cfg.problems)
+
+
+def test_sections_and_host_events_are_read(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text(
+        'sections = ["server", "bogus", "trouble"]\n[trouble]\nhost_events = ["oom_kill"]\n'
+    )
+    cfg = load_config(path)
+    assert cfg.sections == ("server", "trouble")
+    assert cfg.trouble_host_events == ("oom_kill",)
+
+
+def test_sections_default_to_none_and_all_host_events():
+    from terminal_status_panel.config import Config
+    from terminal_status_panel.model.host import HOST_EVENT_KINDS
+
+    cfg = Config()
+    assert cfg.sections is None and cfg.trouble_host_events == HOST_EVENT_KINDS

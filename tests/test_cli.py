@@ -464,3 +464,48 @@ def test_an_empty_traefik_match_leaves_the_docker_section_alone(isolated_cli):
     cli.collect_all(cfg, sections=("docker", "traefik"))
 
     assert called == ["docker"]
+
+
+def test_docker_absent_without_socket(tmp_path):
+    assert cli.docker_present({}, str(tmp_path / "docker.sock")) is False
+
+
+def test_docker_present_with_docker_host():
+    assert cli.docker_present({"DOCKER_HOST": "tcp://192.0.2.1:2375"}, "/nonexistent") is True
+
+
+def test_default_sections_drop_docker_and_traefik_without_socket(monkeypatch):
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: False)
+    assert cli.default_sections_for(cli.Config()) == ("server", "health", "trouble")
+
+
+def test_default_sections_keep_all_with_docker(monkeypatch):
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: True)
+    assert cli.default_sections_for(cli.Config()) == (
+        "server",
+        "health",
+        "trouble",
+        "docker",
+        "traefik",
+    )
+
+
+def test_config_sections_override(monkeypatch):
+    cfg = cli.Config(sections=("server", "trouble"))
+    assert cli.default_sections_for(cfg) == ("server", "trouble")
+
+
+def test_trouble_main_returns_zero(isolated_cli):
+    assert cli.trouble_main([]) == 0
+
+
+def test_status_full_without_docker_skips_docker_sections(isolated_cli, monkeypatch):
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: False)
+    seen = []
+    monkeypatch.setattr(
+        cli,
+        "collect_all",
+        lambda cfg, sections=cli.SECTIONS: seen.append(sections) or cli.PanelData(),
+    )
+    assert cli.main([]) == 0
+    assert seen == [("server", "health", "trouble")]

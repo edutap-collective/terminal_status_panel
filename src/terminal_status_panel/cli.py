@@ -1,12 +1,14 @@
 """Command-line entry points: collect data, render the panel, always exit 0.
 
-Five console scripts share this module:
+Six console scripts share this module:
 
 - ``status-full``    — every section the layout knows how to build
-  (``server`` + ``docker`` + ``health`` + ``traefik``).
+  (``server`` + ``health`` + ``trouble`` + ``docker`` + ``traefik``); on a host
+  without Docker the Docker and Traefik sections are left out.
 - ``status-server``  — only the system/server section.
-- ``status-docker``  — only the Docker section.
+- ``status-docker``  — the Docker section and the TROUBLE block.
 - ``status-health``  — only the cluster health section.
+- ``status-trouble`` — only the TROUBLE block (containers and host events).
 - ``status-traefik`` — only the Traefik wiring section.
 
 Each section collects only the data it needs, so ``status-docker`` never
@@ -25,6 +27,7 @@ import os
 import shutil
 import sys
 import traceback
+from collections.abc import Mapping
 
 from rich.console import Console
 
@@ -49,6 +52,22 @@ from .render.layout import SECTIONS, build_layout
 # findings, and a panel that quietly abbreviated them would hide exactly what
 # it exists to surface.
 DEFAULT_SECTIONS: tuple[str, ...] = SECTIONS
+
+DOCKER_SOCKET = "/var/run/docker.sock"
+
+
+def docker_present(env: Mapping[str, str] = os.environ, socket_path: str = DOCKER_SOCKET) -> bool:
+    """Whether this host has a Docker endpoint at all -- not whether it answers."""
+    return bool(env.get("DOCKER_HOST")) or os.path.exists(socket_path)
+
+
+def default_sections_for(cfg: Config) -> tuple[str, ...]:
+    """What a bare ``status-full`` renders here."""
+    if cfg.sections:
+        return cfg.sections
+    if docker_present():
+        return SECTIONS
+    return tuple(s for s in SECTIONS if s not in ("docker", "traefik"))
 
 
 def _health_socket_timeout(cfg: Config) -> float:
@@ -117,9 +136,10 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     # section then only says so, and nothing is collected for it -- not the
     # wiring, not the API cross-check, not the Swarm data below.
     traefik = "traefik" in sections and bool(cfg.traefik.match)
+    trouble = "trouble" in sections
     # One read of the collector's state file serves every section that shows
-    # host figures; `trouble` is not a section yet and is checked ahead of it.
-    host = read_host_state() if (server or health or "trouble" in sections) else None
+    # host figures.
+    host = read_host_state() if (server or health or trouble) else None
 
     # The traefik section needs this data too, though it renders no DOCKER
     # INFOS block: every router's service line is resolved against the Swarm
@@ -134,7 +154,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
             df_timeout=cfg.docker_df_timeout,
             group_label=cfg.group_label,
         )
-        if docker_section or traefik
+        if docker_section or traefik or (trouble and docker_present())
         else None
     )
 
@@ -150,9 +170,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
             client=client,
             resolve_peer_names=(None if client is None else lambda: _swarm_node_names(client)),
             host=host,
-            docker_present=(
-                os.path.exists("/var/run/docker.sock") or bool(os.environ.get("DOCKER_HOST"))
-            ),
+            docker_present=docker_present(),
         )
 
     traefik_info = None
@@ -251,7 +269,7 @@ def _parse_args(argv: list[str] | None, prog: str) -> argparse.Namespace:
     parser.add_argument(
         "--sections",
         default=None,
-        help="comma-separated sections to render: server,docker,health,traefik",
+        help="comma-separated sections to render: server,health,trouble,docker,traefik",
     )
     parser.add_argument(
         "-f", "--follow", action="store_true", help="keep the panel on screen and refresh it"
@@ -318,7 +336,11 @@ def main(
         # also called once per pass by follow mode, which never sees argv, and
         # a flag that survived only the first pass would be worse than none.
         cfg.top_processes = resolve_top_processes(args.processes, cfg)
-        selected = _resolve_sections(args.sections, sections)
+        # Only the bare `status-full` adapts to the host (and to the config's
+        # `sections`); a named command or an explicit --sections is taken as
+        # written.
+        default = default_sections_for(cfg) if sections is DEFAULT_SECTIONS else sections
+        selected = _resolve_sections(args.sections, default)
         if args.follow:
             return run_follow(
                 cfg, selected, width=args.width, no_color=args.no_color, interval=args.interval
@@ -347,13 +369,18 @@ def server_main(argv: list[str] | None = None) -> int:
 
 
 def docker_main(argv: list[str] | None = None) -> int:
-    """Entry point for ``status-docker`` — Docker section only."""
-    return main(argv, sections=("docker",), prog="status-docker")
+    """Entry point for ``status-docker`` — Docker section and TROUBLE block."""
+    return main(argv, sections=("docker", "trouble"), prog="status-docker")
 
 
 def health_main(argv: list[str] | None = None) -> int:
     """Entry point for ``status-health`` — cluster health section only."""
     return main(argv, sections=("health",), prog="status-health")
+
+
+def trouble_main(argv: list[str] | None = None) -> int:
+    """Entry point for ``status-trouble`` — the TROUBLE block only."""
+    return main(argv, sections=("trouble",), prog="status-trouble")
 
 
 def traefik_main(argv: list[str] | None = None) -> int:

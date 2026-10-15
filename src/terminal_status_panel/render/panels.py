@@ -1516,9 +1516,6 @@ def services_section(
         # with dozens of services; a host without a swarm has the room, and an
         # accumulated Docker is likelier there, not less.
         plain: list[RenderableType] = [*legend, _disk_row(swarm.disk, resources), Text("")]
-        trouble = _trouble_block(swarm.trouble)
-        if trouble is not None:
-            plain += [trouble, Text("")]
         plain.append(_stack_columns(swarm, cfg, health))
         return section("DOCKER INFOS", Group(*plain))
 
@@ -1528,13 +1525,5 @@ def services_section(
         _swarm_body(swarm, health.peers if health else None, resources),
         Text(""),
     ]
-    # Between the header and the stacks, and only when it has something to
-    # say. Appended below sixty stack rows it would be read by nobody who was
-    # not already scrolling; here it stands where the warning it explains was
-    # raised, and in the normal case it displaces nothing because it does not
-    # exist.
-    trouble = _trouble_block(swarm.trouble)
-    if trouble is not None:
-        parts += [trouble, Text("")]
     parts.append(_stack_columns(swarm, cfg, health))
     return section("DOCKER INFOS", Group(*parts))

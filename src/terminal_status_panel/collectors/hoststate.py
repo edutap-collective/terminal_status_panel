@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 
+from ..model import TroubleEntry
 from ..model.host import (
     HOST_EVENT_KINDS,
     STALE_AFTER_SECONDS,
@@ -14,7 +15,13 @@ from ..model.host import (
     UnknownSchemaError,
 )
 
-__all__ = ["HOST_EVENT_KINDS", "STALE_AFTER_SECONDS", "HostStateRead", "read_host_state"]
+__all__ = [
+    "HOST_EVENT_KINDS",
+    "STALE_AFTER_SECONDS",
+    "HostStateRead",
+    "host_trouble",
+    "read_host_state",
+]
 
 
 def read_host_state(path: str = STATE_PATH, now: float | None = None) -> HostStateRead:
@@ -39,3 +46,39 @@ def read_host_state(path: str = STATE_PATH, now: float | None = None) -> HostSta
     except Exception:  # noqa: BLE001 -- malformed content of any shape
         return HostStateRead(problem="unreadable")
     return HostStateRead(state=state, age_s=max(0.0, now - state.written_at))
+
+
+_EVENT_LABELS = {
+    "oom_kill": ("host: OOM kill", "dead"),
+    "unit_failed": ("host: unit failed", "dead"),
+    "apache_slots_full": ("host: Apache slots full", "restarting"),
+    "vrrp_state": ("host: VRRP state change", "restarting"),
+    "apache_reload": ("host: Apache reload", "restarting"),
+}
+
+
+def _ago(seconds: float) -> str:
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        return f"{total // 60}m"
+    return f"{total // 3600}h"
+
+
+def host_trouble(read: HostStateRead, now: float, enabled: tuple[str, ...]) -> list[TroubleEntry]:
+    """One row per enabled host event kind that happened in the window."""
+    if read.state is None:
+        return []
+    rows = []
+    for kind, count in read.state.events.items():
+        if kind not in enabled or count.count <= 0 or kind not in _EVENT_LABELS:
+            continue
+        label, severity = _EVENT_LABELS[kind]
+        cause = None if count.last is None else f"last {_ago(max(0.0, now - count.last))} ago"
+        rows.append(
+            TroubleEntry(
+                name=label, fails=count.count, cause=cause, severity=severity, source="host"
+            )
+        )
+    return rows

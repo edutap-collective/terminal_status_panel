@@ -1,6 +1,7 @@
 import json
 
-from terminal_status_panel.collectors.hoststate import read_host_state
+from terminal_status_panel.collectors.hoststate import host_trouble, read_host_state
+from terminal_status_panel.model.host import EventCount, HostState, HostStateRead
 
 
 def test_missing_file_is_reported_not_quiet(tmp_path):
@@ -100,3 +101,31 @@ def test_unknown_keys_inside_blocks_are_ignored(tmp_path):
     assert read.state.vrrp.instances[0].name == "vi_1"
     assert read.state.apache.window_s == 30.0
     assert read.state.events["oom_kill"].count == 0
+
+
+def test_host_events_become_trouble_rows_and_zero_counts_do_not():
+    read = HostStateRead(
+        state=HostState(
+            written_at=1000.0,
+            collector="x",
+            events={"oom_kill": EventCount(2, 900.0), "vrrp_state": EventCount(0, None)},
+        ),
+        age_s=1.0,
+    )
+    rows = host_trouble(read, now=1000.0, enabled=("oom_kill", "vrrp_state"))
+    assert [(r.name, r.fails, r.source, r.severity) for r in rows] == [
+        ("host: OOM kill", 2, "host", "dead")
+    ]
+    assert rows[0].cause == "last 1m ago"
+
+
+def test_disabled_kind_is_not_reported():
+    read = HostStateRead(
+        state=HostState(written_at=1.0, collector="x", events={"oom_kill": EventCount(1, 1.0)}),
+        age_s=1.0,
+    )
+    assert host_trouble(read, now=2.0, enabled=()) == []
+
+
+def test_no_state_means_no_rows():
+    assert host_trouble(HostStateRead(problem="missing"), now=1.0, enabled=("oom_kill",)) == []
