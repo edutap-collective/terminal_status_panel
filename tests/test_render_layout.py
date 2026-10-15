@@ -67,7 +67,7 @@ def test_build_layout_renders_only_the_requested_section():
     with console.capture() as capture:
         console.print(build_layout(data, Config(), sections=("health",)))
     output = capture.get()
-    assert "CLUSTER HEALTH" in output
+    assert "HEALTH" in output
     assert "DOCKER" not in output
 
 

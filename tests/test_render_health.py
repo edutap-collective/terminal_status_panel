@@ -7,6 +7,7 @@ from terminal_status_panel.model import (
     ClusterService,
     DnsCheck,
     HealthInfo,
+    HostCheck,
     PeerReachability,
 )
 from terminal_status_panel.render import icons
@@ -21,7 +22,7 @@ def _render(health, width=120):
 
 
 def test_missing_health_renders_a_placeholder_not_a_crash():
-    assert "CLUSTER HEALTH" in _render(None)
+    assert "HEALTH" in _render(None)
 
 
 def test_unprobed_clusters_are_not_rendered_as_all_clear():
@@ -199,7 +200,7 @@ def test_narrow_width_still_renders():
         peers=[PeerReachability(name="swarm01-wrk-01", method="wireguard", ok=True, detail="0:31")],
         dns=[DnsCheck(label="Resolver", ok=True, detail="3 ms")],
     )
-    assert "CLUSTER HEALTH" in _render(health, width=60)
+    assert "HEALTH" in _render(health, width=60)
 
 
 # -- Fix 1: the peers title reflects every peer's method, not just the first --
@@ -464,3 +465,59 @@ def test_a_standalone_postgres_renders_as_one_line_with_its_verdict():
 
     assert "✅ PostgreSQL demo_postgres — standalone, accepting connections" in out
     assert "leader" not in out
+
+
+# -- THIS HOST block --
+
+
+def test_this_host_block_lists_host_checks_and_dns():
+    out = _render(
+        HealthInfo(
+            host=[HostCheck("systemd", "ok", "0 failed")],
+            dns=[DnsCheck("own name", True, "ok")],
+            dns_probed=True,
+            host_state_age=12.0,
+        )
+    )
+    assert "THIS HOST" in out and "systemd" in out and "0 failed" in out and "own name" in out
+    assert "state 12 s old" in out
+
+
+def test_stale_state_is_called_out():
+    out = _render(
+        HealthInfo(
+            host=[HostCheck("vrrp", "ok", "vi_1 MASTER")],
+            host_state_age=300.0,
+            host_state_stale=True,
+        )
+    )
+    assert "state 5 min old" in out
+
+
+def test_no_docker_no_clusters_block():
+    out = _render(HealthInfo(docker_present=False, clusters_probed=False))
+    assert "CLUSTERS" not in out and "no Docker client" not in out
+
+
+def test_failed_units_are_named():
+    out = _render(HealthInfo(host=[HostCheck("systemd", "crit", "1 failed", ["foo.service"])]))
+    assert "foo.service" in out
+
+
+def test_truncated_host_kind_renders_in_this_host_not_in_clusters():
+    health = HealthInfo(
+        host=[HostCheck("vrrp", "ok", "vi_1 MASTER")],
+        clusters_probed=True,
+        truncated=["systemd"],
+    )
+    out = _render(health)
+    assert f"{icons.TRUNCATED} systemd: time budget exceeded" in out
+    assert "no clustered services found" in out
+    this_host, clusters = out.split("CLUSTERS")
+    assert "systemd: time budget exceeded" in this_host
+    assert "systemd" not in clusters
+
+
+def test_not_applicable_host_kinds_are_listed_once():
+    out = _render(HealthInfo(host=[HostCheck("apache", "na", "")]))
+    assert "n/a here: Apache" in out

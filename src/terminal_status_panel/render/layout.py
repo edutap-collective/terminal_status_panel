@@ -4,7 +4,7 @@ The panel is split into four independently selectable sections:
 
 - ``server``  — SYSTEM OVERVIEW + UPDATES (top row) and the SYSTEM STATUS block.
 - ``docker``  — the DOCKER INFOS block.
-- ``health``  — the CLUSTER HEALTH block.
+- ``health``  — the HEALTH block.
 - ``traefik`` — the TRAEFIK WIRING block.
 
 ``build_layout`` renders whichever sections are requested (default: all of
@@ -105,7 +105,7 @@ def docker_section(data: PanelData, cfg: Config) -> RenderableType:
 
 
 def health_block(data: PanelData, cfg: Config) -> RenderableType:
-    """The CLUSTER HEALTH block."""
+    """The HEALTH block."""
     return health_section(data.health, cfg)
 
 

@@ -1,4 +1,4 @@
-"""Render the CLUSTER HEALTH section.
+"""Render the HEALTH section: THIS HOST, CLUSTERS and PEERS.
 
 Icon vocabulary, extending the panel's existing scheme:
 
@@ -19,7 +19,9 @@ turn (see ``collectors/clusters.mongo_command``). ``⬜`` is then the exception
 -- a member the fan-out could not reach before its deadline -- rather than the
 rule it was until 0.10.
 
-Layout follows the rest of the dashboard (see ``render/panels.py``): a
+The section has three blocks. THIS HOST (the host checks and the DNS checks)
+always renders; CLUSTERS renders where Docker is present or was probed; PEERS
+stands alone below. Layout follows the rest of the dashboard (see ``render/panels.py``): a
 ``Rule`` header for the top-level section, plain bold-cyan sub-headers for
 the blocks inside it, no bordered panels.
 """
@@ -107,7 +109,8 @@ def _service_lines(service: ClusterService) -> Text:
 
 
 # Task names in ``HealthInfo.truncated`` that are not cluster kinds.
-_NON_CLUSTER_TASKS = ("peers", "dns")
+_HOST_KINDS = ("vrrp", "apache", "systemd")
+_NON_CLUSTER_TASKS = ("peers", "dns", *_HOST_KINDS)
 
 
 def _truncated_kinds(health: HealthInfo) -> list[str]:
@@ -233,19 +236,54 @@ def _dns_body(health: HealthInfo) -> RenderableType:
     return table
 
 
-def _bottom_row(health: HealthInfo) -> Table:
-    peers_block = Group(_subhead(f"PEERS ({_peer_method_label(health)})"), _peers_body(health))
-    dns_block = Group(_subhead("DNS"), _dns_body(health))
-    grid = Table.grid(expand=True, padding=(0, 4))
-    grid.add_column(ratio=1)
-    grid.add_column(ratio=1)
-    grid.add_row(peers_block, dns_block)
-    return grid
+_HOST_TITLES = {"vrrp": "VRRP", "apache": "Apache", "systemd": "systemd"}
+_HOST_ICONS = {"ok": OK, "warn": WARN, "crit": DEAD, "error": FAILED}
+_HOST_STYLES = {"ok": "", "warn": "yellow", "crit": "red", "error": "red", "na": "dim"}
+
+
+def _age(seconds: float) -> str:
+    return f"{seconds:.0f} s" if seconds < 120 else f"{seconds // 60:.0f} min"
+
+
+def _host_body(health: HealthInfo) -> RenderableType:
+    table = Table.grid(padding=(0, 2))
+    table.add_column()
+    table.add_column()
+    for check in health.host:
+        if check.status == "na":
+            continue  # listed once below, like the cluster kinds
+        icon = _HOST_ICONS.get(check.status, UNKNOWN)
+        style = _HOST_STYLES.get(check.status, "")
+        summary = check.summary
+        if check.details and check.status in ("warn", "crit"):
+            summary += "  " + ", ".join(check.details)
+        table.add_row(
+            Text(f"{icon} {_HOST_TITLES.get(check.kind, check.kind)}"), Text(summary, style=style)
+        )
+    parts: list[RenderableType] = [table]
+    # A host kind that ran out of time has no HostCheck; say so here, not in CLUSTERS.
+    parts.extend(
+        Text(f"{TRUNCATED} {_HOST_TITLES[kind]}: time budget exceeded", style="dim")
+        for kind in _HOST_KINDS
+        if kind in health.truncated
+    )
+    parts.append(_dns_body(health))
+    not_applicable = [_HOST_TITLES.get(c.kind, c.kind) for c in health.host if c.status == "na"]
+    if not_applicable:
+        parts.append(Text(f"n/a here: {', '.join(not_applicable)}", style="dim"))
+    if health.host_state_age is not None:
+        style = "yellow" if health.host_state_stale else "dim"
+        parts.append(Text(f"state {_age(health.host_state_age)} old", style=style))
+    return Group(*parts)
 
 
 def health_section(health: HealthInfo | None, cfg: Config) -> RenderableType:
-    """The CLUSTER HEALTH block: infrastructure services, peer reachability, DNS."""
+    """HEALTH: this host first, then clusters and peers where there are any."""
     data = health or HealthInfo()
-    clusters_block = Group(_subhead("CLUSTERS"), _clusters_body(data))
-    body = Group(clusters_block, Text(""), _bottom_row(data))
-    return section("CLUSTER HEALTH", body)
+    blocks: list[RenderableType] = [Group(_subhead("THIS HOST"), _host_body(data))]
+    if data.docker_present or data.clusters_probed:
+        blocks += [Text(""), Group(_subhead("CLUSTERS"), _clusters_body(data))]
+    if data.peers_probed or data.docker_present:
+        peers_title = f"PEERS ({_peer_method_label(data)})"
+        blocks += [Text(""), Group(_subhead(peers_title), _peers_body(data))]
+    return section("HEALTH", Group(*blocks))
