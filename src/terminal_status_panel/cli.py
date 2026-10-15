@@ -11,8 +11,9 @@ Six console scripts share this module:
 - ``status-trouble`` — only the TROUBLE block (containers and host events).
 - ``status-traefik`` — only the Traefik wiring section.
 
-Each section collects only the data it needs, so ``status-docker`` never
-touches the system collectors and ``status-server`` never opens the Docker
+Each section collects only the data it needs, so ``status-docker`` reads
+only the Docker API and the collector's host state file (for TROUBLE), never the
+system collectors, and ``status-server`` never opens the Docker
 socket.
 
 ``status-traefik`` renders the same TRAEFIK WIRING block ``status-full``
@@ -44,8 +45,9 @@ from .follow import run_follow
 from .model import PanelData, ProcessSnapshot
 from .render.layout import SECTIONS, build_layout
 
-# The sections a bare `status-full` renders: every section the layout knows
-# how to build, the wiring included. There is no second, shorter rendering of
+# The sections a bare `status-full` renders where Docker is present and the
+# config does not say otherwise (see `default_sections_for`): every section the
+# layout knows how to build, the wiring included. There is no second, shorter rendering of
 # it — `traefik_block` is handed the section data and nothing about its
 # neighbours, so the tree `status-traefik` prints is the tree `status-full`
 # prints. Keeping the two identical is the point: the wiring block holds
@@ -370,7 +372,7 @@ def server_main(argv: list[str] | None = None) -> int:
 
 def docker_main(argv: list[str] | None = None) -> int:
     """Entry point for ``status-docker`` — Docker section and TROUBLE block."""
-    return main(argv, sections=("docker", "trouble"), prog="status-docker")
+    return main(argv, sections=("trouble", "docker"), prog="status-docker")
 
 
 def health_main(argv: list[str] | None = None) -> int:

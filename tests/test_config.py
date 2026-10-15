@@ -441,3 +441,29 @@ def test_sections_default_to_none_and_all_host_events():
 
     cfg = Config()
     assert cfg.sections is None and cfg.trouble_host_events == HOST_EVENT_KINDS
+
+
+def test_unknown_sections_and_host_events_are_reported(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text(
+        'sections = ["server", "bogus"]\n[trouble]\nhost_events = ["oom-kill", "oom_kill"]\n'
+        "hostevents = 1\n"
+    )
+    cfg = load_config(path)
+    assert cfg.sections == ("server",)
+    assert cfg.trouble_host_events == ("oom_kill",)
+    found = {(p.key, p.found) for p in cfg.problems}
+    assert ("sections", "'bogus'") in found
+    assert ("trouble.host_events", "'oom-kill'") in found
+
+
+def test_sections_not_a_list_falls_back_and_says_so(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text('sections = "server"\n[trouble]\nhostevents = 1\n')
+    cfg = load_config(path)
+    assert cfg.sections is None
+    assert {p.key for p in cfg.problems} == {"sections", "trouble.hostevents"}

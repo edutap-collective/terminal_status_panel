@@ -552,6 +552,36 @@ class _Reader:
             )
         return tuple(kept)
 
+    def members(
+        self, section: dict, key: str, allowed: tuple[str, ...], default: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """A list of names, each from a fixed set; unknown ones are dropped and reported.
+
+        An empty list is a statement ("none of these") and is taken as written.
+        A value that is not a list falls back to *default*.
+        """
+        name = key.rsplit(".", 1)[-1]
+        if name not in section:
+            return default
+        raw = section[name]
+        if not isinstance(raw, list):
+            self._note(key, raw, list(default), "expected a list of names")
+            return default
+        kept: list[str] = []
+        for entry in raw:
+            if isinstance(entry, str) and entry in allowed:
+                kept.append(entry)
+                continue
+            self.problems.append(
+                ConfigProblem(
+                    key=key,
+                    found=repr(entry),
+                    used="nothing (entry dropped)",
+                    reason=f"expected one of: {', '.join(allowed)}",
+                )
+            )
+        return tuple(kept)
+
     def choice(self, section: dict, key: str, default: str, allowed: tuple[str, ...]) -> str:
         """A string from a fixed set of values."""
         value = self.text(section, key, default)
@@ -877,13 +907,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         match=reader.patterns(traefik_section, "traefik.match", DEFAULT_TRAEFIK_MATCH),
     )
     health_config = _health_config(data, reader)
-    raw_sections = data.get("sections")
-    sections = None
-    if isinstance(raw_sections, list):
-        known = [s for s in raw_sections if s in SECTION_NAMES]
-        sections = tuple(known) or None
+    chosen = reader.members(data, "sections", SECTION_NAMES, ())
+    sections = chosen or None
     trouble_section = _section(data, "trouble")
-    host_events = reader.patterns(trouble_section, "trouble.host_events", HOST_EVENT_KINDS)
+    reader.unknown_keys(trouble_section, "trouble", {"host_events"})
+    host_events = reader.members(
+        trouble_section, "trouble.host_events", HOST_EVENT_KINDS, HOST_EVENT_KINDS
+    )
     follow_section = _section(data, "follow")
     follow_interval = reader.number(follow_section, "follow.interval", 5.0, minimum=0.1)
     follow_health_interval = reader.number(

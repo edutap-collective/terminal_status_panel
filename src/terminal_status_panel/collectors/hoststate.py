@@ -57,6 +57,11 @@ _EVENT_LABELS = {
 }
 
 
+def _age(seconds: float) -> str:
+    """Same wording as the HEALTH block's state age."""
+    return f"{seconds:.0f} s" if seconds < 120 else f"{seconds // 60:.0f} min"
+
+
 def _ago(seconds: float) -> str:
     total = int(seconds)
     if total < 60:
@@ -71,11 +76,14 @@ def host_trouble(read: HostStateRead, now: float, enabled: tuple[str, ...]) -> l
     if read.state is None:
         return []
     rows = []
+    stale = f"state {_age(read.age_s)} old" if read.stale and read.age_s is not None else None
     for kind, count in read.state.events.items():
         if kind not in enabled or count.count <= 0 or kind not in _EVENT_LABELS:
             continue
         label, severity = _EVENT_LABELS[kind]
         cause = None if count.last is None else f"last {_ago(max(0.0, now - count.last))} ago"
+        if stale:
+            cause = f"{cause} ({stale})" if cause else f"({stale})"
         rows.append(
             TroubleEntry(
                 name=label, fails=count.count, cause=cause, severity=severity, source="host"

@@ -129,3 +129,15 @@ def test_disabled_kind_is_not_reported():
 
 def test_no_state_means_no_rows():
     assert host_trouble(HostStateRead(problem="missing"), now=1.0, enabled=("oom_kill",)) == []
+
+
+def test_stale_state_marks_every_row_with_its_age():
+    state = HostState(
+        written_at=0.0,
+        collector="x",
+        events={"oom_kill": EventCount(1, 0.0), "unit_failed": EventCount(1, None)},
+    )
+    read = HostStateRead(state=state, age_s=300.0)
+    rows = host_trouble(read, now=300.0, enabled=("oom_kill", "unit_failed"))
+    assert rows[0].cause == "last 5m ago (state 5 min old)"
+    assert rows[1].cause == "(state 5 min old)"

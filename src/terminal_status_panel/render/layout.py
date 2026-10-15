@@ -12,8 +12,10 @@ The panel is split into five independently selectable sections:
 ``build_layout`` renders whichever sections are requested (default: all of
 ``SECTIONS``), followed by a shared footer, and stretches to the console
 width. ``SECTIONS`` lists every section the layout knows how to build, and
-``cli.DEFAULT_SECTIONS`` is defined as exactly this tuple — a bare
-``status-full`` renders all five. A section is rendered the same way however
+``cli.DEFAULT_SECTIONS`` is defined as exactly this tuple. A bare
+``status-full`` renders all five on a host with Docker; without a Docker
+endpoint (or with ``sections`` set in the config) ``cli.default_sections_for``
+narrows it. A section is rendered the same way however
 many others accompany it: a builder receives the panel data and the config,
 never the list of its neighbours.
 """

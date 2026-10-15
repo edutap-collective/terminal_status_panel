@@ -509,3 +509,14 @@ def test_status_full_without_docker_skips_docker_sections(isolated_cli, monkeypa
     )
     assert cli.main([]) == 0
     assert seen == [("server", "health", "trouble")]
+
+
+def test_status_docker_renders_trouble_above_docker(isolated_cli, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        cli,
+        "collect_all",
+        lambda cfg, sections=cli.SECTIONS: seen.append(sections) or cli.PanelData(),
+    )
+    assert cli.docker_main([]) == 0
+    assert seen == [("trouble", "docker")]
