@@ -62,6 +62,7 @@ class PanelData:
     health: HealthInfo | None = None
     traefik: TraefikInfo | None = None
     processes: ProcessSnapshot | None = None
+    host: HostStateRead | None = None
 
 
 __all__ = [

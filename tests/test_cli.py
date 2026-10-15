@@ -2,6 +2,7 @@ import pytest
 
 from terminal_status_panel import cli
 from terminal_status_panel.config import Config
+from terminal_status_panel.model import HostStateRead
 
 
 @pytest.fixture
@@ -26,7 +27,8 @@ def isolated_cli(monkeypatch):
     """
     monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
     monkeypatch.setattr(cli, "collect_health", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "collect_updates", lambda timeout=None: None)
+    monkeypatch.setattr(cli, "collect_updates", lambda timeout=None, host=None: None)
+    monkeypatch.setattr(cli, "read_host_state", lambda *a, **k: HostStateRead(problem="missing"))
     monkeypatch.setattr(cli, "collect_processes", lambda sample, **kw: None)
     return monkeypatch
 

@@ -165,7 +165,7 @@ def system_overview(info: SystemInfo | None) -> Group:
 def updates_panel(updates: UpdateInfo | None) -> Group:
     """The UPDATES block, or a note that this platform cannot report them."""
     if updates is None or not updates.supported:
-        body = Text("n/a (not a Debian/Ubuntu system)", style="dim")
+        body = Text("n/a (no update source on this system)", style="dim")
         return section("UPDATES", body)
 
     security = updates.security or 0

@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
 from terminal_status_panel.collectors import updates
+from terminal_status_panel.collectors.hoststate import HostStateRead
 from terminal_status_panel.model import UpdateInfo
+from terminal_status_panel.model.host import HostState, UpdateCounts
 
 
 def test_parses_apt_check_output(monkeypatch):
@@ -26,3 +28,37 @@ def test_degrades_when_helper_missing(monkeypatch):
     info = updates.collect_updates()
     assert info.supported is False
     assert info.available is None
+
+
+def test_falls_back_to_the_collector_counts(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError(updates.APT_CHECK)
+
+    monkeypatch.setattr(updates.subprocess, "run", boom)
+    host = HostStateRead(
+        state=HostState(
+            written_at=1.0,
+            collector="x",
+            updates=UpdateCounts(1.0, 3, 1, "apt-simulate"),
+        ),
+        age_s=5.0,
+    )
+    info = updates.collect_updates(host=host)
+    assert (info.supported, info.available, info.security, info.standard) == (True, 3, 1, 2)
+
+
+def test_apt_check_still_wins(monkeypatch):
+    monkeypatch.setattr(
+        updates.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(stderr="5;0", stdout=""),
+    )
+    host = HostStateRead(
+        state=HostState(
+            written_at=1.0,
+            collector="x",
+            updates=UpdateCounts(1.0, 9, 9, "apt-simulate"),
+        ),
+        age_s=5.0,
+    )
+    assert updates.collect_updates(host=host).available == 5

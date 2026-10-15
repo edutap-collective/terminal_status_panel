@@ -30,6 +30,7 @@ from rich.console import Console
 
 from .collectors.docker import collect_docker
 from .collectors.health import collect_health
+from .collectors.hoststate import read_host_state
 from .collectors.processes import collect_processes
 from .collectors.resources import collect_resources
 from .collectors.system import collect_system
@@ -116,6 +117,9 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     # section then only says so, and nothing is collected for it -- not the
     # wiring, not the API cross-check, not the Swarm data below.
     traefik = "traefik" in sections and bool(cfg.traefik.match)
+    # One read of the collector's state file serves every section that shows
+    # host figures; `trouble` is not a section yet and is checked ahead of it.
+    host = read_host_state() if (server or health or "trouble" in sections) else None
 
     # The traefik section needs this data too, though it renders no DOCKER
     # INFOS block: every router's service line is resolved against the Swarm
@@ -161,7 +165,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
     return PanelData(
         system=collect_system() if server else None,
         resources=collect_resources(cfg.ignore_mountpoints) if server else None,
-        updates=collect_updates(timeout=cfg.docker_timeout) if server else None,
+        updates=collect_updates(timeout=cfg.docker_timeout, host=host) if server else None,
         swarm=swarm,
         health=health_info,
         traefik=traefik_info,
@@ -170,6 +174,7 @@ def collect_all(cfg: Config, sections: tuple[str, ...] = SECTIONS) -> PanelData:
         # snapshot would mean asked-and-got-nothing, which the section reports
         # as a failure -- and a setting is not a failure.
         processes=_collect_process_rows(cfg) if server else None,
+        host=host,
     )
 
 
