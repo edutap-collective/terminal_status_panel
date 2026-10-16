@@ -36,3 +36,43 @@ def test_host_row_alone_renders_without_docker():
         age_s=1.0,
     )
     assert "host: unit failed" in _render(PanelData(host=host))
+
+
+def _failed_journal(**events):
+    return HostStateRead(
+        state=HostState(
+            written_at=1.0, collector="x", events=events, errors={"events": "no-permission"}
+        ),
+        age_s=1.0,
+    )
+
+
+def test_failed_journal_read_with_zero_counts_still_renders_trouble():
+    out = _render(PanelData(host=_failed_journal(oom_kill=EventCount(0, None))))
+    assert "TROUBLE" in out
+    assert "⚠️ host events: journal not refreshed (no-permission)" in out
+
+
+def test_journal_warning_appears_once_beside_the_rows():
+    out = _render(PanelData(host=_failed_journal(oom_kill=EventCount(2, 1.0))))
+    assert "host: OOM kill" in out and out.count("journal not refreshed") == 1
+
+
+def test_no_journal_warning_when_host_events_are_off():
+    console = Console(width=120, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(
+            trouble_section(PanelData(host=_failed_journal()), Config(trouble_host_events=()))
+        )
+    assert capture.get().strip() == ""
+
+
+def test_trouble_only_layout_shows_the_journal_warning():
+    from terminal_status_panel.render.layout import build_layout
+
+    console = Console(width=120, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(
+            build_layout(PanelData(host=_failed_journal()), Config(), sections=("trouble",))
+        )
+    assert "host events: journal not refreshed (no-permission)" in capture.get()

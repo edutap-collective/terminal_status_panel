@@ -172,14 +172,18 @@ def check_collector_bin_dir(bin_dir: str) -> None:
         raise ValueError(f"{bin_dir}/status-collect does not exist")
 
 
+#: The exit code ``_systemctl`` reports when there is no systemctl at all.
+NO_SYSTEMCTL = 127
+
+
 def _systemctl(args: list[str]) -> int:
-    """Run ``systemctl`` with *args*; its exit code (127 when it is missing)."""
+    """Run ``systemctl`` with *args*; its exit code (NO_SYSTEMCTL when it is missing)."""
     import subprocess
 
     try:
         return subprocess.run(["systemctl", *args], check=False).returncode  # noqa: S603, S607
     except FileNotFoundError:
-        return 127
+        return NO_SYSTEMCTL
 
 
 def _write_atomically(path: Path, text: str, mode: int) -> None:
@@ -197,12 +201,17 @@ def _stop_units(root: Path, systemctl: Callable[[list[str]], int]) -> bool:
     ``systemctl stop`` returns once the service has stopped -- so nothing is
     deleted under a running collector or dump helper. A unit whose file is
     already gone cannot be stopped and need not be: its failure is ignored.
+    Without systemctl (a chroot, an image build) nothing runs that could be
+    stopped, and the files are removed all the same.
     """
     for args, unit in (
         (["disable", "--now", _TIMER], _TIMER),
         (["stop", _SERVICE], _SERVICE),
     ):
-        if systemctl(args) != 0 and (root / UNIT_DIR / unit).exists():
+        code = systemctl(args)
+        if code == NO_SYSTEMCTL:
+            return True
+        if code != 0 and (root / UNIT_DIR / unit).exists():
             return False
     return True
 
@@ -232,7 +241,7 @@ def _remove_collector(root: Path, systemctl: Callable[[list[str]], int]) -> str:
             directory.rmdir()
         except OSError:
             pass
-    if removed and systemctl(["daemon-reload"]) != 0:
+    if removed and systemctl(["daemon-reload"]) not in (0, NO_SYSTEMCTL):
         return "failed"
     return "removed" if removed else "nothing to remove"
 

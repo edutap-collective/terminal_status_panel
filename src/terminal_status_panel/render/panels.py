@@ -795,17 +795,22 @@ def _trouble_table(entries) -> Table:
     return table
 
 
-def _trouble_block(entries) -> RenderableType | None:
+def _trouble_block(entries, notes: Sequence[RenderableType] = ()) -> RenderableType | None:
     """The TROUBLE block, or None when there is nothing to report.
 
     Nothing is the normal state, and it renders as nothing at all -- not as an
     empty heading. A block that is present every day stops being read on the
-    day it has something to say.
+    day it has something to say. *notes* (source warnings) are something to
+    say: they render below the rows, or alone under the heading.
     """
-    if not entries:
+    if not entries and not notes:
         return None
     hours = TROUBLE_WINDOW_SECONDS // 3600
-    return Group(_subhead(f"TROUBLE  (last {hours} h)"), _trouble_table(entries))
+    parts: list[RenderableType] = [_subhead(f"TROUBLE  (last {hours} h)")]
+    if entries:
+        parts.append(_trouble_table(entries))
+    parts.extend(notes)
+    return Group(*parts)
 
 
 #: Marks a figure measured against a reservation rather than a limit. The two

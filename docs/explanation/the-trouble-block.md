@@ -54,9 +54,11 @@ state file. If the state file is older than 120 seconds, the cause carries
 `(state 3 min old)`, because a count from a collector that has stopped is a
 memory. If the collector's last journal read failed (a timeout, or no
 permission to read the journal), it keeps the counts it had, and the cause
-carries `(not refreshed)`: the state file is new, but the counts are not. THIS
-HOST then shows `journal: not refreshed (<code>)` in yellow, so a failed read
-is visible even when there are no rows to mark. If the file is missing there
+carries `(not refreshed)`: the state file is new, but the counts are not.
+TROUBLE then also shows one yellow line, `⚠️ host events: journal not
+refreshed (<code>)`, below the rows or, when the counts are zero and there is
+no row, alone under the heading: a failed read must not look like a quiet
+twelve hours. THIS HOST shows `journal: not refreshed (<code>)` as well. If the file is missing there
 are no host rows; the HEALTH section is where the missing collector is
 reported.
 

@@ -91,7 +91,9 @@ then the service, waiting for a running collection, before it deletes
 anything, and prints `removed` or `nothing to remove`; it clears the runtime
 directory `/run/terminal-status-panel` but leaves the systemd state directory
 `/var/lib/terminal-status-panel`. A failing `systemctl` step prints `failed`
-and exits 1; on removal, a unit that is already gone does not count as one.
+and exits 1; on removal, a unit that is already gone does not count as one,
+and without `systemctl` (a chroot, an image build) the files are removed all
+the same.
 
 The unit runs the `status-collect` that sits next to the interpreter running
 `install-panel`. An interpreter below `/home`, `/root` or `/run/user` is

@@ -49,7 +49,9 @@ guesswork dressed as a record.
   `apache_reload`), each bound to its source, never to text alone.
   `[trouble] host_events` selects the kinds; changing it makes the collector
   read the whole window again. After a failed journal read the rows carry
-  `(not refreshed)` and THIS HOST shows `journal: not refreshed (<code>)`.
+  `(not refreshed)`, TROUBLE shows `⚠️ host events: journal not refreshed
+  (<code>)` even without rows, and THIS HOST shows
+  `journal: not refreshed (<code>)`.
 - Configuration: `sections` (the default section list of `status-full`),
   `[thresholds.psi]`, `[health.apache]`, `[health.vrrp]`, `[health.systemd]`,
   `[trouble] host_events`, and `health.timeout.systemd`. `health.enabled` now
@@ -101,6 +103,7 @@ guesswork dressed as a record.
   `host state unreadable` rather than failing the whole panel.
 - `install-panel --collector --uninstall` stops the timer and then the
   service, waiting for a running collection, before it deletes any file.
+  Without `systemctl` (a chroot, an image build) it removes the files as is.
 - `install-panel --collector --dry-run` is refused (exit 1): the collector
   install has no dry run, and the flag must not be taken for one.
 - `install-panel --collector` refuses an interpreter under `/home`, `/root` or

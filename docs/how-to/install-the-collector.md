@@ -92,7 +92,9 @@ collection that is still running, removes the units, the keepalived helper and
 the contents of the runtime directory (the state file and any leftover copy of
 the keepalived dump), and prints `removed`, or `nothing to remove`. If
 stopping fails while the unit files are still installed, it prints `failed`,
-removes nothing and exits 1; a unit that is already gone is not an error. It **leaves
+removes nothing and exits 1; a unit that is already gone is not an error.
+Where there is no `systemctl` at all (a chroot, an image build), nothing can be
+running, and the files are removed as usual. It **leaves
 the systemd state directory** `/var/lib/terminal-status-panel` (journal cursor
 and Apache totals) alone; remove it by hand if you want it gone.
 

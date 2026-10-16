@@ -184,6 +184,13 @@ def test_uninstall_of_absent_units_ignores_systemctl_errors(tmp_path):
     assert install.apply_collector(tmp_path, "/x", True, systemctl) == "nothing to remove"
 
 
+def test_uninstall_without_systemctl_still_removes_the_files(tmp_path):
+    install.apply_collector(tmp_path, "/x", False, _ok)
+    assert install.apply_collector(tmp_path, "/x", True, lambda args: 127) == "removed"
+    assert not (tmp_path / "etc/systemd/system" / TIMER).exists()
+    assert not (tmp_path / "usr/lib/terminal-status-panel").exists()
+
+
 def test_collector_cli_exits_1_on_failure(monkeypatch, capsys):
     monkeypatch.setattr(install, "check_collector_bin_dir", lambda bin_dir: None)
     monkeypatch.setattr(install, "apply_collector", lambda root, bin_dir, uninstall: "failed")
