@@ -13,7 +13,7 @@ This file starts at 0.10.0. Earlier releases are described by their git tags
 and commit messages; reconstructing entries for them after the fact would be
 guesswork dressed as a record.
 
-## [0.14.0] - unreleased
+## [0.14.0] - 2026-10-16
 
 ### Added
 
@@ -342,8 +342,8 @@ guesswork dressed as a record.
 
 See the git history and the release tags.
 
-[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.13.0...HEAD
-[0.14.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.0...v0.12.1
