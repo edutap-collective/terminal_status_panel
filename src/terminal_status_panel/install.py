@@ -13,6 +13,8 @@ import argparse
 import os
 import re
 import sys
+from collections.abc import Callable
+from importlib import resources
 from pathlib import Path
 
 # panel name -> console script it runs
@@ -123,6 +125,61 @@ def apply(
     return messages
 
 
+UNIT_DIR = Path("etc/systemd/system")
+LIB_DIR = Path("usr/lib/terminal-status-panel")
+_SERVICE = "terminal-status-panel-collect.service"
+_TIMER = "terminal-status-panel-collect.timer"
+
+
+def _data(name: str) -> str:
+    return resources.files("terminal_status_panel.data").joinpath(name).read_text()
+
+
+def render_collector_units(bin_dir: str) -> dict[str, str]:
+    """The two unit files (file name -> content), with *bin_dir* filled in."""
+    return {
+        _SERVICE: _data(_SERVICE + ".in").replace("{bin_dir}", bin_dir.rstrip("/")),
+        _TIMER: _data(_TIMER),
+    }
+
+
+def _systemctl(args: list[str]) -> None:
+    import subprocess
+
+    subprocess.run(["systemctl", *args], check=False)  # noqa: S603, S607 - fixed argv
+
+
+def apply_collector(
+    root: Path,
+    bin_dir: str,
+    uninstall: bool,
+    systemctl: Callable[[list[str]], None] = _systemctl,
+) -> str:
+    """Install or remove the collector under *root*; report what happened."""
+    files = {root / UNIT_DIR / name: text for name, text in render_collector_units(bin_dir).items()}
+    script = root / LIB_DIR / "keepalived-dump"
+    files[script] = _data("keepalived-dump")
+    if uninstall:
+        systemctl(["disable", "--now", _TIMER])
+        for path in files:
+            path.unlink(missing_ok=True)
+        systemctl(["daemon-reload"])
+        return "removed"
+    changed = False
+    for path, text in files.items():
+        if path.exists() and path.read_text() == text:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        path.chmod(0o755 if path == script else 0o644)
+        changed = True
+    if not changed:
+        return "unchanged"
+    systemctl(["daemon-reload"])
+    systemctl(["enable", "--now", _TIMER])
+    return "written"
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point of the ``install-panel`` command."""
     parser = argparse.ArgumentParser(
@@ -150,8 +207,21 @@ def main(argv: list[str] | None = None) -> int:
         help="target shell profile (default: auto-detect)",
     )
     parser.add_argument("--uninstall", action="store_true", help="remove a previous install")
+    parser.add_argument(
+        "--collector",
+        action="store_true",
+        help="install the host state collector (systemd timer); needs root",
+    )
     parser.add_argument("--dry-run", action="store_true", help="show actions, write nothing")
     args = parser.parse_args(argv)
+
+    if args.collector:
+        try:
+            print(apply_collector(Path("/"), str(Path(sys.executable).parent), args.uninstall))
+        except PermissionError as error:
+            print(f"error: permission denied ({error}). Re-run with sudo.", file=sys.stderr)
+            return 1
+        return 0
 
     panels = tuple(args.panels or ["full"])
     kind, path = resolve_target(args.scope, args.shell)

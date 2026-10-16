@@ -97,3 +97,41 @@ def test_install_panel_can_wire_up_traefik(tmp_path, monkeypatch):
 
     assert install.PANELS["traefik"] == "status-traefik"
     assert install.PANELS["trouble"] == "status-trouble"
+
+
+def test_collector_install_is_idempotent_and_reports_it(tmp_path):
+    calls = []
+    first = install.apply_collector(
+        tmp_path, "/opt/tsp/bin", uninstall=False, systemctl=calls.append
+    )
+    second = install.apply_collector(
+        tmp_path, "/opt/tsp/bin", uninstall=False, systemctl=calls.append
+    )
+    assert (first, second) == ("written", "unchanged")
+    assert (tmp_path / "etc/systemd/system/terminal-status-panel-collect.service").exists()
+    assert (tmp_path / "usr/lib/terminal-status-panel/keepalived-dump").stat().st_mode & 0o111
+    assert calls == [["daemon-reload"], ["enable", "--now", "terminal-status-panel-collect.timer"]]
+
+
+def test_collector_uninstall(tmp_path):
+    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=lambda args: None)
+    assert (
+        install.apply_collector(tmp_path, "/x", uninstall=True, systemctl=lambda args: None)
+        == "removed"
+    )
+    assert not (tmp_path / "etc/systemd/system/terminal-status-panel-collect.timer").exists()
+
+
+def test_collector_cli_reports_permission_error(monkeypatch, capsys):
+    def deny(*args, **kwargs):
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(install, "apply_collector", deny)
+    assert install.main(["--collector"]) == 1
+    assert "permission denied" in capsys.readouterr().err
+
+
+def test_collector_cli_prints_result(monkeypatch, capsys):
+    monkeypatch.setattr(install, "apply_collector", lambda root, bin_dir, uninstall: "written")
+    assert install.main(["--collector"]) == 0
+    assert capsys.readouterr().out.strip() == "written"

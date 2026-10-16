@@ -1,0 +1,19 @@
+#!/bin/sh
+# Ask keepalived for a JSON dump of its VRRP state and hand the collector a
+# private copy. The dump contains the VRRP password when one is set, which is
+# why the copy is 0600 and owned by the collector (the owner of the runtime
+# directory), which deletes it after reading.
+pidfile=/run/keepalived.pid
+dump=/tmp/keepalived.json
+dest=/run/terminal-status-panel/keepalived.json
+[ -r "$pidfile" ] || exit 0
+command -v keepalived >/dev/null 2>&1 || exit 0
+sig=$(keepalived --signum=JSON 2>/dev/null) || exit 0
+rm -f "$dump"
+kill "-$sig" "$(cat "$pidfile")" 2>/dev/null || exit 0
+i=0
+while [ ! -s "$dump" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
+[ -s "$dump" ] || exit 0
+install -m 0600 "$dump" "$dest" && chown --reference=/run/terminal-status-panel "$dest"
+rm -f "$dump"
+exit 0
