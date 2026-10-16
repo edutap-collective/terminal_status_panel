@@ -100,7 +100,7 @@ class DnsCheck:
 
 @dataclass
 class HealthInfo:
-    """The CLUSTER HEALTH section: clustered services, peers and DNS checks."""
+    """The HEALTH section: this host, clustered services, peers and DNS checks."""
 
     clusters: list[ClusterService] = field(default_factory=list)
     peers: list[PeerReachability] = field(default_factory=list)

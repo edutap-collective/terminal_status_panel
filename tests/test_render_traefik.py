@@ -517,7 +517,7 @@ def test_no_service_warning_when_the_services_were_read():
 
 def test_the_entrypoints_flow_into_columns_on_a_wide_terminal():
     """Stacked vertically they run to some seventy lines on cluster-a while two
-    thirds of the terminal stay empty — the same arrangement CLUSTER HEALTH
+    thirds of the terminal stay empty — the same arrangement HEALTH
     uses."""
     wide = _render(_wired(), width=200)
     narrow = _render(_wired(), width=40)

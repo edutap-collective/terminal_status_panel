@@ -38,6 +38,21 @@ is where those differences are collected.
   logo at all, its own wordmark being illegible at this size. Every bundled
   mark's provenance and licence are recorded in
   [`assets/logos/SOURCES.md`](https://github.com/edutap-collective/terminal_status_panel/blob/main/assets/logos/SOURCES.md).
+- **Hosts without Docker.** A host with no Docker endpoint (`DOCKER_HOST`
+  unset and no `/var/run/docker.sock`) is a first-class case. `status-full`
+  leaves out DOCKER INFOS and TRAEFIK WIRING instead of printing "Docker not
+  reachable" for software that was never installed; HEALTH still reports THIS
+  HOST, and TROUBLE reports host events. Where the endpoint exists but the
+  daemon does not answer, the warning stays and the Docker-bound health kinds
+  read `⬜ not checked (no Docker client)`. The top-level `sections` key
+  overrides the choice. See {doc}`About host health <host-health>`.
+- **Pressure stall information.** The `PSI` row under the load average reads
+  `/proc/pressure/{cpu,memory,io}`, which the Linux kernel provides when it is
+  built with PSI. On macOS, FreeBSD and kernels without it the row is omitted
+  rather than shown empty. It needs no privilege.
+- **Debian updates.** `apt-check` is Ubuntu's; Debian has none. There the
+  UPDATES block shows the collector's count from a simulated upgrade, and where
+  the collector does not run it says `n/a (no update source on this system)`.
 - **Containers.** Plain `docker run` containers and Docker Compose projects
   now appear alongside Swarm services, not just services from an active
   Swarm. They are grouped by their Compose project into their own `COMPOSE

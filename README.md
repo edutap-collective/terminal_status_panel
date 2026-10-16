@@ -17,12 +17,14 @@ status-full
 
 | Command | Renders |
 |---------|---------|
-| `status-full` | everything: system, Docker, cluster health, Traefik wiring |
+| `status-full` | everything: system, health, trouble, Docker, Traefik wiring (Docker and Traefik are left out on a host without a Docker endpoint) |
 | `status-server` | system and resources only |
-| `status-docker` | the Docker and Swarm block only |
-| `status-health` | the cluster, network and DNS checks only |
+| `status-docker` | the TROUBLE block and the Docker and Swarm block |
+| `status-health` | this host, the clusters, the network and DNS checks only |
+| `status-trouble` | the TROUBLE block only: containers and host events |
 | `status-traefik` | the Traefik wiring view only |
-| `install-panel` | install or remove the login hook |
+| `status-collect` | the host state collector, run by a systemd timer (see [install the collector](docs/how-to/install-the-collector.md)) |
+| `install-panel` | install or remove the login hook, or with `--collector` the collector |
 
 Every one of them takes `--width`, `--no-color`, `--config`, `--follow`,
 `--interval`, `--processes` and `--debug`. See
@@ -39,9 +41,14 @@ Every one of them takes `--width`, `--no-color`, `--config`, `--follow`,
   node, with the image each runs, the memory its tasks hold, and a TROUBLE
   block for anything that fell over recently
   ([about the Docker panel](docs/explanation/docker-panel.md)).
-- **CLUSTER HEALTH** — read-only probes of PostgreSQL, MongoDB, Kafka,
-  GlusterFS and RustFS, plus WireGuard peers and DNS consistency
+- **HEALTH** — **THIS HOST** (failed systemd units, VRRP, Apache, DNS; works
+  without Docker, see [about host health](docs/explanation/host-health.md)),
+  then read-only probes of PostgreSQL, MongoDB, Kafka, GlusterFS and RustFS,
+  plus WireGuard peers and DNS consistency
   ([about the cluster health checks](docs/explanation/cluster-health.md)).
+- **TROUBLE** — what fell over in the last twelve hours, containers and host
+  events together; absent when there is nothing to report
+  ([about the TROUBLE block](docs/explanation/the-trouble-block.md)).
 - **TRAEFIK WIRING** — entrypoint → router → middleware → service,
   reconstructed from Docker labels and the file provider
   ([about the Traefik wiring view](docs/explanation/traefik-wiring.md)).

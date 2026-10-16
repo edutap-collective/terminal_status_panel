@@ -137,7 +137,7 @@ class SystemdProbe:
 
 @dataclass
 class HealthConfig:
-    """What the CLUSTER HEALTH section may probe, and how long it may take."""
+    """What the HEALTH section may probe, and how long it may take."""
 
     #: Wall clock for the whole section. The checks run concurrently, so this
     #: bounds the login delay rather than summing the values below.

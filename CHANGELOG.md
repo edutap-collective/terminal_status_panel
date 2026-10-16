@@ -13,16 +13,76 @@ This file starts at 0.10.0. Earlier releases are described by their git tags
 and commit messages; reconstructing entries for them after the fact would be
 guesswork dressed as a record.
 
-## [Unreleased]
+## [0.14.0] - unreleased
 
 ### Added
 
+- Host health without Docker. HEALTH opens with a **THIS HOST** block and three
+  new kinds: `systemd` (failed units, via `systemctl`), `vrrp` (instance, state,
+  effective and base priority, and the *lead* of a BACKUP where it is known) and
+  `apache` (request rate, slots, workers and finishing slots from mod_status;
+  *not applicable* until `[health.apache] url` is set). The DNS checks move into
+  THIS HOST. `glusterfs` and the peers stay in the cluster blocks. See
+  [About host health](docs/explanation/host-health.md).
+- `status-collect` and `install-panel --collector`: a hardened systemd timer
+  (every 30 s, a dynamic user) that writes `/run/terminal-status-panel/host.json`
+  with the data a login cannot read itself. The panel never runs a privileged
+  command and never waits for the collector. A missing or old state file is
+  shown (`host state unavailable (collector not running?)`,
+  `state 3 min old` in yellow past 120 s), never read as quiet. See
+  [Install the collector](docs/how-to/install-the-collector.md) and the
+  [state file schema](docs/reference/configuration.md).
+- A PSI row under the load average (`cpu 4 % · 9 %`, from
+  `/proc/pressure`), coloured by `[thresholds.psi]` (defaults 10 and 25).
+  Omitted where the kernel has no PSI.
+- Debian updates. Where `apt-check` is absent, UPDATES shows the collector's
+  count from a simulated upgrade (`apt-get -s dist-upgrade`, at most hourly).
+- `status-trouble`, and TROUBLE as its own section with **host events** from the
+  journal (`oom_kill`, `vrrp_state`, `apache_slots_full`, `unit_failed`,
+  `apache_reload`), each bound to its source, never to text alone.
+  `[trouble] host_events` selects the kinds.
+- Configuration: `sections` (the default section list of `status-full`),
+  `[thresholds.psi]`, `[health.apache]`, `[health.vrrp]`, `[health.systemd]`,
+  `[trouble] host_events`, and `health.timeout.systemd`. `health.enabled` now
+  defaults to all eight kinds. `sections` and `[trouble] host_events` report
+  invalid entries under `--debug`.
 - DOCKER INFOS opens with a legend naming every glyph the section can show,
   the row markers `📌` and `⚑` included. It wraps between entries, never
   inside one. Where the clusters were not probed — `status-docker` alone
   collects no health — the `⬜` entry says "cluster not checked" and names
   `status-health`: a clustered row read `⬜ 5/5` there with nothing on screen
   to explain it. `docker.legend = false` removes the line.
+
+### Changed
+
+- The HEALTH section is no longer called CLUSTER HEALTH; it has the blocks
+  THIS HOST, CLUSTERS and PEERS.
+- TROUBLE moved out of DOCKER INFOS into its own section. `status-docker`
+  renders it directly above DOCKER INFOS; `status-full` renders it once.
+- The section order of `status-full` is server, health, trouble, docker,
+  traefik (it was server, docker, health, traefik).
+- Without a Docker endpoint (`DOCKER_HOST` unset and no `/var/run/docker.sock`)
+  `status-full` leaves out DOCKER INFOS and TRAEFIK WIRING. Where the endpoint
+  exists but the daemon does not answer, the warning stays and the Docker-bound
+  health kinds read `not checked (no Docker client)`.
+- Health no longer requires a Docker client: host kinds and `glusterfs` run
+  without one.
+- Where there is no update source, UPDATES reads `n/a (no update source on this
+  system)` (it read `n/a (not a Debian/Ubuntu system)`).
+
+### Security
+
+- The collector runs as a dynamic user (`status-collector`) with the file system
+  read-only, home directories hidden, no device access and no new privileges.
+  Exactly one step runs privileged (`ExecStartPre=-+`): the helper that asks
+  keepalived for its JSON dump.
+- The keepalived dump contains the VRRP password. The helper copies it in a
+  directory only root can enter, as mode `0600`, and removes the original; the
+  collector reads five fields (name, state, three priorities) and deletes the
+  copy after reading. The state file never holds log text, paths or client
+  addresses.
+- `install-panel --collector` refuses an interpreter under `/home`, `/root` or
+  `/run/user`, which the hardened service could not run from.
 
 ### Fixed
 
@@ -258,6 +318,7 @@ guesswork dressed as a record.
 See the git history and the release tags.
 
 [Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.13.0...HEAD
+[0.14.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.13.0...HEAD
 [0.13.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.0...v0.12.1
