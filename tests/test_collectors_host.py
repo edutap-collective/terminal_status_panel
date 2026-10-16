@@ -150,3 +150,26 @@ def test_apache_requests_at_critical_is_critical():
 def test_apache_slots_band_is_critical_with_defaults():
     read = _read(apache=ApacheState(30.0, 10.0, 0.96, 0.05, 0))
     assert host.check_apache(read, ApacheProbe(url="http://x")).status == "crit"
+
+
+def _failed_vrrp(code):
+    return HostStateRead(
+        state=HostState(written_at=1.0, collector="x", errors={"vrrp": code}), age_s=5.0
+    )
+
+
+def test_failed_vrrp_read_is_an_error_line_where_keepalived_runs(keepalived_pid):
+    keepalived_pid.write_text("1\n")
+    check = host.check_vrrp(_failed_vrrp("parse"), VrrpProbe())
+    assert (check.status, check.summary) == ("error", "no data (parse)")
+
+
+def test_failed_vrrp_read_without_keepalived_is_not_applicable(keepalived_pid):
+    check = host.check_vrrp(_failed_vrrp("not-installed"), VrrpProbe())
+    assert (check.status, check.summary) == ("na", "n/a here")
+
+
+def test_collected_empty_instance_list_is_not_applicable(keepalived_pid):
+    keepalived_pid.write_text("1\n")
+    check = host.check_vrrp(_read(vrrp=VrrpState("keepalived-json", [])), VrrpProbe())
+    assert (check.status, check.summary) == ("na", "n/a here")

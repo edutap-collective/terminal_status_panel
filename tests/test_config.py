@@ -467,3 +467,13 @@ def test_sections_not_a_list_falls_back_and_says_so(tmp_path):
     cfg = load_config(path)
     assert cfg.sections is None
     assert {p.key for p in cfg.problems} == {"sections", "trouble.hostevents"}
+
+
+def test_repeated_names_are_kept_once_in_order(tmp_path):
+    cfg = _load(
+        tmp_path,
+        'sections = ["trouble", "server", "trouble"]\n'
+        '[trouble]\nhost_events = ["oom_kill", "unit_failed", "oom_kill"]\n',
+    )
+    assert cfg.sections == ("trouble", "server")
+    assert cfg.trouble_host_events == ("oom_kill", "unit_failed")

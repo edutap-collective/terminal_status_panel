@@ -570,7 +570,9 @@ class _Reader:
         kept: list[str] = []
         for entry in raw:
             if isinstance(entry, str) and entry in allowed:
-                kept.append(entry)
+                # A repeated name is kept once: twice would count or render it twice.
+                if entry not in kept:
+                    kept.append(entry)
                 continue
             self.problems.append(
                 ConfigProblem(

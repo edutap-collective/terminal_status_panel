@@ -84,10 +84,14 @@ Installs (or removes) the collector's `terminal-status-panel-collect.service`
 and `.timer` in `/etc/systemd/system` and the keepalived helper in
 `/usr/lib/terminal-status-panel`. It needs root and ignores the login-snippet
 options. Installing prints `written` when something changed (systemd is then
-reloaded and the timer enabled) and `unchanged` when the installed files
-already match. Removing prints `removed` or `nothing to remove`; it clears the
-runtime directory `/run/terminal-status-panel` but leaves the systemd state
-directory `/var/lib/terminal-status-panel`.
+reloaded and the timer enabled), `activated` when the files already match but
+the timer was not running (it is then enabled), and `unchanged` when the
+installed files already match and the timer runs. Removing stops the timer and
+then the service, waiting for a running collection, before it deletes
+anything, and prints `removed` or `nothing to remove`; it clears the runtime
+directory `/run/terminal-status-panel` but leaves the systemd state directory
+`/var/lib/terminal-status-panel`. A failing `systemctl` step prints `failed`
+and exits 1; on removal, a unit that is already gone does not count as one.
 
 The unit runs the `status-collect` that sits next to the interpreter running
 `install-panel`. An interpreter below `/home`, `/root` or `/run/user` is

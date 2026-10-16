@@ -106,14 +106,20 @@ def host_trouble(read: HostStateRead, now: float, enabled: tuple[str, ...]) -> l
     if read.state is None:
         return []
     rows = []
-    stale = f"state {_age(read.age_s)} old" if read.stale and read.age_s is not None else None
+    notes = []
+    if read.stale and read.age_s is not None:
+        notes.append(f"state {_age(read.age_s)} old")
+    # A failed journal read keeps the last counts; the file's write time says
+    # nothing about how fresh they are.
+    if (read.state.errors or {}).get("events"):
+        notes.append("not refreshed")
     for kind, count in read.state.events.items():
         if kind not in enabled or count.count <= 0 or kind not in _EVENT_LABELS:
             continue
         label, severity = _EVENT_LABELS[kind]
         cause = None if count.last is None else f"last {_ago(max(0.0, now - count.last))} ago"
-        if stale:
-            cause = f"{cause} ({stale})" if cause else f"({stale})"
+        for note in notes:
+            cause = f"{cause} ({note})" if cause else f"({note})"
         rows.append(
             TroubleEntry(
                 name=label, fails=count.count, cause=cause, severity=severity, source="host"

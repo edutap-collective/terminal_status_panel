@@ -186,3 +186,48 @@ def test_hardlinked_dump_is_ignored(script, env, tmp_path, target_factory):
         process.wait()
     assert list(Path(env["TSP_RUNDIR"]).iterdir()) == []
     assert os.stat(other).st_nlink == 2  # the link was left alone, not followed
+
+
+def start_writer(env, tmp_path, body):
+    """A fake keepalived whose USR1 trap runs *body* (shell) to write the dump."""
+    target = tmp_path / "writer.sh"
+    target.write_text(f"#!/bin/sh\ntrap '{body}' USR1\nwhile :; do sleep 0.05; done\n")
+    process = subprocess.Popen(["sh", str(target)])  # noqa: S603, S607
+    time.sleep(0.3)  # let the trap be installed
+    (Path(env["TSP_PROC"]) / str(process.pid)).mkdir()
+    (Path(env["TSP_PROC"]) / str(process.pid) / "comm").write_text("keepalived\n")
+    Path(env["TSP_PIDFILE"]).write_text(f"{process.pid}\n")
+    return process
+
+
+@needs_gnu
+def test_dump_written_in_chunks_is_copied_whole(script, env, tmp_path):
+    # Four parts 40 ms apart: longer than one 0.1 s poll, each gap shorter.
+    dump = env["TSP_DUMP"]
+    parts = ["first-", "second-", "third-", "fourth"]
+    body = f"printf %s {parts[0]} > {dump}; " + "; ".join(
+        f"sleep 0.04; printf %s {part} >> {dump}" for part in parts[1:]
+    )
+    process = start_writer(env, tmp_path, body)
+    try:
+        assert run(script, env).returncode == 0
+    finally:
+        process.kill()
+        process.wait()
+    dest = Path(env["TSP_RUNDIR"]) / "keepalived.json"
+    assert dest.read_text() == "".join(parts)
+
+
+@needs_gnu
+def test_dump_that_never_settles_is_not_copied(script, env, tmp_path):
+    dump = env["TSP_DUMP"]
+    body = f"while :; do printf x >> {dump}; sleep 0.03; done"
+    process = start_writer(env, tmp_path, body)
+    try:
+        assert run(script, env).returncode == 0
+    finally:
+        process.kill()
+        process.wait()
+    assert list(Path(env["TSP_RUNDIR"]).iterdir()) == []
+    assert list(Path(env["TSP_WORKROOT"]).iterdir()) == []
+    assert Path(dump).exists()  # left as keepalived wrote it; the next run removes it

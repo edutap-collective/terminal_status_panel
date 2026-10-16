@@ -235,7 +235,8 @@ def test_window_read_uses_the_long_timeout_and_incremental_the_short(tmp_path):
         timeouts.append((args[0].startswith("--after-cursor"), timeout))
         return 0, ""
 
-    (tmp_path / "j.json").write_text(json.dumps({"cursor": "c1", "events": {}}))
+    saved = {"cursor": "c1", "kinds": sorted(journal.KINDS), "events": {}}
+    (tmp_path / "j.json").write_text(json.dumps(saved))
     journal.collect_events(tmp_path / "j.json", now=100.0, enabled=journal.KINDS, runner=runner)
     (tmp_path / "k.json").write_text("{}")
     journal.collect_events(tmp_path / "k.json", now=100.0, enabled=journal.KINDS, runner=runner)
@@ -256,10 +257,52 @@ def test_window_timeout_returns_last_known_counts(tmp_path):
 
 
 def test_failed_read_keeps_last_known_counts(tmp_path):
-    saved = {"cursor": "c1", "events": {"oom_kill": [1000.0]}}
+    saved = {"cursor": "c1", "kinds": sorted(journal.KINDS), "events": {"oom_kill": [1000.0]}}
     (tmp_path / "j.json").write_text(json.dumps(saved))
     events, error = journal.collect_events(
         tmp_path / "j.json", now=1100.0, enabled=journal.KINDS, runner=lambda args, timeout: (1, "")
     )
     assert error == "no-permission" and events["oom_kill"].count == 1
     assert json.loads((tmp_path / "j.json").read_text()) == saved
+
+
+def _window_only(line):
+    """A runner that has *line* in the window but nothing after any cursor."""
+    calls = []
+
+    def runner(args, timeout):
+        calls.append(args)
+        return 0, ("" if any(a.startswith("--after-cursor") for a in args) else line)
+
+    return runner, calls
+
+
+def test_enabling_a_kind_rereads_the_window(tmp_path):
+    oom = _line(cursor="c1", _TRANSPORT="kernel", MESSAGE="Killed process 1", at=1000.0)
+    runner, calls = _window_only(oom)
+    journal.collect_events(tmp_path / "j.json", now=1000.0, enabled=(), runner=runner)
+    events, error = journal.collect_events(
+        tmp_path / "j.json", now=1030.0, enabled=("oom_kill",), runner=runner
+    )
+    assert error is None and events["oom_kill"].count == 1
+    assert any(a.startswith("--since=") for a in calls[-1])
+
+
+def test_changed_kinds_replace_the_saved_stamps_without_double_counting(tmp_path):
+    oom = _line(cursor="c1", _TRANSPORT="kernel", MESSAGE="Killed process 1", at=1000.0)
+    runner, _ = _window_only(oom)
+    journal.collect_events(tmp_path / "j.json", now=1000.0, enabled=("oom_kill",), runner=runner)
+    events, _ = journal.collect_events(
+        tmp_path / "j.json", now=1030.0, enabled=("oom_kill", "unit_failed"), runner=runner
+    )
+    assert events["oom_kill"].count == 1
+    saved = json.loads((tmp_path / "j.json").read_text())
+    assert saved["kinds"] == ["oom_kill", "unit_failed"]
+
+
+def test_unchanged_kinds_keep_reading_after_the_cursor(tmp_path):
+    oom = _line(cursor="c1", _TRANSPORT="kernel", MESSAGE="Killed process 1", at=1000.0)
+    runner, calls = _window_only(oom)
+    journal.collect_events(tmp_path / "j.json", now=1000.0, enabled=("oom_kill",), runner=runner)
+    journal.collect_events(tmp_path / "j.json", now=1030.0, enabled=("oom_kill",), runner=runner)
+    assert calls[-1][0] == "--after-cursor=c1"

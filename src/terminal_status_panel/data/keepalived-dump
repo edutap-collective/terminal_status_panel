@@ -30,8 +30,25 @@ case $sig in
 esac
 rm -f "$dump"
 kill "-$sig" "$pid" 2>/dev/null || exit 0
+# keepalived may write the dump in several parts: it is complete once its
+# size is the same on two polls 0.1 s apart. Within about one second, or not
+# at all -- an unfinished dump is not copied. It then stays as keepalived
+# left it (root, 0600), and the next run removes it before signalling.
 i=0
-while [ ! -s "$dump" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
+last=
+settled=
+while [ "$i" -lt 10 ]; do
+    sleep 0.1
+    i=$((i + 1))
+    [ -s "$dump" ] || continue
+    size=$(stat -c %s "$dump" 2>/dev/null) || continue
+    if [ "$size" = "$last" ]; then
+        settled=1
+        break
+    fi
+    last=$size
+done
+[ -n "$settled" ] || exit 0
 [ -f "$dump" ] && [ ! -L "$dump" ] && [ "$(stat -c %u "$dump")" = "$owner" ] || exit 0
 # A second name for the inode is a hard link someone else made: refuse it
 # without relying on fs.protected_hardlinks alone.

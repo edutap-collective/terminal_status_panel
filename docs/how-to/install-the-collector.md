@@ -34,10 +34,13 @@ It prints one word:
 | Output | Meaning |
 |--------|---------|
 | `written` | A file was new or changed; systemd was reloaded and the timer enabled. |
-| `unchanged` | The installed files already match; nothing was touched. |
+| `activated` | The installed files already match, but the timer was not enabled and active; systemd was reloaded and the timer enabled. |
+| `unchanged` | The installed files already match and the timer runs; nothing was touched. |
+| `failed` | A `systemctl` step failed (its own message is on standard error); the exit status is 1. |
 
 Running it again is safe, and configuration management can use the word to
-report a change truthfully.
+report a change truthfully. After `failed`, fix the cause and run it again:
+it retries the activation even though the files are already in place.
 
 ## Check that it runs
 
@@ -84,9 +87,12 @@ All keys are in {doc}`the configuration reference </reference/configuration>`.
 sudo /opt/terminal-status-panel/bin/install-panel --collector --uninstall
 ```
 
-This stops and disables the timer, removes the units, the keepalived helper and
+This stops and disables the timer, then stops the service and waits for a
+collection that is still running, removes the units, the keepalived helper and
 the contents of the runtime directory (the state file and any leftover copy of
-the keepalived dump), and prints `removed`, or `nothing to remove`. It **leaves
+the keepalived dump), and prints `removed`, or `nothing to remove`. If
+stopping fails while the unit files are still installed, it prints `failed`,
+removes nothing and exits 1; a unit that is already gone is not an error. It **leaves
 the systemd state directory** `/var/lib/terminal-status-panel` (journal cursor
 and Apache totals) alone; remove it by hand if you want it gone.
 

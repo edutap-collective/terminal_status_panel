@@ -11,7 +11,7 @@ import os
 import subprocess
 
 from ..config import ApacheProbe, VrrpProbe
-from ..model.host import HostCheck, HostStateRead
+from ..model.host import HostCheck, HostStateRead, VrrpState
 
 HOST_KINDS = ("vrrp", "apache", "systemd")
 
@@ -75,18 +75,32 @@ def _lead_status(lead: int, probe: VrrpProbe) -> str:
     return "ok"
 
 
-def check_vrrp(read: HostStateRead, probe: VrrpProbe) -> HostCheck:
-    """One clause per instance: who holds it here, priorities, lead where known."""
+def _vrrp_figures(read: HostStateRead) -> VrrpState | HostCheck:
+    """The VRRP block when it has instances; otherwise the line to show instead.
+
+    Most nodes run neither the collector nor keepalived; a red line there
+    would be noise. Where keepalived runs (a stat on /run does not block), a
+    missing state or a failed dump read is a missing figure, not n/a. A
+    successfully read empty instance list is n/a either way.
+    """
+    na = HostCheck(kind="vrrp", status="na", summary="n/a here")
     problem = _state_problem("vrrp", read)
     if problem:
-        # Most nodes run neither the collector nor keepalived; a red line there
-        # would be noise. A stat on /run does not block.
-        if not os.path.exists(KEEPALIVED_PIDFILE):
-            return HostCheck(kind="vrrp", status="na", summary="n/a here")
-        return problem
+        return problem if os.path.exists(KEEPALIVED_PIDFILE) else na
     vrrp = read.state.vrrp if read.state else None
-    if vrrp is None or not vrrp.instances:
-        return HostCheck(kind="vrrp", status="na", summary="n/a here")
+    if vrrp is not None:
+        return vrrp if vrrp.instances else na
+    error = (read.state.errors or {}).get("vrrp") if read.state else None
+    if error and os.path.exists(KEEPALIVED_PIDFILE):
+        return HostCheck(kind="vrrp", status="error", summary=f"no data ({error})")
+    return na
+
+
+def check_vrrp(read: HostStateRead, probe: VrrpProbe) -> HostCheck:
+    """One clause per instance: who holds it here, priorities, lead where known."""
+    vrrp = _vrrp_figures(read)
+    if isinstance(vrrp, HostCheck):
+        return vrrp
     worst = "ok"
     clauses = []
     for inst in vrrp.instances:

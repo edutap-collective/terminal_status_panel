@@ -192,3 +192,25 @@ def test_wrong_field_type_is_unreadable_and_trouble_still_renders(tmp_path):
     read = read_host_state(_write(tmp_path, json.dumps(body)), now=1.0)
     assert read.state is None and read.problem == "unreadable"
     assert host_trouble(read, now=1.0, enabled=("oom_kill",)) == []
+
+
+def test_negative_infinity_in_an_event_is_unreadable(tmp_path):
+    path = tmp_path / "host.json"
+    path.write_text(
+        '{"schema": 1, "written_at": 1000.0, "collector": "x",'
+        ' "events": {"oom_kill": {"count": 1, "last": -Infinity}}}'
+    )
+    assert read_host_state(str(path), now=1000.0).problem == "unreadable"
+
+
+def test_rows_from_a_failed_journal_read_say_they_are_not_refreshed():
+    state = HostState(
+        written_at=1000.0,
+        collector="x",
+        events={"oom_kill": EventCount(1, 940.0), "unit_failed": EventCount(1, None)},
+        errors={"events": "timeout"},
+    )
+    rows = host_trouble(
+        HostStateRead(state=state, age_s=1.0), now=1000.0, enabled=("oom_kill", "unit_failed")
+    )
+    assert [r.cause for r in rows] == ["last 1m ago (not refreshed)", "(not refreshed)"]

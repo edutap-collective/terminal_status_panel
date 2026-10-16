@@ -30,14 +30,19 @@ def collect_updates(timeout: float = 1.5, host: HostStateRead | None = None) -> 
     info = _from_apt_check(timeout)
     if info.supported:
         return info
-    counts = host.state.updates if host and host.state else None
-    if counts is None:
+    state = host.state if host else None
+    counts = state.updates if state else None
+    if state is None or counts is None:
         return info
+    # The collector keeps the last good counts when apt fails: the check time
+    # and the error travel with them, so an old zero does not read as current.
     return UpdateInfo(
         supported=True,
         available=counts.available,
         security=counts.security,
         standard=max(counts.available - counts.security, 0),
+        checked_at=counts.checked_at,
+        problem=(state.errors or {}).get("updates"),
     )
 
 

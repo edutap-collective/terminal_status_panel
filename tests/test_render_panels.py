@@ -2501,3 +2501,22 @@ def test_psi_row_shows_cpu_avg10_and_avg60():
 def test_no_pressure_no_row():
     res = ResourceUsage(load_avg=(1.0, 1.0, 1.0), cpu_count=4)
     assert "PSI" not in _text(panels.load_panel(res, Config()))
+
+
+def test_updates_panel_marks_an_old_check():
+    info = UpdateInfo(supported=True, available=0, security=0, standard=0, checked_at=1000.0)
+    out = _text(panels.updates_panel(info, now=1000.0 + 3 * 3600))
+    assert "checked 3 h ago" in out
+
+
+def test_updates_panel_says_nothing_about_a_recent_check():
+    info = UpdateInfo(supported=True, available=0, security=0, standard=0, checked_at=1000.0)
+    assert "checked" not in _text(panels.updates_panel(info, now=1000.0 + 600))
+
+
+def test_updates_panel_names_a_failed_check():
+    info = UpdateInfo(
+        supported=True, available=0, security=0, standard=0, checked_at=1000.0, problem="timeout"
+    )
+    out = _text(panels.updates_panel(info, now=1000.0 + 600))
+    assert "last check failed (timeout)" in out

@@ -29,7 +29,11 @@ guesswork dressed as a record.
   with the data a login cannot read itself. The panel never runs a privileged
   command and never waits for the collector. A missing or old state file is
   shown (`host state unavailable (collector not running?)`,
-  `state 3 min old` in yellow past 120 s), never read as quiet. See
+  `state 3 min old` in yellow past 120 s), never read as quiet. Where
+  keepalived runs and the dump could not be read, VRRP reads
+  `no data (<code>)`. `install-panel --collector` prints `failed` and exits 1
+  when a `systemctl` step fails, and a re-run activates a timer that is not
+  running even when the files already match (`activated`). See
   [Install the collector](docs/how-to/install-the-collector.md) and the
   [state file schema](docs/reference/configuration.md).
 - A PSI row under the load average (`cpu 4 % · 9 %`, from
@@ -37,15 +41,20 @@ guesswork dressed as a record.
   Omitted where the kernel has no PSI.
 - Debian updates. Where `apt-check` is absent, UPDATES shows the collector's
   count from a simulated upgrade (`apt-get -s dist-upgrade`, at most hourly).
+  A failed check keeps the previous counts and says so
+  (`last check failed (<code>)`); counts older than two hours carry
+  `checked <n> h ago`.
 - `status-trouble`, and TROUBLE as its own section with **host events** from the
   journal (`oom_kill`, `vrrp_state`, `apache_slots_full`, `unit_failed`,
   `apache_reload`), each bound to its source, never to text alone.
-  `[trouble] host_events` selects the kinds.
+  `[trouble] host_events` selects the kinds; changing it makes the collector
+  read the whole window again. After a failed journal read the rows carry
+  `(not refreshed)` and THIS HOST shows `journal: not refreshed (<code>)`.
 - Configuration: `sections` (the default section list of `status-full`),
   `[thresholds.psi]`, `[health.apache]`, `[health.vrrp]`, `[health.systemd]`,
   `[trouble] host_events`, and `health.timeout.systemd`. `health.enabled` now
   defaults to all eight kinds. `sections` and `[trouble] host_events` report
-  invalid entries under `--debug`.
+  invalid entries under `--debug` and keep a repeated name once.
 - DOCKER INFOS opens with a legend naming every glyph the section can show,
   the row markers `📌` and `⚑` included. It wraps between entries, never
   inside one. Where the clusters were not probed — `status-docker` alone
@@ -77,7 +86,9 @@ guesswork dressed as a record.
   Exactly one step runs privileged (`ExecStartPre=-+`): the helper that asks
   keepalived for its JSON dump.
 - The keepalived dump contains the VRRP password. The helper refuses a dump
-  that is not a regular root-owned file with a single link, copies it in a
+  that is not a regular root-owned file with a single link, waits until its
+  size is stable (two polls 0.1 s apart, within about a second; an unfinished
+  dump is not copied), copies it in a
   directory only root can enter, as mode `0600`, and removes the original; the
   collector reads five fields (name, state, three priorities). The copy never
   outlives a run: `status-collect` deletes it on every run, `vrrp` enabled or
@@ -86,8 +97,10 @@ guesswork dressed as a record.
   text, paths or client addresses.
 - The panel reads the state file without blocking (a FIFO in its place cannot
   hang a login), only as a regular file of at most 64 KiB, and refuses fields
-  of the wrong type as `host state unreadable` rather than failing the whole
-  panel.
+  of the wrong type, and non-finite numbers (`NaN`, `Infinity`), as
+  `host state unreadable` rather than failing the whole panel.
+- `install-panel --collector --uninstall` stops the timer and then the
+  service, waiting for a running collection, before it deletes any file.
 - `install-panel --collector --dry-run` is refused (exit 1): the collector
   install has no dry run, and the flag must not be taken for one.
 - `install-panel --collector` refuses an interpreter under `/home`, `/root` or

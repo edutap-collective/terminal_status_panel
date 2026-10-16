@@ -101,44 +101,120 @@ def test_install_panel_can_wire_up_traefik(tmp_path, monkeypatch):
     assert install.PANELS["trouble"] == "status-trouble"
 
 
-def test_collector_install_is_idempotent_and_reports_it(tmp_path):
+TIMER = "terminal-status-panel-collect.timer"
+SERVICE = "terminal-status-panel-collect.service"
+
+
+def _ok(args):
+    return 0
+
+
+def _recorder(failing=()):
+    """A systemctl stand-in: records each call, fails those whose first words match."""
     calls = []
-    first = install.apply_collector(
-        tmp_path, "/opt/tsp/bin", uninstall=False, systemctl=calls.append
-    )
-    second = install.apply_collector(
-        tmp_path, "/opt/tsp/bin", uninstall=False, systemctl=calls.append
-    )
+
+    def systemctl(args):
+        calls.append(args)
+        return 1 if any(args[: len(f)] == list(f) for f in failing) else 0
+
+    return systemctl, calls
+
+
+def test_collector_install_is_idempotent_and_reports_it(tmp_path):
+    systemctl, calls = _recorder()
+    first = install.apply_collector(tmp_path, "/opt/tsp/bin", uninstall=False, systemctl=systemctl)
+    second = install.apply_collector(tmp_path, "/opt/tsp/bin", uninstall=False, systemctl=systemctl)
     assert (first, second) == ("written", "unchanged")
     assert (tmp_path / "etc/systemd/system/terminal-status-panel-collect.service").exists()
     assert (tmp_path / "usr/lib/terminal-status-panel/keepalived-dump").stat().st_mode & 0o111
-    assert calls == [["daemon-reload"], ["enable", "--now", "terminal-status-panel-collect.timer"]]
+    assert calls == [
+        ["daemon-reload"],
+        ["enable", "--now", TIMER],
+        ["is-enabled", "--quiet", TIMER],
+        ["is-active", "--quiet", TIMER],
+    ]
+
+
+@pytest.mark.parametrize("failing", [("daemon-reload",), ("enable",)])
+def test_collector_install_fails_when_systemctl_fails(tmp_path, failing):
+    systemctl, _ = _recorder(failing=[failing])
+    assert install.apply_collector(tmp_path, "/x", False, systemctl) == "failed"
+
+
+def test_unchanged_files_retry_activation_of_an_inactive_timer(tmp_path):
+    install.apply_collector(tmp_path, "/x", False, _ok)
+    systemctl, calls = _recorder(failing=[("is-active",)])
+    assert install.apply_collector(tmp_path, "/x", False, systemctl) == "activated"
+    assert calls[-1] == ["enable", "--now", TIMER]
+
+
+def test_failed_retry_of_activation_is_reported(tmp_path):
+    install.apply_collector(tmp_path, "/x", False, _ok)
+    systemctl, _ = _recorder(failing=[("is-enabled",), ("enable",)])
+    assert install.apply_collector(tmp_path, "/x", False, systemctl) == "failed"
+
+
+def test_uninstall_stops_the_service_before_deleting_files(tmp_path):
+    install.apply_collector(tmp_path, "/x", False, _ok)
+    unit = tmp_path / "etc/systemd/system" / SERVICE
+    seen = []
+
+    def systemctl(args):
+        seen.append((args, unit.exists()))
+        return 0
+
+    assert install.apply_collector(tmp_path, "/x", True, systemctl) == "removed"
+    assert seen == [
+        (["disable", "--now", TIMER], True),
+        (["stop", SERVICE], True),
+        (["daemon-reload"], False),
+    ]
+
+
+@pytest.mark.parametrize("failing", [("disable",), ("stop",)])
+def test_uninstall_failure_keeps_the_files_and_is_reported(tmp_path, failing):
+    install.apply_collector(tmp_path, "/x", False, _ok)
+    systemctl, _ = _recorder(failing=[failing])
+    assert install.apply_collector(tmp_path, "/x", True, systemctl) == "failed"
+    assert (tmp_path / "etc/systemd/system" / TIMER).exists()
+
+
+def test_uninstall_of_absent_units_ignores_systemctl_errors(tmp_path):
+    systemctl, _ = _recorder(failing=[("disable",), ("stop",)])
+    assert install.apply_collector(tmp_path, "/x", True, systemctl) == "nothing to remove"
+
+
+def test_collector_cli_exits_1_on_failure(monkeypatch, capsys):
+    monkeypatch.setattr(install, "check_collector_bin_dir", lambda bin_dir: None)
+    monkeypatch.setattr(install, "apply_collector", lambda root, bin_dir, uninstall: "failed")
+    assert install.main(["--collector"]) == 1
+    assert capsys.readouterr().out.strip() == "failed"
 
 
 def test_collector_install_sets_modes_and_repairs_them(tmp_path):
-    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=lambda args: None)
+    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=_ok)
     script = tmp_path / "usr/lib/terminal-status-panel/keepalived-dump"
     unit = tmp_path / "etc/systemd/system/terminal-status-panel-collect.timer"
     assert (script.stat().st_mode & 0o777, unit.stat().st_mode & 0o777) == (0o755, 0o644)
     script.chmod(0o666)
-    assert install.apply_collector(tmp_path, "/x", False, lambda args: None) == "written"
+    assert install.apply_collector(tmp_path, "/x", False, _ok) == "written"
     assert script.stat().st_mode & 0o777 == 0o755
-    assert install.apply_collector(tmp_path, "/x", False, lambda args: None) == "unchanged"
+    assert install.apply_collector(tmp_path, "/x", False, _ok) == "unchanged"
 
 
 def test_collector_uninstall_removes_everything_it_made(tmp_path):
-    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=lambda args: None)
+    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=_ok)
     run = tmp_path / "run/terminal-status-panel"
     run.mkdir(parents=True)
     for name in ("host.json", "keepalived.json", ".keepalived.abc123"):
         (run / name).write_text("{}")
-    result = install.apply_collector(tmp_path, "/x", uninstall=True, systemctl=lambda args: None)
+    result = install.apply_collector(tmp_path, "/x", uninstall=True, systemctl=_ok)
     assert result == "removed"
     assert not (tmp_path / "etc/systemd/system/terminal-status-panel-collect.timer").exists()
     assert not (tmp_path / "etc/systemd/system/terminal-status-panel-collect.service").exists()
     assert not (tmp_path / "usr/lib/terminal-status-panel").exists()
     assert not run.exists()
-    again = install.apply_collector(tmp_path, "/x", uninstall=True, systemctl=lambda args: None)
+    again = install.apply_collector(tmp_path, "/x", uninstall=True, systemctl=_ok)
     assert again == "nothing to remove"
 
 
@@ -173,8 +249,8 @@ def test_check_bin_dir_requires_status_collect(tmp_path):
 
 
 def test_uninstall_does_not_need_a_valid_bin_dir(tmp_path):
-    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=lambda args: None)
-    result = install.apply_collector(tmp_path, "bad dir\n", True, lambda args: None)
+    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=_ok)
+    result = install.apply_collector(tmp_path, "bad dir\n", True, _ok)
     assert result == "removed"
 
 
@@ -184,7 +260,7 @@ def test_uninstall_removes_leftover_dump_directories(tmp_path):
     (leftover / "keepalived.json").write_text("{}")
     other = tmp_path / "run/unrelated"
     other.mkdir()
-    assert install.apply_collector(tmp_path, "/x", True, lambda args: None) == "removed"
+    assert install.apply_collector(tmp_path, "/x", True, _ok) == "removed"
     assert not leftover.exists()
     assert other.exists()
 

@@ -57,8 +57,10 @@ Three things cannot be done at login:
   weeks. Only something that runs repeatedly can hold the previous reading.
 - **History.** "An OOM kill in the last twelve hours" means reading the
   journal. The collector reads it **incrementally** from a saved cursor, so a
-  run reads the last 30 seconds, not twelve hours; only the first run (or one
-  that lost its cursor) reads the whole window.
+  run reads the last 30 seconds, not twelve hours; only the first run, one
+  that lost its cursor, or one after `[trouble] host_events` changed reads the
+  whole window. A whole-window read replaces the saved timestamps instead of
+  adding to them, so nothing counts twice.
 
 So the work moves into a systemd timer that runs `status-collect` every
 30 seconds as a one-shot service. It never runs as a daemon.
@@ -99,7 +101,11 @@ The unit has exactly one `ExecStartPre=-+` line, which runs the helper
 
 The helper asks keepalived for its JSON dump with the signal
 `keepalived --signum=JSON` reports and waits up to one second for
-`/tmp/keepalived.json`. Because it runs as root, it trusts nothing that a
+`/tmp/keepalived.json` to be complete. keepalived may write it in several
+parts, so the dump counts as complete once its size is the same on two polls
+0.1 seconds apart. A dump that has not settled within the second is not
+copied; it stays in `/tmp` as keepalived left it, and the next run removes it
+before it signals keepalived again. Because it runs as root, it trusts nothing that a
 user could have placed there: the pid file must name a process whose name is
 `keepalived`, and the dump must be a regular file, not a symbolic link, owned
 by root.
@@ -219,7 +225,10 @@ are the ones whose origin names a `-security` suite. The simulation downloads
 nothing and takes no lock; the collector never runs `apt-get update`, so
 refreshing the package lists remains the system's job. A failed or timed-out
 simulation keeps the previous answer and its timestamp: a broken apt is never
-reported as "0 updates". Where no source exists the block reads
+reported as "0 updates". UPDATES then adds `last check failed (<code>)` in
+yellow, and counts whose last successful check is more than two hours old get
+a dim `checked 3 h ago` (two hourly checks missed). Neither note appears with
+`apt-check`, which is asked on the spot. Where no source exists the block reads
 `n/a (no update source on this system)`.
 
 **Host events** for TROUBLE. Each pattern is bound to its **source**, never to
@@ -257,12 +266,18 @@ The top-level `sections` key overrides the default section list; see
 
 A figure that is old must not look current. The block ends with
 `state <age> old`, and the age turns yellow once the file is **older than
-120 seconds** — four collector periods. The same note is
+120 seconds** — four collector periods. A failed journal read adds
+`journal: not refreshed (<code>)` above it, since a fresh file can carry old
+event counts. The same note is
 attached to the host rows of TROUBLE (`(state 3 min old)`).
 
 If the file is missing, THIS HOST says so instead of showing nothing:
 `host state unavailable (collector not running?)`; a file that cannot be parsed
 reads `host state unreadable`. *Not measured* must never look like *quiet*.
+A state file without a VRRP block whose collector reported an error for it
+(the dump could not be read or parsed) reads `no data (<code>)`, for example
+`no data (parse)`. A dump that was read and lists no instances reads
+`n/a here`.
 
 That line appears only where the figure is expected. `vrrp` shows it only when
 keepalived's pid file `/run/keepalived.pid` exists, and `apache` only when
@@ -272,5 +287,6 @@ one of them would teach the reader to ignore it.
 
 The reader never waits for the file. It opens it without blocking, accepts a
 regular file of at most 64 KiB only, and checks the type of every field it
-reads (a count is an integer, a timestamp a number, a state a string). Anything
+reads (a count is an integer, a timestamp a finite number, a state a string;
+`NaN` and `Infinity`, which JSON parsers accept, are refused). Anything
 else reads `host state unreadable`; the rest of the panel renders as usual.

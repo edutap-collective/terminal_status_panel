@@ -93,3 +93,8 @@ class UpdateInfo:
     available: int | None = None
     security: int | None = None
     standard: int | None = None
+    #: When the counts were last taken, where the source says (the collector's
+    #: simulated upgrade); None for ``apt-check``, which is asked on the spot.
+    checked_at: float | None = None
+    #: The collector's error code when its last check failed and older counts stand.
+    problem: str | None = None

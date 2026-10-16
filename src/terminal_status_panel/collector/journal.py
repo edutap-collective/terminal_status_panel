@@ -118,15 +118,16 @@ def _timestamp(entry: dict) -> float | None:
 def _read_window(runner, cursor: str | None, since: str) -> tuple[int, str, bool]:
     """The journal lines after *cursor*, or the window when there is no usable cursor.
 
-    The third value is True when the cursor was tried and lost, so the window
-    was read in full instead.
+    The third value is True when the window was read in full -- there was no
+    cursor, or it was tried and lost -- so the saved stamps must be replaced,
+    not added to.
     """
     if cursor:
         code, out = runner([f"--after-cursor={cursor}"], INCREMENTAL_TIMEOUT)
         if code == 0:
             return code, out, False
     code, out = runner([since], WINDOW_TIMEOUT)
-    return code, out, bool(cursor)
+    return code, out, True
 
 
 def _scan(
@@ -166,27 +167,34 @@ def collect_events(
     returned with the error code and the saved state is left alone. A failed
     state write loses only the saved cursor, so the next run reads the window
     again; the counts returned are still correct.
+
+    The saved state records which kinds were enabled. Entries past the cursor
+    were only matched against those, so when the set changes the cursor is
+    dropped and the window read again: a kind enabled later still sees its
+    events of the last twelve hours.
     """
     saved = _load(state_path)
     known: dict[str, list[float]] = {}
     for kind, values in (saved.get("events") or {}).items():
         if isinstance(values, list):
             known[kind] = [t for t in values if isinstance(t, (int, float))]
+    kinds = sorted(set(enabled))
+    cursor = saved.get("cursor") if saved.get("kinds") == kinds else None
     since = f"--since=@{int(now - WINDOW)}"
     try:
-        code, out, fell_back = _read_window(runner, saved.get("cursor"), since)
+        code, out, full = _read_window(runner, cursor, since)
     except FileNotFoundError:
         return _counts(known, now, enabled), "not-installed"
     except subprocess.TimeoutExpired:
         return _counts(known, now, enabled), "timeout"
     if code != 0:
         return _counts(known, now, enabled), "no-permission"
-    # A lost cursor means the window was read in full: the saved stamps would count twice.
-    stamps: dict[str, list[float]] = {} if fell_back else known
-    cursor = _scan(out, enabled, stamps, None if fell_back else saved.get("cursor"))
+    # A full window read replaces the saved stamps, which would otherwise count twice.
+    stamps: dict[str, list[float]] = {} if full else known
+    cursor = _scan(out, enabled, stamps, None if full else cursor)
     stamps = {k: [t for t in v if t > now - WINDOW] for k, v in stamps.items()}
     try:
-        _write_atomic(state_path, {"cursor": cursor, "events": stamps})
+        _write_atomic(state_path, {"cursor": cursor, "kinds": kinds, "events": stamps})
     except (OSError, ValueError):
         pass  # nothing saved: the next run reads the window again
     return _counts(stamps, now, enabled), None

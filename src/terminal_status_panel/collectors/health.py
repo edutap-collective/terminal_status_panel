@@ -177,6 +177,13 @@ def _peers_and_dns_from(outcome) -> tuple[list[PeerReachability], list[DnsCheck]
     return peers, dns
 
 
+def _journal_error(read: HostStateRead, cfg: Config) -> str | None:
+    """The journal read's error code, where host events are enabled and it failed."""
+    if not cfg.trouble_host_events or read.state is None:
+        return None
+    return (read.state.errors or {}).get("events")
+
+
 def collect_health(
     cfg: Config,
     peer_names: list[str],
@@ -227,6 +234,7 @@ def collect_health(
         docker_present=docker_present,
         host_state_age=read.age_s,
         host_state_stale=read.stale,
+        journal_error=_journal_error(read, cfg),
         truncated=[
             name.removeprefix(_CLUSTER_TASK_PREFIX).removeprefix(_HOST_TASK_PREFIX)
             for name in outcome.truncated

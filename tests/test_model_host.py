@@ -118,3 +118,18 @@ def test_integers_are_accepted_where_floats_are_expected():
     data["apache"]["requests_per_s"] = 112
     state = HostState.from_dict(data)
     assert state.written_at == 1000.0 and state.apache.requests_per_s == 112
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("events", "vrrp_state", "last"), float("-inf")),
+        (("apache", "requests_per_s"), float("nan")),
+        (("apache", "window_s"), float("inf")),
+        (("updates", "checked_at"), float("inf")),
+        (("updates", "checked_at"), 10**400),
+    ],
+)
+def test_non_finite_floats_in_blocks_are_refused(path, value):
+    with pytest.raises(ValueError):
+        HostState.from_dict(_with(path, value))

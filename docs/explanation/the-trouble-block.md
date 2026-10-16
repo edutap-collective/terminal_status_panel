@@ -52,11 +52,19 @@ The row shows the count and when the last one was, and **never any log text**:
 the collector reduces an event to a count and a timestamp before it reaches the
 state file. If the state file is older than 120 seconds, the cause carries
 `(state 3 min old)`, because a count from a collector that has stopped is a
-memory. If the file is missing there are no host rows; the HEALTH section is
-where the missing collector is reported.
+memory. If the collector's last journal read failed (a timeout, or no
+permission to read the journal), it keeps the counts it had, and the cause
+carries `(not refreshed)`: the state file is new, but the counts are not. THIS
+HOST then shows `journal: not refreshed (<code>)` in yellow, so a failed read
+is visible even when there are no rows to mark. If the file is missing there
+are no host rows; the HEALTH section is where the missing collector is
+reported.
 
 `[trouble] host_events` picks which kinds are reported (and which the collector
-counts); an unknown name in it is dropped and reported by `--debug`. A host
+counts); an unknown name in it is dropped and reported by `--debug`, and a
+repeated one counts once. When the list changes, the collector reads the whole
+twelve-hour window again, so a kind enabled later still finds its recent
+events. A host
 without Docker shows only the host rows. A host with Docker whose daemon cannot
 be reached shows the host rows and, in DOCKER INFOS, its usual warning.
 

@@ -129,3 +129,6 @@ class HealthInfo:
     #: Age of the collector's state, or None when there is none.
     host_state_age: float | None = None
     host_state_stale: bool = False
+    #: The collector's error code for its last journal read, when host events
+    #: are enabled and that read failed: the event counts were not refreshed.
+    journal_error: str | None = None

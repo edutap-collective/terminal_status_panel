@@ -271,6 +271,8 @@ def _host_body(health: HealthInfo) -> RenderableType:
     not_applicable = [_HOST_TITLES.get(c.kind, c.kind) for c in health.host if c.status == "na"]
     if not_applicable:
         parts.append(Text(f"n/a here: {', '.join(not_applicable)}", style="dim"))
+    if health.journal_error:
+        parts.append(Text(f"journal: not refreshed ({health.journal_error})", style="yellow"))
     if health.host_state_age is not None:
         style = "yellow" if health.host_state_stale else "dim"
         parts.append(Text(f"state {_age(health.host_state_age)} old", style=style))

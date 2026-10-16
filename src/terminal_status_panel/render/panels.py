@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
 
@@ -162,8 +163,27 @@ def system_overview(info: SystemInfo | None) -> Group:
     return section("SYSTEM OVERVIEW", body)
 
 
-def updates_panel(updates: UpdateInfo | None) -> Group:
-    """The UPDATES block, or a note that this platform cannot report them."""
+#: Twice the collector's update interval: older than this, the counts are a memory.
+UPDATES_OLD_AFTER_SECONDS = 2 * 3600
+
+
+def _updates_notes(updates: UpdateInfo, now: float | None) -> list[Text]:
+    """How old the counts are, and whether the last check failed -- where it matters."""
+    notes = []
+    if updates.checked_at is not None:
+        age = (time.time() if now is None else now) - updates.checked_at
+        if age > UPDATES_OLD_AFTER_SECONDS:
+            notes.append(Text(f"checked {int(age // 3600)} h ago", style="dim"))
+    if updates.problem:
+        notes.append(Text(f"last check failed ({updates.problem})", style="yellow"))
+    return notes
+
+
+def updates_panel(updates: UpdateInfo | None, now: float | None = None) -> Group:
+    """The UPDATES block, or a note that this platform cannot report them.
+
+    *now* defaults to the clock; it is the reference for the counts' age.
+    """
     if updates is None or not updates.supported:
         body = Text("n/a (no update source on this system)", style="dim")
         return section("UPDATES", body)
@@ -190,6 +210,8 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
             (str(updates.standard if updates.standard is not None else "?"), "yellow"),
         )
     )
+    for note in _updates_notes(updates, now):
+        table.add_row(note)
     return section("UPDATES", table)
 
 

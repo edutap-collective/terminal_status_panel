@@ -9,7 +9,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `width` | `80` | Fallback render width when no TTY is available (see width resolution above). |
-| `sections` | *(unset)* | Which sections a bare `status-full` renders, from `server`, `health`, `trouble`, `docker`, `traefik`, in the order given. Unset (or `[]`), the default applies: all five, or without `docker` and `traefik` on a host with no Docker endpoint. A name outside that set is dropped and reported by `--debug`. A named command (`status-health`, …) and `--sections` ignore this key. |
+| `sections` | *(unset)* | Which sections a bare `status-full` renders, from `server`, `health`, `trouble`, `docker`, `traefik`, in the order given. Unset (or `[]`), the default applies: all five, or without `docker` and `traefik` on a host with no Docker endpoint. A name outside that set is dropped and reported by `--debug`; a repeated name renders once. A named command (`status-health`, …) and `--sections` ignore this key. |
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
 | `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `docker.group_label` | `"status.group"` | Docker **service label** naming the row a service belongs in. Services of one stack sharing a value render as one row, whatever their names. Where it is absent the name heuristic decides instead — see {doc}`Grouping services into one row </explanation/docker-panel>`. Read for presence, not truthiness: a service setting it to `""` groups with no one. |
@@ -35,7 +35,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `health.apache.slots_warning` / `.slots_critical` | `80` / `95` | Percent of scoreboard slots in use at which the Apache line turns yellow / red. |
 | `health.vrrp.lead_warning` / `.lead_critical` | `5` / `0` | Applied only where a BACKUP's *lead* is known (its effective priority minus the priority the master advertises). A lead of `lead_critical` or more is red; a lead within `lead_warning` below the master is yellow. A FAULT, STOP or DELETED instance is red regardless. |
 | `health.systemd.ignore` | `[]` | Unit names that may be failed without turning the `systemd` line red. Read like `health.<kind>.match`. |
-| `trouble.host_events` | all five kinds | Which host events TROUBLE reports, and which the collector counts: `oom_kill`, `vrrp_state`, `apache_slots_full`, `unit_failed`, `apache_reload`. `[]` reports none. An unknown name is dropped and reported by `--debug`. |
+| `trouble.host_events` | all five kinds | Which host events TROUBLE reports, and which the collector counts: `oom_kill`, `vrrp_state`, `apache_slots_full`, `unit_failed`, `apache_reload`. `[]` reports none. An unknown name is dropped and reported by `--debug`; a repeated name counts once. When the list changes, the collector reads the whole twelve-hour window again. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
 | `health.postgres.match` / `health.mongodb.match` / `health.kafka.match` / `health.rustfs.match` | `["_pg-"]` / `["mongodb"]` / `["kafka_kafka-"]` / `["rustfs_rustfs"]` | Case-insensitive substrings of a container (and Swarm service) name that identify a member of that kind. Replaces the default rather than extending it. A bare string is one pattern; `[]` means no member of that kind on this host (it renders `n/a here`); an empty string is dropped and reported by `--debug`, because it would match every container. Names containing an entry of `docker.infra_ui_services` never count as members. |
 | `health.postgres.mode` | `"pg_auto_failover"` | `"pg_auto_failover"` runs `pg_autoctl show state` and reports every member. `"standalone"` runs `pg_isready` and reports one server: whether it accepts connections, nothing about replication. |
@@ -77,15 +77,16 @@ client addresses. See {doc}`About host health </explanation/host-health>`.
 | `apache.requests_per_s` | number or `null` | Rate over that window; `null` without a previous reading or after a restart. |
 | `apache.slots_busy`, `.workers_busy` | number or `null` | Shares between 0 and 1. |
 | `apache.slots_finishing` | integer or `null` | Slots held by gracefully finishing processes (`G`). |
-| `updates` | object or `null` | `null` where no simulation could run. |
+| `updates` | object or `null` | `null` where no simulation could run. After a failed simulation, the previous counts with their `checked_at`, and `errors.updates` set. |
 | `updates.checked_at` | number | Unix time of the last successful simulation (at most hourly). |
 | `updates.available`, `.security` | integer | Counts from the simulated upgrade. |
 | `updates.source` | string | `apt-simulate`. |
-| `events` | object | Per enabled event kind: `{"count": integer, "last": number or null}`. Empty if none is enabled or the journal could not be read. |
+| `events` | object | Per enabled event kind: `{"count": integer, "last": number or null}`. Empty if none is enabled. After a failed journal read, the last known counts, and `errors.events` set. |
 | `events_window_s` | integer | The window the counts cover: `43200` (12 h). |
 | `errors` | object | Per source (`vrrp`, `apache`, `updates`, `events`) `null` or a short code: `not-installed`, `no-permission`, `timeout`, `parse`, `unreachable`, `apt-failed`, `cleanup` (the keepalived copy could not be deleted), `internal`. |
 
-Keys the panel does not know are ignored.
+Keys the panel does not know are ignored. Every *number* is finite: a file
+holding `NaN` or `Infinity` in any field reads as `host state unreadable`.
 
 ## Full example
 

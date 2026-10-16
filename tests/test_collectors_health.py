@@ -524,3 +524,36 @@ def test_swarm_node_without_collector_or_keepalived_shows_no_red_vrrp_line(monke
     assert f"{icons.FAILED} VRRP" not in out
     na_line = next(line for line in out.splitlines() if "n/a here:" in line)
     assert "VRRP" in na_line
+
+
+def _host_with_events_error():
+    from terminal_status_panel.model.host import HostState, HostStateRead
+
+    state = HostState(written_at=1.0, collector="x", errors={"events": "no-permission"})
+    return HostStateRead(state=state, age_s=5.0)
+
+
+def _collect_host_only(monkeypatch, cfg, read):
+    from types import SimpleNamespace
+
+    from terminal_status_panel.collectors import host
+
+    monkeypatch.setattr(
+        host.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="")
+    )
+    _quiet(monkeypatch)
+    return health_collector.collect_health(
+        cfg, [], client=None, host=read, docker_present=False, resolve_fqdn=_fqdn
+    )
+
+
+def test_journal_error_is_passed_on_when_host_events_are_enabled(monkeypatch):
+    info = _collect_host_only(monkeypatch, Config(), _host_with_events_error())
+    assert info.journal_error == "no-permission"
+
+
+def test_journal_error_is_dropped_when_no_host_event_is_enabled(monkeypatch):
+    info = _collect_host_only(
+        monkeypatch, Config(trouble_host_events=()), _host_with_events_error()
+    )
+    assert info.journal_error is None

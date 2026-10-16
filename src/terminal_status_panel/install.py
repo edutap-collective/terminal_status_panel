@@ -172,10 +172,14 @@ def check_collector_bin_dir(bin_dir: str) -> None:
         raise ValueError(f"{bin_dir}/status-collect does not exist")
 
 
-def _systemctl(args: list[str]) -> None:
+def _systemctl(args: list[str]) -> int:
+    """Run ``systemctl`` with *args*; its exit code (127 when it is missing)."""
     import subprocess
 
-    subprocess.run(["systemctl", *args], check=False)  # noqa: S603, S607 - fixed argv
+    try:
+        return subprocess.run(["systemctl", *args], check=False).returncode  # noqa: S603, S607
+    except FileNotFoundError:
+        return 127
 
 
 def _write_atomically(path: Path, text: str, mode: int) -> None:
@@ -186,8 +190,26 @@ def _write_atomically(path: Path, text: str, mode: int) -> None:
     os.replace(temporary, path)
 
 
-def _remove_collector(root: Path, systemctl: Callable[[list[str]], None]) -> str:
-    systemctl(["disable", "--now", _TIMER])
+def _stop_units(root: Path, systemctl: Callable[[list[str]], int]) -> bool:
+    """Stop the timer, then the service, and wait for it; False on a real failure.
+
+    Stopping the timer does not stop a collection it already started, and
+    ``systemctl stop`` returns once the service has stopped -- so nothing is
+    deleted under a running collector or dump helper. A unit whose file is
+    already gone cannot be stopped and need not be: its failure is ignored.
+    """
+    for args, unit in (
+        (["disable", "--now", _TIMER], _TIMER),
+        (["stop", _SERVICE], _SERVICE),
+    ):
+        if systemctl(args) != 0 and (root / UNIT_DIR / unit).exists():
+            return False
+    return True
+
+
+def _remove_collector(root: Path, systemctl: Callable[[list[str]], int]) -> str:
+    if not _stop_units(root, systemctl):
+        return "failed"
     run_dir = root / RUN_DIR
     doomed = [
         root / UNIT_DIR / _SERVICE,
@@ -210,22 +232,37 @@ def _remove_collector(root: Path, systemctl: Callable[[list[str]], None]) -> str
             directory.rmdir()
         except OSError:
             pass
-    systemctl(["daemon-reload"])
+    if removed and systemctl(["daemon-reload"]) != 0:
+        return "failed"
     return "removed" if removed else "nothing to remove"
+
+
+def _timer_running(systemctl: Callable[[list[str]], int]) -> bool:
+    return (
+        systemctl(["is-enabled", "--quiet", _TIMER]) == 0
+        and systemctl(["is-active", "--quiet", _TIMER]) == 0
+    )
+
+
+def _activate(systemctl: Callable[[list[str]], int]) -> bool:
+    return systemctl(["daemon-reload"]) == 0 and systemctl(["enable", "--now", _TIMER]) == 0
 
 
 def apply_collector(
     root: Path,
     bin_dir: str,
     uninstall: bool,
-    systemctl: Callable[[list[str]], None] = _systemctl,
+    systemctl: Callable[[list[str]], int] = _systemctl,
 ) -> str:
     """Install or remove the collector under *root*; report what happened.
 
-    Returns ``"written"``, ``"unchanged"``, ``"removed"`` or
-    ``"nothing to remove"``. Uninstall ignores *bin_dir*; it also clears the
-    runtime directory (state file, keepalived copy, leftovers) but leaves the
-    systemd StateDirectory (``/var/lib/terminal-status-panel``) alone.
+    Returns ``"written"``, ``"activated"`` (files unchanged, timer started
+    again), ``"unchanged"``, ``"removed"``, ``"nothing to remove"`` or
+    ``"failed"`` (a systemctl call failed; ``main`` exits 1). Uninstall
+    ignores *bin_dir*; it also clears the runtime directory (state file,
+    keepalived copy, leftovers) but leaves the systemd StateDirectory
+    (``/var/lib/terminal-status-panel``) alone. *systemctl* takes the
+    arguments and returns the exit code.
     """
     if uninstall:
         return _remove_collector(root, systemctl)
@@ -247,10 +284,12 @@ def apply_collector(
         _write_atomically(path, text, modes[path])
         changed = True
     if not changed:
-        return "unchanged"
-    systemctl(["daemon-reload"])
-    systemctl(["enable", "--now", _TIMER])
-    return "written"
+        # Files in place but the timer off -- an earlier activation failed, or
+        # someone stopped it: a re-run activates instead of reporting success.
+        if _timer_running(systemctl):
+            return "unchanged"
+        return "activated" if _activate(systemctl) else "failed"
+    return "written" if _activate(systemctl) else "failed"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -298,14 +337,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if not args.uninstall:
                 check_collector_bin_dir(bin_dir)
-            print(apply_collector(Path("/"), bin_dir, args.uninstall))
+            result = apply_collector(Path("/"), bin_dir, args.uninstall)
+            print(result)
         except ValueError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         except PermissionError as error:
             print(f"error: permission denied ({error}). Re-run with sudo.", file=sys.stderr)
             return 1
-        return 0
+        return 1 if result == "failed" else 0
 
     panels = tuple(args.panels or ["full"])
     kind, path = resolve_target(args.scope, args.shell)

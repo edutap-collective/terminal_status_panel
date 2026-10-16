@@ -521,3 +521,14 @@ def test_truncated_host_kind_renders_in_this_host_not_in_clusters():
 def test_not_applicable_host_kinds_are_listed_once():
     out = _render(HealthInfo(host=[HostCheck("apache", "na", "")]))
     assert "n/a here: Apache" in out
+
+
+def test_a_failed_journal_read_is_called_out():
+    out = _render(
+        HealthInfo(host=[HostCheck("systemd", "ok", "0 failed")], journal_error="timeout")
+    )
+    assert "journal: not refreshed (timeout)" in out
+
+
+def test_no_journal_line_without_an_error():
+    assert "journal" not in _render(HealthInfo(host=[HostCheck("systemd", "ok", "0 failed")]))

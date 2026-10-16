@@ -41,10 +41,19 @@ def _is(value: Any, kind: object) -> bool:
     if kind is int:
         return isinstance(value, int)
     if kind is float:
-        return isinstance(value, int | float)
+        # json.loads accepts NaN and ±Infinity; no reader can compare or format them.
+        return isinstance(value, int | float) and _finite(value)
     if kind is str:
         return isinstance(value, str)
     return False  # a type this check does not know is refused, not waved through
+
+
+def _finite(value: float) -> bool:
+    """Whether *value* is a finite float; an int too large for one is not."""
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _check(name: str, value: Any, hint: object) -> None:
@@ -172,8 +181,6 @@ class HostState:
             raise UnknownSchemaError(f"unknown schema {data.get('schema')!r}")
         written_at = data["written_at"]
         _check("written_at", written_at, float)
-        if not math.isfinite(written_at):
-            raise ValueError("written_at must be finite")
         collector = data.get("collector", "")
         _check("collector", collector, str)
         events_window_s = data.get("events_window_s", 12 * 3600)

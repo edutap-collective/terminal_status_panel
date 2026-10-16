@@ -62,3 +62,33 @@ def test_apt_check_still_wins(monkeypatch):
         age_s=5.0,
     )
     assert updates.collect_updates(host=host).available == 5
+
+
+def _apt_check_missing(monkeypatch):
+    def boom(*a, **k):
+        raise FileNotFoundError(updates.APT_CHECK)
+
+    monkeypatch.setattr(updates.subprocess, "run", boom)
+
+
+def test_fallback_carries_the_check_time_and_the_error(monkeypatch):
+    _apt_check_missing(monkeypatch)
+    host = HostStateRead(
+        state=HostState(
+            written_at=9000.0,
+            collector="x",
+            updates=UpdateCounts(1000.0, 0, 0, "apt-simulate"),
+            errors={"updates": "timeout"},
+        ),
+        age_s=5.0,
+    )
+    info = updates.collect_updates(host=host)
+    assert (info.checked_at, info.problem) == (1000.0, "timeout")
+
+
+def test_apt_check_has_no_check_time_or_problem(monkeypatch):
+    monkeypatch.setattr(
+        updates.subprocess, "run", lambda *a, **k: SimpleNamespace(stderr="1;0", stdout="")
+    )
+    info = updates.collect_updates()
+    assert (info.checked_at, info.problem) == (None, None)
