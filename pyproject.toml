@@ -115,6 +115,7 @@ status-docker = "terminal_status_panel.cli:docker_main"
 status-health = "terminal_status_panel.cli:health_main"
 status-traefik = "terminal_status_panel.cli:traefik_main"
 status-trouble = "terminal_status_panel.cli:trouble_main"
+status-collect = "terminal_status_panel.collector.run:main"
 install-panel = "terminal_status_panel.install:main"
 
 [project.urls]
