@@ -28,7 +28,12 @@ def parse_keepalived_json(text: str) -> list[VrrpInstance]:
     Raises ValueError when the text is not JSON or not shaped like a dump.
     """
     data = json.loads(text)
-    entries = data.get("vrrp", []) if isinstance(data, dict) else data
+    if isinstance(data, dict):
+        if "vrrp" not in data:
+            raise ValueError("v2 dump without a vrrp list")
+        entries = data["vrrp"]
+    else:
+        entries = data
     if not isinstance(entries, list):
         raise ValueError("unexpected dump shape")
     instances = []
@@ -53,23 +58,36 @@ def parse_keepalived_json(text: str) -> list[VrrpInstance]:
     return instances
 
 
+def _remove_dump(dump_path: Path) -> str | None:
+    """None when the dump is gone; ``cleanup`` when it could not be removed.
+
+    A dump that stays on disk holds the VRRP password, so the failure is
+    reported rather than swallowed.
+    """
+    try:
+        dump_path.unlink(missing_ok=True)
+    except OSError:
+        return "cleanup"
+    return None
+
+
 def collect_vrrp(dump_path: Path) -> tuple[VrrpState | None, str | None]:
     """The VRRP block and an error code (``None`` when fine).
 
-    The dump is deleted whether or not it parses.
+    The dump is deleted whether or not it parses. When it cannot be deleted,
+    the parsed state is still returned, with error code ``cleanup``.
     """
     try:
         text = dump_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None, "not-installed"
     except OSError:
-        return None, "no-permission"
-    finally:
-        try:
-            dump_path.unlink(missing_ok=True)
-        except OSError:
-            pass  # not ours to remove; the parse result below still stands
+        return None, _remove_dump(dump_path) or "no-permission"
+    except ValueError:  # UnicodeDecodeError: not text, so not a dump we can read
+        return None, _remove_dump(dump_path) or "parse"
     try:
-        return VrrpState(source="keepalived-json", instances=parse_keepalived_json(text)), None
+        instances = parse_keepalived_json(text)
     except ValueError:
-        return None, "parse"
+        return None, _remove_dump(dump_path) or "parse"
+    state = VrrpState(source="keepalived-json", instances=instances)
+    return state, _remove_dump(dump_path)
