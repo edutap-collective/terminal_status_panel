@@ -92,7 +92,7 @@ The unit has exactly one `ExecStartPre=-+` line, which runs the helper
 
 - `+` runs only that command with full privileges; `User=` and the file-system
   restrictions do not apply to it (see
-  [systemd.service(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html)).
+  [systemd.service(5)](https://manpages.debian.org/trixie/systemd/systemd.service.5.en.html)).
 - `-` means a failing helper never stops the run. If keepalived is not
   installed, not running, or the dump does not appear, the helper exits quietly
   and the collector records the VRRP block as absent.
