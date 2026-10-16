@@ -129,6 +129,8 @@ def apply(
 UNIT_DIR = Path("etc/systemd/system")
 LIB_DIR = Path("usr/lib/terminal-status-panel")
 RUN_DIR = Path("run/terminal-status-panel")
+WORK_ROOT = Path("run")
+_WORK_PREFIX = "terminal-status-panel-dump."
 _SERVICE = "terminal-status-panel-collect.service"
 _TIMER = "terminal-status-panel-collect.timer"
 _BIN_DIR_PATTERN = re.compile(r"^/[A-Za-z0-9._+/-]+$")
@@ -146,7 +148,7 @@ def render_collector_units(bin_dir: str) -> dict[str, str]:
     Raises ``ValueError`` for a *bin_dir* that is not a plain absolute path,
     so nothing can be injected into the unit.
     """
-    if not _BIN_DIR_PATTERN.match(bin_dir):
+    if not _BIN_DIR_PATTERN.fullmatch(bin_dir):
         raise ValueError(f"unsafe bin directory for a unit file: {bin_dir!r}")
     return {
         _SERVICE: _data(_SERVICE + ".in").replace("{bin_dir}", bin_dir.rstrip("/")),
@@ -157,12 +159,15 @@ def render_collector_units(bin_dir: str) -> dict[str, str]:
 def check_collector_bin_dir(bin_dir: str) -> None:
     """Refuse a *bin_dir* the hardened service could not run from."""
     render_collector_units(bin_dir)
-    for hidden in _HIDDEN_FROM_SERVICE:
-        if bin_dir == hidden or bin_dir.startswith(hidden + "/"):
-            raise ValueError(
-                f"{bin_dir} is hidden from the service (ProtectHome=yes); "
-                "install the package system-wide, e.g. with 'uv tool install' or pip as root"
-            )
+    for candidate in (bin_dir, str(Path(bin_dir).resolve())):
+        for hidden in _HIDDEN_FROM_SERVICE:
+            if candidate == hidden or candidate.startswith(hidden + "/"):
+                raise ValueError(
+                    f"{bin_dir} is hidden from the service (ProtectHome=yes); install the "
+                    "package into a system location, e.g. a virtualenv under "
+                    "/opt/terminal-status-panel (pip install terminal-status-panel), "
+                    "and run install-panel from there"
+                )
     if not (Path(bin_dir) / "status-collect").is_file():
         raise ValueError(f"{bin_dir}/status-collect does not exist")
 
@@ -181,20 +186,26 @@ def _write_atomically(path: Path, text: str, mode: int) -> None:
     os.replace(temporary, path)
 
 
-def _remove_collector(
-    root: Path, installed: list[Path], systemctl: Callable[[list[str]], None]
-) -> str:
+def _remove_collector(root: Path, systemctl: Callable[[list[str]], None]) -> str:
     systemctl(["disable", "--now", _TIMER])
     run_dir = root / RUN_DIR
-    doomed = [*installed, run_dir / "host.json", run_dir / "keepalived.json"]
+    doomed = [
+        root / UNIT_DIR / _SERVICE,
+        root / UNIT_DIR / _TIMER,
+        root / LIB_DIR / "keepalived-dump",
+    ]
+    doomed += [run_dir / "host.json", run_dir / "keepalived.json"]
     if run_dir.is_dir():
         doomed += run_dir.glob(".keepalived.*")
+    leftover_dirs = list((root / WORK_ROOT).glob(f"{_WORK_PREFIX}*"))
+    for directory in leftover_dirs:
+        doomed.append(directory / "keepalived.json")
     removed = False
     for path in doomed:
         if path.is_symlink() or path.exists():
             path.unlink()
             removed = True
-    for directory in (root / LIB_DIR, run_dir):
+    for directory in [*leftover_dirs, root / LIB_DIR, run_dir]:
         try:
             directory.rmdir()
         except OSError:
@@ -212,10 +223,12 @@ def apply_collector(
     """Install or remove the collector under *root*; report what happened.
 
     Returns ``"written"``, ``"unchanged"``, ``"removed"`` or
-    ``"nothing to remove"``. Uninstall also clears the runtime directory
-    (state file, keepalived copy, temp files) but leaves the systemd
-    StateDirectory (``/var/lib/terminal-status-panel``) alone.
+    ``"nothing to remove"``. Uninstall ignores *bin_dir*; it also clears the
+    runtime directory (state file, keepalived copy, leftovers) but leaves the
+    systemd StateDirectory (``/var/lib/terminal-status-panel``) alone.
     """
+    if uninstall:
+        return _remove_collector(root, systemctl)
     script = root / LIB_DIR / "keepalived-dump"
     modes = {script: 0o755}
     texts = {script: _data("keepalived-dump")}
@@ -223,9 +236,6 @@ def apply_collector(
         path = root / UNIT_DIR / name
         modes[path] = 0o644
         texts[path] = text
-
-    if uninstall:
-        return _remove_collector(root, list(texts), systemctl)
 
     changed = False
     for path, text in texts.items():

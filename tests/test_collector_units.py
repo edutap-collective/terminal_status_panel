@@ -45,7 +45,7 @@ def test_units_render_from_installed_package_resources():
 
 
 @pytest.mark.parametrize(
-    "bin_dir", ["/a b", "/a\nExecStartPre=+/x", "/a%h", "/a$b", "rel/path", "/a\\b"]
+    "bin_dir", ["/a b", "/a\nExecStartPre=+/x", "/a%h", "/opt/bin\n", "/a$b", "rel/path", "/a\\b"]
 )
 def test_unsafe_bin_dir_is_rejected(bin_dir):
     with pytest.raises(ValueError):

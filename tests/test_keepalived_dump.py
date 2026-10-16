@@ -23,6 +23,8 @@ def env(tmp_path):
     """Paths and a fake ``keepalived`` that prints a signal number."""
     run = tmp_path / "run"
     run.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
     fake = tmp_path / "keepalived"
     fake.write_text(f"#!/bin/sh\necho {SIGNAL}\n")
     fake.chmod(0o755)
@@ -31,6 +33,7 @@ def env(tmp_path):
         "TSP_PIDFILE": str(tmp_path / "keepalived.pid"),
         "TSP_DUMP": str(tmp_path / "keepalived-dump.json"),
         "TSP_RUNDIR": str(run),
+        "TSP_WORKROOT": str(work),
         "TSP_OWNER": str(os.getuid()),
         "TSP_PROC": str(tmp_path / "proc"),
         "TSP_KEEPALIVED": str(fake),
@@ -137,3 +140,25 @@ def test_happy_path_hands_over_a_private_copy(script, env, tmp_path, target_fact
     assert dest.stat().st_mode & 0o777 == 0o600
     assert not Path(env["TSP_DUMP"]).exists()
     assert [p.name for p in Path(env["TSP_RUNDIR"]).iterdir()] == ["keepalived.json"]
+    assert list(Path(env["TSP_WORKROOT"]).iterdir()) == []
+
+
+@needs_gnu
+def test_planted_directory_symlink_does_not_capture_the_copy(script, env, tmp_path, target_factory):
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    dest = Path(env["TSP_RUNDIR"]) / "keepalived.json"
+    dest.symlink_to(victim, target_is_directory=True)
+    target_factory(env)
+    assert run(script, env).returncode == 0
+    assert list(victim.iterdir()) == []
+    assert dest.is_file() and not dest.is_symlink()
+    assert list(Path(env["TSP_WORKROOT"]).iterdir()) == []
+
+
+@needs_gnu
+def test_failing_copy_leaves_no_work_directory(script, env, tmp_path, target_factory):
+    target_factory(env)
+    env["TSP_RUNDIR"] = str(tmp_path / "missing")  # chown --reference fails
+    assert run(script, env).returncode == 0
+    assert list(Path(env["TSP_WORKROOT"]).iterdir()) == []

@@ -170,3 +170,29 @@ def test_check_bin_dir_requires_status_collect(tmp_path):
         install.check_collector_bin_dir(str(tmp_path))
     (tmp_path / "status-collect").write_text("")
     install.check_collector_bin_dir(str(tmp_path))
+
+
+def test_uninstall_does_not_need_a_valid_bin_dir(tmp_path):
+    install.apply_collector(tmp_path, "/x", uninstall=False, systemctl=lambda args: None)
+    result = install.apply_collector(tmp_path, "bad dir\n", True, lambda args: None)
+    assert result == "removed"
+
+
+def test_uninstall_removes_leftover_dump_directories(tmp_path):
+    leftover = tmp_path / "run/terminal-status-panel-dump.AbC123"
+    leftover.mkdir(parents=True)
+    (leftover / "keepalived.json").write_text("{}")
+    other = tmp_path / "run/unrelated"
+    other.mkdir()
+    assert install.apply_collector(tmp_path, "/x", True, lambda args: None) == "removed"
+    assert not leftover.exists()
+    assert other.exists()
+
+
+def test_check_bin_dir_refuses_hidden_paths_after_resolving(tmp_path):
+    with pytest.raises(ValueError, match="ProtectHome"):
+        install.check_collector_bin_dir("/usr/../root/bin")
+    link = tmp_path / "bin"
+    link.symlink_to(tmp_path)
+    (tmp_path / "status-collect").write_text("")
+    install.check_collector_bin_dir(str(link))  # resolves to a plain tmp dir

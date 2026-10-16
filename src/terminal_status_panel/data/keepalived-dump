@@ -14,7 +14,7 @@ owner=${TSP_OWNER:-0}
 proc=${TSP_PROC:-/proc}
 keepalived=${TSP_KEEPALIVED:-keepalived}
 dest=$rundir/keepalived.json
-tmp=$rundir/.keepalived.$$
+workroot=${TSP_WORKROOT:-/run}
 
 [ -r "$pidfile" ] || exit 0
 command -v "$keepalived" >/dev/null 2>&1 || exit 0
@@ -34,17 +34,19 @@ while [ ! -s "$dump" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
 [ -f "$dump" ] && [ ! -L "$dump" ] && [ "$(stat -c %u "$dump")" = "$owner" ] || exit 0
 [ -s "$dump" ] || exit 0
 
-# The copy is created exclusively (noclobber, umask 077 -> mode 0600), so a
-# symlink planted in the collector's directory is never followed.
-rm -f "$tmp"
+# The copy is made in a fresh directory only root can enter (mktemp -d is
+# 0700), never in the collector's runtime directory, where it could plant a
+# symlink, FIFO or device. Only the finished file is moved into place.
+work=$(mktemp -d "$workroot/terminal-status-panel-dump.XXXXXX") || exit 0
+copy=$work/keepalived.json
 if (
     umask 077
-    set -C
-    cat "$dump" >"$tmp"
-) && chown -h --reference="$rundir" "$tmp" && mv -f "$tmp" "$dest"; then
+    cat "$dump" >"$copy"
+) && chown -h --reference="$rundir" "$copy" && mv -fT "$copy" "$dest"; then
     :
 else
-    rm -f "$tmp"
+    rm -f "$copy"
 fi
+rmdir "$work" 2>/dev/null
 rm -f "$dump"
 exit 0
