@@ -3,17 +3,48 @@
 # private copy. The dump contains the VRRP password when one is set, which is
 # why the copy is 0600 and owned by the collector (the owner of the runtime
 # directory), which deletes it after reading.
-pidfile=/run/keepalived.pid
-dump=/tmp/keepalived.json
-dest=/run/terminal-status-panel/keepalived.json
+#
+# Runs as root, so nothing in a user-writable place is trusted: the pid file
+# must name a keepalived process, and the dump must be a regular file owned by
+# root. The TSP_* variables exist for the tests; production uses the defaults.
+pidfile=${TSP_PIDFILE:-/run/keepalived.pid}
+dump=${TSP_DUMP:-/tmp/keepalived.json}
+rundir=${TSP_RUNDIR:-/run/terminal-status-panel}
+owner=${TSP_OWNER:-0}
+proc=${TSP_PROC:-/proc}
+keepalived=${TSP_KEEPALIVED:-keepalived}
+dest=$rundir/keepalived.json
+tmp=$rundir/.keepalived.$$
+
 [ -r "$pidfile" ] || exit 0
-command -v keepalived >/dev/null 2>&1 || exit 0
-sig=$(keepalived --signum=JSON 2>/dev/null) || exit 0
+command -v "$keepalived" >/dev/null 2>&1 || exit 0
+pid=$(cat "$pidfile" 2>/dev/null) || exit 0
+case $pid in
+'' | *[!0-9]*) exit 0 ;;
+esac
+[ "$(cat "$proc/$pid/comm" 2>/dev/null)" = keepalived ] || exit 0
+sig=$("$keepalived" --signum=JSON 2>/dev/null) || exit 0
+case $sig in
+'' | *[!0-9]*) exit 0 ;;
+esac
 rm -f "$dump"
-kill "-$sig" "$(cat "$pidfile")" 2>/dev/null || exit 0
+kill "-$sig" "$pid" 2>/dev/null || exit 0
 i=0
 while [ ! -s "$dump" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
+[ -f "$dump" ] && [ ! -L "$dump" ] && [ "$(stat -c %u "$dump")" = "$owner" ] || exit 0
 [ -s "$dump" ] || exit 0
-install -m 0600 "$dump" "$dest" && chown --reference=/run/terminal-status-panel "$dest"
+
+# The copy is created exclusively (noclobber, umask 077 -> mode 0600), so a
+# symlink planted in the collector's directory is never followed.
+rm -f "$tmp"
+if (
+    umask 077
+    set -C
+    cat "$dump" >"$tmp"
+) && chown -h --reference="$rundir" "$tmp" && mv -f "$tmp" "$dest"; then
+    :
+else
+    rm -f "$tmp"
+fi
 rm -f "$dump"
 exit 0

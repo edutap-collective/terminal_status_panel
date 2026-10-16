@@ -1,3 +1,5 @@
+import pytest
+
 from terminal_status_panel import install
 
 
@@ -40,3 +42,11 @@ def test_units_render_from_installed_package_resources():
     }
     assert "{bin_dir}" not in units["terminal-status-panel-collect.service"]
     assert "ExecStart=/opt/tsp/bin/status-collect" in units["terminal-status-panel-collect.service"]
+
+
+@pytest.mark.parametrize(
+    "bin_dir", ["/a b", "/a\nExecStartPre=+/x", "/a%h", "/a$b", "rel/path", "/a\\b"]
+)
+def test_unsafe_bin_dir_is_rejected(bin_dir):
+    with pytest.raises(ValueError):
+        install.render_collector_units(bin_dir)

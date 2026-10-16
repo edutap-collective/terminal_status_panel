@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import stat
 import sys
 from collections.abc import Callable
 from importlib import resources
@@ -127,8 +128,12 @@ def apply(
 
 UNIT_DIR = Path("etc/systemd/system")
 LIB_DIR = Path("usr/lib/terminal-status-panel")
+RUN_DIR = Path("run/terminal-status-panel")
 _SERVICE = "terminal-status-panel-collect.service"
 _TIMER = "terminal-status-panel-collect.timer"
+_BIN_DIR_PATTERN = re.compile(r"^/[A-Za-z0-9._+/-]+$")
+# ProtectHome=yes hides these from the service, so an ExecStart there never runs.
+_HIDDEN_FROM_SERVICE = ("/home", "/root", "/run/user")
 
 
 def _data(name: str) -> str:
@@ -136,11 +141,30 @@ def _data(name: str) -> str:
 
 
 def render_collector_units(bin_dir: str) -> dict[str, str]:
-    """The two unit files (file name -> content), with *bin_dir* filled in."""
+    """The two unit files (file name -> content), with *bin_dir* filled in.
+
+    Raises ``ValueError`` for a *bin_dir* that is not a plain absolute path,
+    so nothing can be injected into the unit.
+    """
+    if not _BIN_DIR_PATTERN.match(bin_dir):
+        raise ValueError(f"unsafe bin directory for a unit file: {bin_dir!r}")
     return {
         _SERVICE: _data(_SERVICE + ".in").replace("{bin_dir}", bin_dir.rstrip("/")),
         _TIMER: _data(_TIMER),
     }
+
+
+def check_collector_bin_dir(bin_dir: str) -> None:
+    """Refuse a *bin_dir* the hardened service could not run from."""
+    render_collector_units(bin_dir)
+    for hidden in _HIDDEN_FROM_SERVICE:
+        if bin_dir == hidden or bin_dir.startswith(hidden + "/"):
+            raise ValueError(
+                f"{bin_dir} is hidden from the service (ProtectHome=yes); "
+                "install the package system-wide, e.g. with 'uv tool install' or pip as root"
+            )
+    if not (Path(bin_dir) / "status-collect").is_file():
+        raise ValueError(f"{bin_dir}/status-collect does not exist")
 
 
 def _systemctl(args: list[str]) -> None:
@@ -149,29 +173,68 @@ def _systemctl(args: list[str]) -> None:
     subprocess.run(["systemctl", *args], check=False)  # noqa: S603, S607 - fixed argv
 
 
+def _write_atomically(path: Path, text: str, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(text)
+    temporary.chmod(mode)
+    os.replace(temporary, path)
+
+
+def _remove_collector(
+    root: Path, installed: list[Path], systemctl: Callable[[list[str]], None]
+) -> str:
+    systemctl(["disable", "--now", _TIMER])
+    run_dir = root / RUN_DIR
+    doomed = [*installed, run_dir / "host.json", run_dir / "keepalived.json"]
+    if run_dir.is_dir():
+        doomed += run_dir.glob(".keepalived.*")
+    removed = False
+    for path in doomed:
+        if path.is_symlink() or path.exists():
+            path.unlink()
+            removed = True
+    for directory in (root / LIB_DIR, run_dir):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    systemctl(["daemon-reload"])
+    return "removed" if removed else "nothing to remove"
+
+
 def apply_collector(
     root: Path,
     bin_dir: str,
     uninstall: bool,
     systemctl: Callable[[list[str]], None] = _systemctl,
 ) -> str:
-    """Install or remove the collector under *root*; report what happened."""
-    files = {root / UNIT_DIR / name: text for name, text in render_collector_units(bin_dir).items()}
+    """Install or remove the collector under *root*; report what happened.
+
+    Returns ``"written"``, ``"unchanged"``, ``"removed"`` or
+    ``"nothing to remove"``. Uninstall also clears the runtime directory
+    (state file, keepalived copy, temp files) but leaves the systemd
+    StateDirectory (``/var/lib/terminal-status-panel``) alone.
+    """
     script = root / LIB_DIR / "keepalived-dump"
-    files[script] = _data("keepalived-dump")
+    modes = {script: 0o755}
+    texts = {script: _data("keepalived-dump")}
+    for name, text in render_collector_units(bin_dir).items():
+        path = root / UNIT_DIR / name
+        modes[path] = 0o644
+        texts[path] = text
+
     if uninstall:
-        systemctl(["disable", "--now", _TIMER])
-        for path in files:
-            path.unlink(missing_ok=True)
-        systemctl(["daemon-reload"])
-        return "removed"
+        return _remove_collector(root, list(texts), systemctl)
+
     changed = False
-    for path, text in files.items():
+    for path, text in texts.items():
         if path.exists() and path.read_text() == text:
+            if stat.S_IMODE(path.stat().st_mode) != modes[path]:
+                path.chmod(modes[path])
+                changed = True
             continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-        path.chmod(0o755 if path == script else 0o644)
+        _write_atomically(path, text, modes[path])
         changed = True
     if not changed:
         return "unchanged"
@@ -216,8 +279,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.collector:
+        bin_dir = str(Path(sys.executable).parent)
         try:
-            print(apply_collector(Path("/"), str(Path(sys.executable).parent), args.uninstall))
+            if not args.uninstall:
+                check_collector_bin_dir(bin_dir)
+            print(apply_collector(Path("/"), bin_dir, args.uninstall))
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         except PermissionError as error:
             print(f"error: permission denied ({error}). Re-run with sudo.", file=sys.stderr)
             return 1
