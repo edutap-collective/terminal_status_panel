@@ -28,10 +28,16 @@ _ARGV = [
 _INST = re.compile(r"^Inst \S+ .*\((?P<origin>[^)]*)\)")
 
 
-def _simulate() -> str:
-    return subprocess.run(  # noqa: S603 - fixed argv
-        _ARGV, capture_output=True, text=True, timeout=20.0, env={**os.environ, "LC_ALL": "C"}
-    ).stdout
+def _simulate() -> tuple[int, str]:
+    """The exit code and the standard output of the simulated upgrade."""
+    proc = subprocess.run(  # noqa: S603 - fixed argv
+        _ARGV,
+        capture_output=True,
+        text=True,
+        timeout=20.0,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    return proc.returncode, proc.stdout
 
 
 def parse_simulation(text: str) -> tuple[int, int]:
@@ -48,17 +54,28 @@ def parse_simulation(text: str) -> tuple[int, int]:
 
 
 def collect_updates(
-    previous: UpdateCounts | None, now: float, runner=_simulate
+    previous: UpdateCounts | None,
+    now: float,
+    runner=_simulate,
 ) -> tuple[UpdateCounts | None, str | None]:
-    """At most hourly; the previous answer stands in between."""
+    """At most hourly; the previous answer stands in between.
+
+    A failed or timed-out simulation keeps *previous* and its timestamp, so a
+    broken apt is never reported as a fresh "0 updates".
+    """
     if previous is not None and now - previous.checked_at < UPDATE_INTERVAL:
         return previous, None
     try:
-        available, security = parse_simulation(runner())
+        code, text = runner()
     except FileNotFoundError:
         return None, "not-installed"
     except subprocess.TimeoutExpired:
         return previous, "timeout"
+    except OSError:
+        return previous, "apt-failed"
+    if code != 0:
+        return previous, "apt-failed"
+    available, security = parse_simulation(text)
     return UpdateCounts(
         checked_at=now, available=available, security=security, source="apt-simulate"
     ), None

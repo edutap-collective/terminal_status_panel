@@ -2,8 +2,10 @@
 
 Each kind is bound to its source -- transport, identifier, unit or PID 1 --
 and never to text alone: a free-text search counts every
-``sudo journalctl -g ...`` as a hit. Only counts and timestamps leave this
-module; message text never does, and never reaches the state file.
+``sudo journalctl -g ...`` as a hit. The source also filters on the server
+side (``SOURCES``), so the collector never parses the journal's bulk. Only
+counts and timestamps leave this module; message text never does, and never
+reaches the state file.
 """
 
 from __future__ import annotations
@@ -18,35 +20,73 @@ from pathlib import Path
 from ..model.host import EventCount
 
 WINDOW = 12 * 3600
+#: The first read covers the window; an incremental read covers a few seconds.
+WINDOW_TIMEOUT = 20.0
+INCREMENTAL_TIMEOUT = 5.0
+
+
+def _message(entry: dict) -> str:
+    """The MESSAGE text, or "" when the journal stored binary data instead."""
+    text = entry.get("MESSAGE", "")
+    return text if isinstance(text, str) else ""
+
 
 PATTERNS: dict[str, Callable[[dict], bool]] = {
-    "oom_kill": lambda e: (
-        e.get("_TRANSPORT") == "kernel" and "Killed process" in e.get("MESSAGE", "")
-    ),
+    "oom_kill": lambda e: e.get("_TRANSPORT") == "kernel" and "Killed process" in _message(e),
     "vrrp_state": lambda e: (
         e.get("SYSLOG_IDENTIFIER") == "Keepalived_vrrp"
-        and re.search(r"Entering (MASTER|BACKUP|FAULT) STATE", e.get("MESSAGE", "")) is not None
+        and re.search(r"Entering (MASTER|BACKUP|FAULT) STATE", _message(e)) is not None
     ),
     "apache_slots_full": lambda e: (
-        e.get("_SYSTEMD_UNIT") in ("apache2.service", "httpd.service")
-        and "AH03490" in e.get("MESSAGE", "")
+        e.get("_SYSTEMD_UNIT") in ("apache2.service", "httpd.service") and "AH03490" in _message(e)
     ),
-    "unit_failed": lambda e: e.get("_PID") == "1" and "Failed with result" in e.get("MESSAGE", ""),
+    "unit_failed": lambda e: e.get("_PID") == "1" and "Failed with result" in _message(e),
     "apache_reload": lambda e: (
         e.get("_PID") == "1"
-        and re.match(r"Reloading (apache2|httpd)\.service", e.get("MESSAGE", "")) is not None
+        and re.match(r"Reloading (apache2|httpd)\.service", _message(e)) is not None
     ),
 }
 KINDS = tuple(PATTERNS)
+
+#: The journal field match each kind needs, as journalctl takes it. Every
+#: entry is one journalctl match; the server-side filter ORs them all.
+SOURCES: dict[str, tuple[str, ...]] = {
+    "oom_kill": ("_TRANSPORT=kernel",),
+    "vrrp_state": ("SYSLOG_IDENTIFIER=Keepalived_vrrp",),
+    "apache_slots_full": ("_SYSTEMD_UNIT=apache2.service", "_SYSTEMD_UNIT=httpd.service"),
+    "unit_failed": ("_PID=1",),
+    "apache_reload": ("_PID=1",),
+}
 _FIELDS = "MESSAGE,_TRANSPORT,SYSLOG_IDENTIFIER,_SYSTEMD_UNIT,_PID"
 
 
-def _journal(args: list[str]) -> tuple[int, str]:
+def _filter_args() -> list[str]:
+    """The matches joined by ``+``: journalctl ORs matches of different fields."""
+    matches = list(dict.fromkeys(m for kind in KINDS for m in SOURCES[kind]))
+    args: list[str] = []
+    for match in matches:
+        if args:
+            args.append("+")
+        args.append(match)
+    return args
+
+
+def _journal(args: list[str], timeout: float) -> tuple[int, str]:
+    # PATH-resolved, as the other collectors do.
+    argv = [
+        "journalctl",
+        "-o",
+        "json",
+        "--no-pager",
+        f"--output-fields={_FIELDS}",
+        *args,
+        *_filter_args(),
+    ]
     proc = subprocess.run(  # noqa: S603 - fixed argv plus a cursor/since value
-        ["journalctl", "-o", "json", "--no-pager", f"--output-fields={_FIELDS}", *args],  # noqa: S607 - PATH, as the other collectors do
+        argv,  # noqa: S607 - see above
         capture_output=True,
         text=True,
-        timeout=5.0,
+        timeout=timeout,
     )
     return proc.returncode, proc.stdout
 
@@ -82,10 +122,10 @@ def _read_window(runner, cursor: str | None, since: str) -> tuple[int, str, bool
     was read in full instead.
     """
     if cursor:
-        code, out = runner([f"--after-cursor={cursor}"])
+        code, out = runner([f"--after-cursor={cursor}"], INCREMENTAL_TIMEOUT)
         if code == 0:
             return code, out, False
-    code, out = runner([since])
+    code, out = runner([since], WINDOW_TIMEOUT)
     return code, out, bool(cursor)
 
 
@@ -122,25 +162,27 @@ def collect_events(
 ) -> tuple[dict[str, EventCount], str | None]:
     """Counts per enabled kind over the window, and an error code.
 
-    Never raises. A failed state write loses only the saved cursor, so the
-    next run reads the window again; the counts returned are still correct.
+    Never raises. On a failed or timed-out read the last known counts are
+    returned with the error code and the saved state is left alone. A failed
+    state write loses only the saved cursor, so the next run reads the window
+    again; the counts returned are still correct.
     """
     saved = _load(state_path)
-    stamps: dict[str, list[float]] = {}
+    known: dict[str, list[float]] = {}
     for kind, values in (saved.get("events") or {}).items():
         if isinstance(values, list):
-            stamps[kind] = [t for t in values if isinstance(t, (int, float))]
+            known[kind] = [t for t in values if isinstance(t, (int, float))]
     since = f"--since=@{int(now - WINDOW)}"
     try:
         code, out, fell_back = _read_window(runner, saved.get("cursor"), since)
     except FileNotFoundError:
-        return _counts(stamps, now, enabled), "not-installed"
+        return _counts(known, now, enabled), "not-installed"
     except subprocess.TimeoutExpired:
-        return _counts(stamps, now, enabled), "timeout"
-    if fell_back:
-        stamps = {}  # the window is read in full: keeping the saved stamps would count twice
+        return _counts(known, now, enabled), "timeout"
     if code != 0:
-        return _counts(stamps, now, enabled), "no-permission"
+        return _counts(known, now, enabled), "no-permission"
+    # A lost cursor means the window was read in full: the saved stamps would count twice.
+    stamps: dict[str, list[float]] = {} if fell_back else known
     cursor = _scan(out, enabled, stamps, None if fell_back else saved.get("cursor"))
     stamps = {k: [t for t in v if t > now - WINDOW] for k, v in stamps.items()}
     try:
