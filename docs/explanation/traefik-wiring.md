@@ -137,7 +137,7 @@ absence.
 
 The entrypoint branches are packed into as many columns as the terminal
 allows, balanced by height rather than filled row by row: `rich.Columns`,
-which CLUSTER HEALTH still uses, fills a grid row by row, so a row is as tall
+which HEALTH still uses, fills a grid row by row, so a row is as tall
 as its tallest cell and a three-line branch beside a twenty-line one leaves
 seventeen blank lines behind it. The packer used here fills column by column
 instead, putting the tallest branches each in a column of their own and

@@ -39,6 +39,8 @@ def test_the_console_scripts_are_the_supported_surface():
         "status-docker",
         "status-health",
         "status-traefik",
+        "status-trouble",
+        "status-collect",
         "install-panel",
     }
     for entry_point in ours.values():

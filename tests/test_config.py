@@ -370,3 +370,110 @@ def test_the_glyph_legend_is_on_unless_switched_off(tmp_path):
 
     path = _write(tmp_path, "\n".join(["[docker]", "legend = false"]))
     assert load_config(path).docker_legend is False
+
+
+def test_psi_thresholds_are_read(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text("[thresholds.psi]\nwarning = 12\ncritical = 30\n")
+    cfg = load_config(path)
+    assert (cfg.thresholds.psi_warning, cfg.thresholds.psi_critical) == (12.0, 30.0)
+
+
+def test_host_kind_tables(tmp_path):
+    path = tmp_path / "c.toml"
+    path.write_text(
+        "[health.apache]\nurl = 'http://localhost/server-status'\n"
+        "requests_warning = 400\nrequests_critical = 500\n"
+        "[health.vrrp]\nlead_warning = 5\nlead_critical = 0\n"
+        "[health.systemd]\nignore = ['a.service']\n"
+    )
+    cfg = load_config(path)
+    assert cfg.health.apache.url == "http://localhost/server-status"
+    assert (cfg.health.apache.requests_warning, cfg.health.apache.requests_critical) == (
+        400.0,
+        500.0,
+    )
+    assert cfg.health.vrrp.lead_warning == 5 and cfg.health.systemd.ignore == ("a.service",)
+    assert not cfg.problems
+
+
+def _load(tmp_path, text):
+    path = tmp_path / "c.toml"
+    path.write_text(text)
+    return load_config(path)
+
+
+def test_negative_apache_threshold_is_none_and_reported(tmp_path):
+    cfg = _load(tmp_path, "[health.apache]\nurl = 'http://x'\nrequests_warning = -1\n")
+    assert cfg.health.apache.requests_warning is None
+    assert any(p.key == "health.apache.requests_warning" for p in cfg.problems)
+
+
+def test_unknown_vrrp_key_is_reported(tmp_path):
+    cfg = _load(tmp_path, "[health.vrrp]\nlead_warn = 3\n")
+    assert any(p.key == "health.vrrp.lead_warn" for p in cfg.problems)
+
+
+def test_invalid_apache_url_is_reported(tmp_path):
+    for bad in ("ftp://x/status", "http://x/status?auto"):
+        cfg = _load(tmp_path, f"[health.apache]\nurl = '{bad}'\n")
+        assert cfg.health.apache.url is None
+        assert any(p.key == "health.apache.url" and p.used == "kind off" for p in cfg.problems)
+
+
+def test_sections_and_host_events_are_read(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text(
+        'sections = ["server", "bogus", "trouble"]\n[trouble]\nhost_events = ["oom_kill"]\n'
+    )
+    cfg = load_config(path)
+    assert cfg.sections == ("server", "trouble")
+    assert cfg.trouble_host_events == ("oom_kill",)
+
+
+def test_sections_default_to_none_and_all_host_events():
+    from terminal_status_panel.config import Config
+    from terminal_status_panel.model.host import HOST_EVENT_KINDS
+
+    cfg = Config()
+    assert cfg.sections is None and cfg.trouble_host_events == HOST_EVENT_KINDS
+
+
+def test_unknown_sections_and_host_events_are_reported(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text(
+        'sections = ["server", "bogus"]\n[trouble]\nhost_events = ["oom-kill", "oom_kill"]\n'
+        "hostevents = 1\n"
+    )
+    cfg = load_config(path)
+    assert cfg.sections == ("server",)
+    assert cfg.trouble_host_events == ("oom_kill",)
+    found = {(p.key, p.found) for p in cfg.problems}
+    assert ("sections", "'bogus'") in found
+    assert ("trouble.host_events", "'oom-kill'") in found
+
+
+def test_sections_not_a_list_falls_back_and_says_so(tmp_path):
+    from terminal_status_panel.config import load_config
+
+    path = tmp_path / "c.toml"
+    path.write_text('sections = "server"\n[trouble]\nhostevents = 1\n')
+    cfg = load_config(path)
+    assert cfg.sections is None
+    assert {p.key for p in cfg.problems} == {"sections", "trouble.hostevents"}
+
+
+def test_repeated_names_are_kept_once_in_order(tmp_path):
+    cfg = _load(
+        tmp_path,
+        'sections = ["trouble", "server", "trouble"]\n'
+        '[trouble]\nhost_events = ["oom_kill", "unit_failed", "oom_kill"]\n',
+    )
+    assert cfg.sections == ("trouble", "server")
+    assert cfg.trouble_host_events == ("oom_kill", "unit_failed")

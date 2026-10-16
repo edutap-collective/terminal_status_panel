@@ -2,6 +2,7 @@ import pytest
 
 from terminal_status_panel import cli
 from terminal_status_panel.config import Config
+from terminal_status_panel.model import HostStateRead
 
 
 @pytest.fixture
@@ -22,11 +23,18 @@ def isolated_cli(monkeypatch):
     purely local collectors that read state instantly (system, resources) are
     left alone.
 
+    ``docker_present`` decides the default sections of ``status-full`` from
+    the real ``/var/run/docker.sock``. It is pinned to True so the output does
+    not depend on whether the test machine runs Docker -- CI runners on macOS
+    and FreeBSD have no socket. Tests about the Docker-less default override it.
+
     A test that wants a specific ``collect_health`` simply overrides it again.
     """
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: True)
     monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
     monkeypatch.setattr(cli, "collect_health", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "collect_updates", lambda timeout=None: None)
+    monkeypatch.setattr(cli, "collect_updates", lambda timeout=None, host=None: None)
+    monkeypatch.setattr(cli, "read_host_state", lambda *a, **k: HostStateRead(problem="missing"))
     monkeypatch.setattr(cli, "collect_processes", lambda sample, **kw: None)
     return monkeypatch
 
@@ -106,7 +114,7 @@ def test_collect_all_skips_health_when_not_selected(isolated_cli):
 def test_collect_all_calls_health_when_selected(isolated_cli):
     called = []
 
-    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None):
+    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None, **_):
         called.append((peer_names, resolve_fqdn))
         return None
 
@@ -182,7 +190,7 @@ def test_collect_all_never_reaches_the_docker_daemon_before_the_budget(isolated_
 
     captured = {}
 
-    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None):
+    def fake(cfg, peer_names, client=None, resolve_fqdn=None, resolve_peer_names=None, **_):
         captured["resolve_peer_names"] = resolve_peer_names
         return None
 
@@ -462,3 +470,59 @@ def test_an_empty_traefik_match_leaves_the_docker_section_alone(isolated_cli):
     cli.collect_all(cfg, sections=("docker", "traefik"))
 
     assert called == ["docker"]
+
+
+def test_docker_absent_without_socket(tmp_path):
+    assert cli.docker_present({}, str(tmp_path / "docker.sock")) is False
+
+
+def test_docker_present_with_docker_host():
+    assert cli.docker_present({"DOCKER_HOST": "tcp://192.0.2.1:2375"}, "/nonexistent") is True
+
+
+def test_default_sections_drop_docker_and_traefik_without_socket(monkeypatch):
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: False)
+    assert cli.default_sections_for(cli.Config()) == ("server", "health", "trouble")
+
+
+def test_default_sections_keep_all_with_docker(monkeypatch):
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: True)
+    assert cli.default_sections_for(cli.Config()) == (
+        "server",
+        "health",
+        "trouble",
+        "docker",
+        "traefik",
+    )
+
+
+def test_config_sections_override(monkeypatch):
+    cfg = cli.Config(sections=("server", "trouble"))
+    assert cli.default_sections_for(cfg) == ("server", "trouble")
+
+
+def test_trouble_main_returns_zero(isolated_cli):
+    assert cli.trouble_main([]) == 0
+
+
+def test_status_full_without_docker_skips_docker_sections(isolated_cli, monkeypatch):
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: False)
+    seen = []
+    monkeypatch.setattr(
+        cli,
+        "collect_all",
+        lambda cfg, sections=cli.SECTIONS: seen.append(sections) or cli.PanelData(),
+    )
+    assert cli.main([]) == 0
+    assert seen == [("server", "health", "trouble")]
+
+
+def test_status_docker_renders_trouble_above_docker(isolated_cli, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        cli,
+        "collect_all",
+        lambda cfg, sections=cli.SECTIONS: seen.append(sections) or cli.PanelData(),
+    )
+    assert cli.docker_main([]) == 0
+    assert seen == [("trouble", "docker")]

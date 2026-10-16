@@ -1,6 +1,6 @@
 [project]
 name = "terminal-status-panel"
-version = "0.13.0"
+version = "0.14.0"
 description = "Colorful login status panel for servers: system, resources, and Docker Swarm health"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -114,6 +114,8 @@ status-server = "terminal_status_panel.cli:server_main"
 status-docker = "terminal_status_panel.cli:docker_main"
 status-health = "terminal_status_panel.cli:health_main"
 status-traefik = "terminal_status_panel.cli:traefik_main"
+status-trouble = "terminal_status_panel.cli:trouble_main"
+status-collect = "terminal_status_panel.collector.run:main"
 install-panel = "terminal_status_panel.install:main"
 
 [project.urls]

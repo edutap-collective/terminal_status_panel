@@ -47,6 +47,9 @@ class ResourceUsage:
     cpu_count: int | None = None
     cpu_percent: float | None = None
     cpu_per_core: list[float] = field(default_factory=list)
+    #: PSI ``some`` (avg10, avg60) per resource, percent. Empty where the
+    #: kernel has none -- not measured, never "no pressure".
+    pressure: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -90,3 +93,8 @@ class UpdateInfo:
     available: int | None = None
     security: int | None = None
     standard: int | None = None
+    #: When the counts were last taken, where the source says (the collector's
+    #: simulated upgrade); None for ``apt-check``, which is asked on the spot.
+    checked_at: float | None = None
+    #: The collector's error code when its last check failed and older counts stand.
+    problem: str | None = None

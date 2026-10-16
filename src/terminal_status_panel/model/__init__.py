@@ -28,6 +28,7 @@ from .docker import (
     TroubleEntry,
 )
 from .health import ClusterMember, ClusterService, DnsCheck, HealthInfo, PeerReachability
+from .host import HostCheck, HostState, HostStateRead
 from .system import (
     FilesystemUsage,
     ProcessInfo,
@@ -61,6 +62,7 @@ class PanelData:
     health: HealthInfo | None = None
     traefik: TraefikInfo | None = None
     processes: ProcessSnapshot | None = None
+    host: HostStateRead | None = None
 
 
 __all__ = [
@@ -72,6 +74,9 @@ __all__ = [
     "DockerDiskUsage",
     "FilesystemUsage",
     "HealthInfo",
+    "HostCheck",
+    "HostState",
+    "HostStateRead",
     "JobRun",
     "PanelData",
     "PeerReachability",

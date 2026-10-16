@@ -381,12 +381,15 @@ def _service_trouble(
         # Nothing fell, so the only thing worth reporting is a service that
         # never got anywhere -- and then Swarm's own sentence is the report.
         if facts.placement_error:
-            return TroubleEntry(name=name, cause=facts.placement_error, severity="dead")
+            return TroubleEntry(
+                name=name, cause=facts.placement_error, severity="dead", source="swarm"
+            )
         return None
 
     up = running > 0
     return TroubleEntry(
         name=name,
+        source="swarm",
         node=node or (facts.tasks[0].node if facts.tasks else None),
         fails=fails,
         fails_capped=retention is not None and fails >= retention,
@@ -558,6 +561,7 @@ def _container_trouble(container, name: str) -> TroubleEntry | None:
         uptime_seconds=uptime,
         cause=_container_cause(state),
         severity=severity,
+        source="container",
     )
 
 

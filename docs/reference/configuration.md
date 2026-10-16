@@ -9,6 +9,7 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `width` | `80` | Fallback render width when no TTY is available (see width resolution above). |
+| `sections` | *(unset)* | Which sections a bare `status-full` renders, from `server`, `health`, `trouble`, `docker`, `traefik`, in the order given. Unset (or `[]`), the default applies: all five, or without `docker` and `traefik` on a host with no Docker endpoint. A name outside that set is dropped and reported by `--debug`; a repeated name renders once. A named command (`status-health`, …) and `--sections` ignore this key. |
 | `docker.timeout` | `1.5` | Seconds to wait for the Docker socket before giving up (also bounds the `apt` update check). Keeps a hung/absent daemon from delaying login. |
 | `docker.description_label` | `"status.description"` | Docker **service label** read as the per-service description column. The key `lmu.service.description` is still read as a fallback. |
 | `docker.group_label` | `"status.group"` | Docker **service label** naming the row a service belongs in. Services of one stack sharing a value render as one row, whatever their names. Where it is absent the name heuristic decides instead — see {doc}`Grouping services into one row </explanation/docker-panel>`. Read for presence, not truthiness: a service setting it to `""` groups with no one. |
@@ -25,9 +26,16 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `thresholds.swap.warning` | platform-dependent | Swap usage % above which SWAP turns yellow. Defaults to `80` on macOS, which allocates swap continuously by design, and to `1` elsewhere. An explicit value overrides both. |
 | `thresholds.filesystem.warning` / `.critical` | `80` / `90` | Filesystem usage % thresholds. |
 | `thresholds.load.warning` / `.critical` | `0.8` / `1.0` | Load-average thresholds as a **per-CPU multiplier** (compared against `load1 / cpu_count`). |
+| `thresholds.psi.warning` / `.critical` | `10` / `25` | Pressure stall information, in percent of the last 60 seconds in which something waited (`avg60`). Colours the PSI row under the load average (`cpu 4 % · 9 %  (10 s · 60 s)`: the 10 s and the 60 s figure). The row is omitted where the kernel has no `/proc/pressure` (macOS, FreeBSD, kernels without PSI). `memory` and `io` show only when above zero. |
 | `health.budget` | `8.0` | Total wall-clock budget in seconds for all health checks. Every check runs concurrently as its own task, so this bounds the login delay — it is not the sum of the individual timeouts. |
-| `health.timeout.*` | postgres `1.5`, mongodb `6.0`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See {doc}`How the timeouts are enforced </explanation/cluster-health>`. |
-| `health.enabled` | all five kinds | Which cluster kinds to probe: `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs`. |
+| `health.timeout.*` | postgres `1.5`, mongodb `6.0`, kafka `4.0`, glusterfs `1.0`, rustfs `2.0`, systemd `1.0`, wireguard `1.0`, dns `2.5` | Deadline for one check. Each cluster kind, the peer check and the DNS check are separate tasks; a task that overruns its value is reported as `… <name>: time budget exceeded` while every other check keeps its result. Values above `health.budget` have no effect — the budget always wins. See {doc}`How the timeouts are enforced </explanation/cluster-health>`. |
+| `health.enabled` | all eight kinds | Which kinds to probe: the cluster kinds `postgres`, `mongodb`, `kafka`, `glusterfs`, `rustfs` and the host kinds `systemd`, `vrrp`, `apache`. The host kinds need no Docker. `vrrp` and `apache` read the collector's state file and are *not applicable* (`n/a here`) without keepalived data or without `[health.apache] url`, respectively; without a state file, `vrrp` is an error line only where `/run/keepalived.pid` exists. Taking `vrrp` or `apache` out also stops the collector from gathering it. |
+| `health.apache.url` | *(unset)* | mod_status URL, without `?auto` (the collector adds it), e.g. `http://localhost/server-status`. Must be an `http://` or `https://` URL with a host and no query or fragment; anything else switches the kind off and is reported by `--debug`. Unset, the `apache` kind is *not applicable* and the collector does not fetch. |
+| `health.apache.requests_warning` / `.requests_critical` | *(unset)* | Requests per second at which the Apache line turns yellow / red. The request rate is coloured only when **both** are set; with one of them unset it carries no colour. |
+| `health.apache.slots_warning` / `.slots_critical` | `80` / `95` | Percent of scoreboard slots in use at which the Apache line turns yellow / red. |
+| `health.vrrp.lead_warning` / `.lead_critical` | `5` / `0` | Applied only where a BACKUP's *lead* is known (its effective priority minus the priority the master advertises). A lead of `lead_critical` or more is red; a lead within `lead_warning` below the master is yellow. A FAULT, STOP or DELETED instance is red regardless. |
+| `health.systemd.ignore` | `[]` | Unit names that may be failed without turning the `systemd` line red. Read like `health.<kind>.match`. |
+| `trouble.host_events` | all five kinds | Which host events TROUBLE reports, and which the collector counts: `oom_kill`, `vrrp_state`, `apache_slots_full`, `unit_failed`, `apache_reload`. `[]` reports none. An unknown name is dropped and reported by `--debug`; a repeated name counts once. When the list changes, the collector reads the whole twelve-hour window again. |
 | `health.dns.expect` | `[]` | Array of `{name, addresses}`. `addresses` is optional; without it the name only has to resolve at all. |
 | `health.postgres.match` / `health.mongodb.match` / `health.kafka.match` / `health.rustfs.match` | `["_pg-"]` / `["mongodb"]` / `["kafka_kafka-"]` / `["rustfs_rustfs"]` | Case-insensitive substrings of a container (and Swarm service) name that identify a member of that kind. Replaces the default rather than extending it. A bare string is one pattern; `[]` means no member of that kind on this host (it renders `n/a here`); an empty string is dropped and reported by `--debug`, because it would match every container. Names containing an entry of `docker.infra_ui_services` never count as members. |
 | `health.postgres.mode` | `"pg_auto_failover"` | `"pg_auto_failover"` runs `pg_autoctl show state` and reports every member. `"standalone"` runs `pg_isready` and reports one server: whether it accepts connections, nothing about replication. |
@@ -44,12 +52,51 @@ or unreadable file falls back to the built-in defaults — it never raises.
 | `managed.detail` | *(unset)* | One short line under the tool name. What it says is a local decision — `no local changes`, `changes via merge request only`, a ticket queue. |
 | `traefik.links` | `{}` | Table mapping an entrypoint **name** to the `http://` or `https://` base URL it is actually reached at, e.g. `login_example_de = "https://login.example.de"`. Independent of `traefik.url`/`cert`/`key`/`ca` above — it needs no connection to Traefik at all. See {doc}`Traefik wiring </explanation/traefik-wiring>` for why this has to be configured rather than derived. A value that is not a string, or does not start with `http://`/`https://`, is dropped; that entrypoint then simply has no links, the same as leaving it out. |
 
+(state-file-schema)=
+## The host state file, schema 1
+
+Not configuration: the file `status-collect` writes and the panel reads, at
+`/run/terminal-status-panel/host.json` (mode `0644`, replaced atomically). It
+holds numbers, states, counts and timestamps, and never log text, paths or
+client addresses. See {doc}`About host health </explanation/host-health>`.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `schema` | integer | Always `1`. Another value makes the panel report "host state unavailable (unknown schema)". |
+| `written_at` | number | Unix time of the run. The panel's *state N old* is measured from it; older than 120 s is stale. |
+| `collector` | string | Version of the package that wrote the file. |
+| `vrrp` | object or `null` | `null` when disabled or unreadable. |
+| `vrrp.source` | string | `keepalived-json`. |
+| `vrrp.instances[]` | list | One entry per VRRP instance. |
+| `vrrp.instances[].name` | string | Instance name (`iname`). |
+| `vrrp.instances[].state` | string | `MASTER`, `BACKUP`, `FAULT`, `INIT`, `STOP`, `DELETED` or `UNKNOWN`. |
+| `vrrp.instances[].base_priority`, `.effective_priority` | integer or `null` | The configured and the current priority. |
+| `vrrp.instances[].master_priority` | integer or `null` | The priority the master advertises. Meaningful on a BACKUP only. |
+| `apache` | object or `null` | `null` when `[health.apache] url` is unset or the read failed. |
+| `apache.window_s` | number | Seconds between this run and the previous reading; `0` without one. |
+| `apache.requests_per_s` | number or `null` | Rate over that window; `null` without a previous reading or after a restart. |
+| `apache.slots_busy`, `.workers_busy` | number or `null` | Shares between 0 and 1. |
+| `apache.slots_finishing` | integer or `null` | Slots held by gracefully finishing processes (`G`). |
+| `updates` | object or `null` | `null` where no simulation could run. After a failed simulation, the previous counts with their `checked_at`, and `errors.updates` set. |
+| `updates.checked_at` | number | Unix time of the last successful simulation (at most hourly). |
+| `updates.available`, `.security` | integer | Counts from the simulated upgrade. |
+| `updates.source` | string | `apt-simulate`. |
+| `events` | object | Per enabled event kind: `{"count": integer, "last": number or null}`. Empty if none is enabled. After a failed journal read, the last known counts, and `errors.events` set. |
+| `events_window_s` | integer | The window the counts cover: `43200` (12 h). |
+| `errors` | object | Per source (`vrrp`, `apache`, `updates`, `events`) `null` or a short code: `not-installed`, `no-permission`, `timeout`, `parse`, `unreachable`, `apt-failed`, `cleanup` (the keepalived copy could not be deleted), `internal`. |
+
+Keys the panel does not know are ignored. Every *number* is finite: a file
+holding `NaN` or `Infinity` in any field reads as `host state unreadable`.
+
 ## Full example
 
 ```toml
 # Fallback width for non-TTY (MOTD) rendering. Interactive logins auto-detect
 # the real terminal width regardless of this value.
 width = 200
+
+# What a bare status-full renders; unset, the host decides.
+sections = ["server", "health", "trouble"]
 
 [docker]
 timeout = 1.5
@@ -77,9 +124,13 @@ critical = 90
 warning = 0.8   # per-CPU multiplier
 critical = 1.0
 
+[thresholds.psi]
+warning = 10    # percent of the last 60 s
+critical = 25
+
 [health]
 budget = 5.0
-enabled = ["postgres", "mongodb", "kafka", "glusterfs", "rustfs"]
+enabled = ["postgres", "mongodb", "kafka", "glusterfs", "rustfs", "systemd", "vrrp", "apache"]
 
 [health.timeout]
 postgres = 1.5
@@ -89,6 +140,23 @@ glusterfs = 1.0
 rustfs = 2.0
 wireguard = 1.0
 dns = 2.5
+
+[health.apache]
+url = "http://localhost/server-status"
+requests_warning = 400
+requests_critical = 800
+slots_warning = 80
+slots_critical = 95
+
+[health.vrrp]
+lead_warning = 5
+lead_critical = 0
+
+[health.systemd]
+ignore = ["example-optional.service"]
+
+[trouble]
+host_events = ["oom_kill", "vrrp_state", "apache_slots_full", "unit_failed", "apache_reload"]
 
 [[health.dns.expect]]
 name = "login.example.net"

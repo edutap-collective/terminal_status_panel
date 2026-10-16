@@ -1,0 +1,56 @@
+[
+  {
+    "data": {
+      "iname": "vi_1",
+      "dont_track_primary": 0,
+      "skip_check_adv_addr": 0,
+      "strict_mode": 0,
+      "vmac_ifname": "",
+      "ifp_ifname": "eth0",
+      "master_priority": 200,
+      "last_transition": 1792106720.49136,
+      "garp_delay": 5,
+      "garp_refresh": 0,
+      "garp_rep": 5,
+      "garp_refresh_rep": 1,
+      "garp_lower_prio_delay": 5,
+      "garp_lower_prio_rep": 5,
+      "lower_prio_no_advert": 0,
+      "higher_prio_send_advert": 0,
+      "vrid": 51,
+      "base_priority": 190,
+      "effective_priority": 190,
+      "vipset": false,
+      "promote_secondaries": false,
+      "adver_int": 1,
+      "master_adver_int": 1,
+      "accept": 1,
+      "nopreempt": false,
+      "preempt_delay": 0,
+      "state": 1,
+      "wantstate": 1,
+      "version": 2,
+      "smtp_alert": false,
+      "notify_deleted": false,
+      "vips": [
+        "192.0.2.10 dev eth0 scope global"
+      ]
+    },
+    "stats": {
+      "advert_rcvd": 13,
+      "advert_sent": 0,
+      "become_master": 0,
+      "release_master": 0,
+      "packet_len_err": 0,
+      "advert_interval_err": 0,
+      "ip_ttl_err": 0,
+      "invalid_type_rcvd": 0,
+      "addr_list_err": 0,
+      "invalid_authtype": 0,
+      "authtype_mismatch": 0,
+      "auth_failure": 0,
+      "pri_zero_rcvd": 0,
+      "pri_zero_sent": 0
+    }
+  }
+]

@@ -68,8 +68,8 @@ status panel that guessed instead would be worse than one that says nothing.
 ```
 
 This is the command a login shell runs. On a machine with clustered services it
-adds **CLUSTER HEALTH** and **TRAEFIK WIRING**; on a plain host those sections
-say they found nothing to check, and the panel is shorter.
+adds the cluster blocks of **HEALTH** and **TRAEFIK WIRING**; on a plain host those
+sections say they found nothing to check, and the panel is shorter.
 
 Run it once more with the diagnostic channel open:
 

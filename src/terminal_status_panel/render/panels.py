@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Callable, Sequence
 from datetime import datetime
 
@@ -162,10 +163,29 @@ def system_overview(info: SystemInfo | None) -> Group:
     return section("SYSTEM OVERVIEW", body)
 
 
-def updates_panel(updates: UpdateInfo | None) -> Group:
-    """The UPDATES block, or a note that this platform cannot report them."""
+#: Twice the collector's update interval: older than this, the counts are a memory.
+UPDATES_OLD_AFTER_SECONDS = 2 * 3600
+
+
+def _updates_notes(updates: UpdateInfo, now: float | None) -> list[Text]:
+    """How old the counts are, and whether the last check failed -- where it matters."""
+    notes = []
+    if updates.checked_at is not None:
+        age = (time.time() if now is None else now) - updates.checked_at
+        if age > UPDATES_OLD_AFTER_SECONDS:
+            notes.append(Text(f"checked {int(age // 3600)} h ago", style="dim"))
+    if updates.problem:
+        notes.append(Text(f"last check failed ({updates.problem})", style="yellow"))
+    return notes
+
+
+def updates_panel(updates: UpdateInfo | None, now: float | None = None) -> Group:
+    """The UPDATES block, or a note that this platform cannot report them.
+
+    *now* defaults to the clock; it is the reference for the counts' age.
+    """
     if updates is None or not updates.supported:
-        body = Text("n/a (not a Debian/Ubuntu system)", style="dim")
+        body = Text("n/a (no update source on this system)", style="dim")
         return section("UPDATES", body)
 
     security = updates.security or 0
@@ -190,6 +210,8 @@ def updates_panel(updates: UpdateInfo | None) -> Group:
             (str(updates.standard if updates.standard is not None else "?"), "yellow"),
         )
     )
+    for note in _updates_notes(updates, now):
+        table.add_row(note)
     return section("UPDATES", table)
 
 
@@ -269,6 +291,24 @@ def _load_text(load_avg, cpu_count, thresholds: Thresholds) -> Text:
     return text
 
 
+def _pressure_text(pressure: dict[str, tuple[float, float]], thresholds: Thresholds) -> Text:
+    """``cpu 4 % · 9 %`` -- avg10 · avg60; coloured by avg60; others only when above zero."""
+    text = Text()
+    for resource in ("cpu", "memory", "io"):
+        if resource not in pressure:
+            continue
+        avg10, avg60 = pressure[resource]
+        if resource != "cpu" and avg10 == 0 and avg60 == 0:
+            continue
+        status = classify(avg60, thresholds.psi_warning, thresholds.psi_critical)
+        if text:
+            text.append("   ")
+        text.append(f"{resource} ", style="dim")
+        text.append(f"{avg10:.0f} % · {avg60:.0f} %", style=STATUS_COLORS.get(status, "white"))
+    text.append("  (10 s · 60 s)", style="dim")
+    return text
+
+
 def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
     head = Table.grid(padding=(0, 1))
     head.add_column(style="bold cyan")
@@ -282,6 +322,8 @@ def _load_body(res: ResourceUsage, cfg: Config) -> RenderableType:
             render_bar(res.cpu_percent, status, width=44),
             Text(f"{res.cpu_percent:5.1f}%", style=STATUS_COLORS.get(status, "white")),
         )
+    if res.pressure:
+        head.add_row("PSI", _pressure_text(res.pressure, cfg.thresholds), "")
 
     parts: list[RenderableType] = [head]
     if res.cpu_per_core:
@@ -753,17 +795,22 @@ def _trouble_table(entries) -> Table:
     return table
 
 
-def _trouble_block(entries) -> RenderableType | None:
+def _trouble_block(entries, notes: Sequence[RenderableType] = ()) -> RenderableType | None:
     """The TROUBLE block, or None when there is nothing to report.
 
     Nothing is the normal state, and it renders as nothing at all -- not as an
     empty heading. A block that is present every day stops being read on the
-    day it has something to say.
+    day it has something to say. *notes* (source warnings) are something to
+    say: they render below the rows, or alone under the heading.
     """
-    if not entries:
+    if not entries and not notes:
         return None
     hours = TROUBLE_WINDOW_SECONDS // 3600
-    return Group(_subhead(f"TROUBLE  (last {hours} h)"), _trouble_table(entries))
+    parts: list[RenderableType] = [_subhead(f"TROUBLE  (last {hours} h)")]
+    if entries:
+        parts.append(_trouble_table(entries))
+    parts.extend(notes)
+    return Group(*parts)
 
 
 #: Marks a figure measured against a reservation rather than a limit. The two
@@ -1496,9 +1543,6 @@ def services_section(
         # with dozens of services; a host without a swarm has the room, and an
         # accumulated Docker is likelier there, not less.
         plain: list[RenderableType] = [*legend, _disk_row(swarm.disk, resources), Text("")]
-        trouble = _trouble_block(swarm.trouble)
-        if trouble is not None:
-            plain += [trouble, Text("")]
         plain.append(_stack_columns(swarm, cfg, health))
         return section("DOCKER INFOS", Group(*plain))
 
@@ -1508,13 +1552,5 @@ def services_section(
         _swarm_body(swarm, health.peers if health else None, resources),
         Text(""),
     ]
-    # Between the header and the stacks, and only when it has something to
-    # say. Appended below sixty stack rows it would be read by nobody who was
-    # not already scrolling; here it stands where the warning it explains was
-    # raised, and in the normal case it displaces nothing because it does not
-    # exist.
-    trouble = _trouble_block(swarm.trouble)
-    if trouble is not None:
-        parts += [trouble, Text("")]
     parts.append(_stack_columns(swarm, cfg, health))
     return section("DOCKER INFOS", Group(*parts))

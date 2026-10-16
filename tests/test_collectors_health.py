@@ -92,14 +92,19 @@ def test_no_docker_client_still_yields_network_and_dns(monkeypatch):
     monkeypatch.setattr(
         health_collector, "collect_dns", lambda **kwargs: [DnsCheck(label="Resolver", ok=True)]
     )
-    health = health_collector.collect_health(
-        _config(), peer_names=[], client=None, resolve_fqdn=_fqdn
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
     )
-    assert health.clusters == []
+    health = health_collector.collect_health(
+        _config(), peer_names=[], client=None, resolve_fqdn=_fqdn, docker_present=False
+    )
     assert health.dns[0].label == "Resolver"
-    # No client means the clusters check was never attempted, not that it
-    # ran and found nothing.
-    assert health.clusters_probed is False
+    # Without a client only the host-run kind (glusterfs) is attempted; the
+    # Docker-bound kinds are not, and are not reported as having found nothing.
+    assert [c.kind for c in health.clusters] == ["glusterfs"]
+    assert health.clusters_probed is True
 
 
 def test_no_enabled_kinds_means_clusters_never_probed(monkeypatch):
@@ -388,3 +393,167 @@ def test_collect_health_hands_the_probes_the_configured_settings(monkeypatch):
     health_collector.collect_health(cfg, peer_names=[], client=object(), resolve_fqdn=_fqdn)
 
     assert seen[0].kafka.match == ("demo_kafka",)
+
+
+def test_host_kinds_run_without_docker(monkeypatch):
+    from types import SimpleNamespace
+
+    from terminal_status_panel.collectors import host
+    from terminal_status_panel.collectors.hoststate import HostStateRead
+
+    monkeypatch.setattr(
+        host.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="")
+    )
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **k: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda *a, **k: [])
+    info = health_collector.collect_health(
+        Config(),
+        [],
+        client=None,
+        host=HostStateRead(problem="missing"),
+        docker_present=False,
+    )
+    kinds = [c.kind for c in info.host]
+    assert "systemd" in kinds and info.docker_present is False
+    # Only host-run cluster kinds without Docker.
+    assert [c.kind for c in info.clusters] in ([], ["glusterfs"])
+
+
+def _quiet(monkeypatch):
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **k: [])
+    monkeypatch.setattr(health_collector, "collect_peers", lambda *a, **k: [])
+
+
+def test_unreachable_docker_marks_docker_bound_kinds_unchecked(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
+    )
+    info = health_collector.collect_health(
+        Config(), [], client=None, docker_present=True, resolve_fqdn=_fqdn
+    )
+    marked = {c.kind: c.error for c in info.clusters if c.error}
+    assert marked == dict.fromkeys(
+        ("postgres", "mongodb", "kafka", "rustfs"), "not checked (no Docker client)"
+    )
+
+
+def test_no_docker_here_skips_docker_bound_kinds_silently(monkeypatch):
+    _quiet(monkeypatch)
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(kind=kind),
+    )
+    info = health_collector.collect_health(
+        Config(), [], client=None, docker_present=False, resolve_fqdn=_fqdn
+    )
+    assert [c.kind for c in info.clusters] == ["glusterfs"]
+
+
+def test_probe_cluster_never_receives_host_kinds(monkeypatch):
+    _quiet(monkeypatch)
+    seen = []
+
+    def record(index, kind, timeout, settings=None):
+        seen.append(kind)
+        return ClusterService(kind=kind)
+
+    monkeypatch.setattr(health_collector, "probe_cluster", record)
+    health_collector.collect_health(Config(), [], client=object(), resolve_fqdn=_fqdn)
+    assert seen and not {"systemd", "vrrp", "apache"} & set(seen)
+
+
+def test_truncated_host_task_is_named_without_prefix(monkeypatch):
+    import time
+
+    _quiet(monkeypatch)
+    monkeypatch.setattr(health_collector, "probe_systemd", lambda t, i: time.sleep(5))
+    info = health_collector.collect_health(
+        _config(budget=0.3, enabled=["systemd"]), [], client=None, resolve_fqdn=_fqdn
+    )
+    assert "systemd" in info.truncated
+
+
+def test_swarm_node_without_collector_or_keepalived_shows_no_red_vrrp_line(monkeypatch, tmp_path):
+    """A Docker node with clusters and peers, no state file and no keepalived."""
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from terminal_status_panel.collectors import host
+    from terminal_status_panel.collectors.hoststate import HostStateRead
+    from terminal_status_panel.render import icons
+    from terminal_status_panel.render.health import health_section
+
+    monkeypatch.setattr(host, "KEEPALIVED_PIDFILE", str(tmp_path / "keepalived.pid"))
+    monkeypatch.setattr(
+        host.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="")
+    )
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(
+            kind=kind, name=f"demo_{kind}", reachable=True, quorum_ok=True
+        ),
+    )
+    monkeypatch.setattr(
+        health_collector,
+        "collect_peers",
+        lambda names, timeout: [PeerReachability(name="node-b", method="wireguard", ok=True)],
+    )
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **k: [])
+    cfg = Config()
+    info = health_collector.collect_health(
+        cfg,
+        ["node-b"],
+        client=object(),
+        resolve_fqdn=_fqdn,
+        host=HostStateRead(problem="missing"),
+        docker_present=True,
+    )
+    console = Console(width=120, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(health_section(info, cfg))
+    out = capture.get()
+    assert "CLUSTERS" in out and "demo_postgres" in out
+    assert "PEERS" in out and "node-b" in out
+    assert "host state unavailable" not in out
+    assert f"{icons.FAILED} VRRP" not in out
+    na_line = next(line for line in out.splitlines() if "n/a here:" in line)
+    assert "VRRP" in na_line
+
+
+def _host_with_events_error():
+    from terminal_status_panel.model.host import HostState, HostStateRead
+
+    state = HostState(written_at=1.0, collector="x", errors={"events": "no-permission"})
+    return HostStateRead(state=state, age_s=5.0)
+
+
+def _collect_host_only(monkeypatch, cfg, read):
+    from types import SimpleNamespace
+
+    from terminal_status_panel.collectors import host
+
+    monkeypatch.setattr(
+        host.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="")
+    )
+    _quiet(monkeypatch)
+    return health_collector.collect_health(
+        cfg, [], client=None, host=read, docker_present=False, resolve_fqdn=_fqdn
+    )
+
+
+def test_journal_error_is_passed_on_when_host_events_are_enabled(monkeypatch):
+    info = _collect_host_only(monkeypatch, Config(), _host_with_events_error())
+    assert info.journal_error == "no-permission"
+
+
+def test_journal_error_is_dropped_when_no_host_event_is_enabled(monkeypatch):
+    info = _collect_host_only(
+        monkeypatch, Config(trouble_host_events=()), _host_with_events_error()
+    )
+    assert info.journal_error is None

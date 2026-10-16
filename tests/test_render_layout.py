@@ -67,7 +67,7 @@ def test_build_layout_renders_only_the_requested_section():
     with console.capture() as capture:
         console.print(build_layout(data, Config(), sections=("health",)))
     output = capture.get()
-    assert "CLUSTER HEALTH" in output
+    assert "HEALTH" in output
     assert "DOCKER" not in output
 
 
@@ -94,8 +94,8 @@ def test_the_default_sections_are_pinned():
     """
     from terminal_status_panel import cli
 
-    assert cli.DEFAULT_SECTIONS == ("server", "docker", "health", "traefik")
-    assert SECTIONS == ("server", "docker", "health", "traefik")
+    assert cli.DEFAULT_SECTIONS == ("server", "health", "trouble", "docker", "traefik")
+    assert SECTIONS == ("server", "health", "trouble", "docker", "traefik")
 
 
 def test_a_section_is_rendered_the_same_beside_others_as_alone():

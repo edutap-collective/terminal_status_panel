@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from . import platform_defaults
+from .model.host import HOST_EVENT_KINDS
+
+#: Every section the layout can build, in render order.
+SECTION_NAMES: tuple[str, ...] = ("server", "health", "trouble", "docker", "traefik")
 
 #: Docker service label read as the per-service description column.
 #: Vendor-neutral, as befits a public package.
@@ -40,6 +44,8 @@ class Thresholds:
     filesystem_critical: float = 90.0
     load_warning: float = 0.8  # per-CPU multiplier
     load_critical: float = 1.0  # per-CPU multiplier
+    psi_warning: float = 10.0  # percent of time stalled, avg60
+    psi_critical: float = 25.0
 
 
 @dataclass
@@ -103,9 +109,35 @@ class RustfsProbe:
     scheme: str = "https"
 
 
+@dataclass(frozen=True)
+class ApacheProbe:
+    """Where mod_status answers, and when its figures turn yellow or red."""
+
+    url: str | None = None  # e.g. http://localhost/server-status ; None: kind off
+    requests_warning: float | None = None  # req/s per host; None: no colour
+    requests_critical: float | None = None
+    slots_warning: float = 80.0  # percent of scoreboard slots taken
+    slots_critical: float = 95.0
+
+
+@dataclass(frozen=True)
+class VrrpProbe:
+    """How close a BACKUP may come to taking over before it is worth a colour."""
+
+    lead_warning: int = 5
+    lead_critical: int = 0
+
+
+@dataclass(frozen=True)
+class SystemdProbe:
+    """Units that may be failed without turning the line red."""
+
+    ignore: tuple[str, ...] = ()
+
+
 @dataclass
 class HealthConfig:
-    """What the CLUSTER HEALTH section may probe, and how long it may take."""
+    """What the HEALTH section may probe, and how long it may take."""
 
     #: Wall clock for the whole section. The checks run concurrently, so this
     #: bounds the login delay rather than summing the values below.
@@ -125,6 +157,9 @@ class HealthConfig:
     mongodb: MongoProbe = field(default_factory=MongoProbe)
     kafka: KafkaProbe = field(default_factory=KafkaProbe)
     rustfs: RustfsProbe = field(default_factory=RustfsProbe)
+    apache: ApacheProbe = field(default_factory=ApacheProbe)
+    vrrp: VrrpProbe = field(default_factory=VrrpProbe)
+    systemd: SystemdProbe = field(default_factory=SystemdProbe)
 
 
 DEFAULT_INFRASTRUCTURE_STACKS = [
@@ -175,7 +210,16 @@ DEFAULT_INFRA_UI_SERVICES = [
     "kibana",
 ]
 
-DEFAULT_HEALTH_KINDS = ("postgres", "mongodb", "kafka", "glusterfs", "rustfs")
+DEFAULT_HEALTH_KINDS = (
+    "postgres",
+    "mongodb",
+    "kafka",
+    "glusterfs",
+    "rustfs",
+    "systemd",
+    "vrrp",
+    "apache",
+)
 
 # One timeout per check. Every check — each cluster kind, the WireGuard peers,
 # DNS — runs as its own task under the shared budget, and its timeout is the
@@ -204,6 +248,7 @@ DEFAULT_HEALTH_TIMEOUTS = {
     "kafka": 4.0,
     "glusterfs": 1.0,
     "rustfs": 2.0,
+    "systemd": 1.0,
     "wireguard": 1.0,
     "dns": 2.5,
 }
@@ -308,6 +353,12 @@ class Config:
     #: exec probes -- the Kafka one alone carries roughly 2.6 s of JVM startup
     #: -- so a five-second cadence would keep a JVM starting forever.
     follow_health_interval: float = 20.0
+    #: Sections a bare ``status-full`` renders, from the top-level ``sections``
+    #: key. ``None`` means "decide by what the host has": Docker sections are
+    #: dropped on a host without Docker.
+    sections: tuple[str, ...] | None = None
+    #: Host event kinds the TROUBLE section reports.
+    trouble_host_events: tuple[str, ...] = HOST_EVENT_KINDS
     #: Values in the config file that could not be used, with what was used
     #: instead. Empty for a valid file and for a missing one -- absent is not
     #: malformed. Shown by ``--debug``; the panel itself renders regardless.
@@ -501,6 +552,38 @@ class _Reader:
             )
         return tuple(kept)
 
+    def members(
+        self, section: dict, key: str, allowed: tuple[str, ...], default: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """A list of names, each from a fixed set; unknown ones are dropped and reported.
+
+        An empty list is a statement ("none of these") and is taken as written.
+        A value that is not a list falls back to *default*.
+        """
+        name = key.rsplit(".", 1)[-1]
+        if name not in section:
+            return default
+        raw = section[name]
+        if not isinstance(raw, list):
+            self._note(key, raw, list(default), "expected a list of names")
+            return default
+        kept: list[str] = []
+        for entry in raw:
+            if isinstance(entry, str) and entry in allowed:
+                # A repeated name is kept once: twice would count or render it twice.
+                if entry not in kept:
+                    kept.append(entry)
+                continue
+            self.problems.append(
+                ConfigProblem(
+                    key=key,
+                    found=repr(entry),
+                    used="nothing (entry dropped)",
+                    reason=f"expected one of: {', '.join(allowed)}",
+                )
+            )
+        return tuple(kept)
+
     def choice(self, section: dict, key: str, default: str, allowed: tuple[str, ...]) -> str:
         """A string from a fixed set of values."""
         value = self.text(section, key, default)
@@ -610,6 +693,9 @@ _HEALTH_KIND_KEYS: dict[str, set[str]] = {
     "mongodb": {"match"},
     "kafka": {"match", "command_config"},
     "rustfs": {"match", "scheme"},
+    "apache": {"url", "requests_warning", "requests_critical", "slots_warning", "slots_critical"},
+    "vrrp": {"lead_warning", "lead_critical"},
+    "systemd": {"ignore"},
 }
 
 #: Every table ``[health]`` may contain. Anything else is a misspelling.
@@ -619,6 +705,44 @@ _HEALTH_TABLES = {"timeout", "dns", *_HEALTH_KIND_KEYS}
 #: this block does not read -- is as much a misspelling as an unknown table,
 #: and is reported the same way.
 _HEALTH_SCALAR_KEYS = {"budget", "enabled"}
+
+
+def _optional_number(reader: _Reader, section: dict, key: str) -> float | None:
+    """A threshold that may be absent: absent or invalid means "no colour", not 0."""
+    if key.rsplit(".", 1)[-1] not in section:
+        return None
+    value = reader.number(section, key, -1.0, minimum=0.0)
+    return None if value < 0 else value
+
+
+def _host_kind_configs(data: dict, reader: _Reader) -> tuple[ApacheProbe, VrrpProbe, SystemdProbe]:
+    """The three host-kind tables of [health]."""
+    ap = _section(data, "health", "apache")
+    apache_url = _web_url(reader.text(ap, "health.apache.url", "")) if "url" in ap else None
+    if "url" in ap and apache_url is None:
+        reader.problems.append(
+            ConfigProblem(
+                key="health.apache.url",
+                found=repr(ap["url"]),
+                used="kind off",
+                reason="expected an http:// or https:// URL with a host, without query",
+            )
+        )
+    apache = ApacheProbe(
+        url=apache_url,
+        requests_warning=_optional_number(reader, ap, "health.apache.requests_warning"),
+        requests_critical=_optional_number(reader, ap, "health.apache.requests_critical"),
+        slots_warning=reader.number(ap, "health.apache.slots_warning", 80.0, minimum=0.0),
+        slots_critical=reader.number(ap, "health.apache.slots_critical", 95.0, minimum=0.0),
+    )
+    vr = _section(data, "health", "vrrp")
+    vrrp = VrrpProbe(
+        lead_warning=reader.integer(vr, "health.vrrp.lead_warning", 5),
+        lead_critical=reader.integer(vr, "health.vrrp.lead_critical", 0),
+    )
+    sd = _section(data, "health", "systemd")
+    systemd = SystemdProbe(ignore=reader.patterns(sd, "health.systemd.ignore", ()))
+    return apache, vrrp, systemd
 
 
 def _health_config(data: dict, reader: _Reader) -> HealthConfig:
@@ -698,6 +822,8 @@ def _health_config(data: dict, reader: _Reader) -> HealthConfig:
         scheme=reader.choice(rustfs_section, "health.rustfs.scheme", "https", RUSTFS_SCHEMES),
     )
 
+    apache, vrrp, systemd = _host_kind_configs(data, reader)
+
     return HealthConfig(
         budget=budget,
         timeouts=timeouts,
@@ -707,6 +833,9 @@ def _health_config(data: dict, reader: _Reader) -> HealthConfig:
         mongodb=mongodb,
         kafka=kafka,
         rustfs=rustfs,
+        apache=apache,
+        vrrp=vrrp,
+        systemd=systemd,
     )
 
 
@@ -735,6 +864,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
     swap = _section(data, "thresholds", "swap")
     fs = _section(data, "thresholds", "filesystem")
     load = _section(data, "thresholds", "load")
+    psi = _section(data, "thresholds", "psi")
     thresholds = Thresholds(
         memory_warning=reader.number(mem, "thresholds.memory.warning", t.memory_warning),
         memory_critical=reader.number(mem, "thresholds.memory.critical", t.memory_critical),
@@ -745,6 +875,8 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         ),
         load_warning=reader.number(load, "thresholds.load.warning", t.load_warning),
         load_critical=reader.number(load, "thresholds.load.critical", t.load_critical),
+        psi_warning=reader.number(psi, "thresholds.psi.warning", t.psi_warning, minimum=0.0),
+        psi_critical=reader.number(psi, "thresholds.psi.critical", t.psi_critical, minimum=0.0),
     )
     docker = _section(data, "docker")
     services = _section(data, "services")
@@ -777,6 +909,13 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         match=reader.patterns(traefik_section, "traefik.match", DEFAULT_TRAEFIK_MATCH),
     )
     health_config = _health_config(data, reader)
+    chosen = reader.members(data, "sections", SECTION_NAMES, ())
+    sections = chosen or None
+    trouble_section = _section(data, "trouble")
+    reader.unknown_keys(trouble_section, "trouble", {"host_events"})
+    host_events = reader.members(
+        trouble_section, "trouble.host_events", HOST_EVENT_KINDS, HOST_EVENT_KINDS
+    )
     follow_section = _section(data, "follow")
     follow_interval = reader.number(follow_section, "follow.interval", 5.0, minimum=0.1)
     follow_health_interval = reader.number(
@@ -807,5 +946,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         top_processes=top_processes,
         follow_interval=follow_interval,
         follow_health_interval=follow_health_interval,
+        sections=sections,
+        trouble_host_events=host_events,
         problems=reader.problems,
     )

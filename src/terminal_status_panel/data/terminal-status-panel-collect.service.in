@@ -1,0 +1,28 @@
+[Unit]
+Description=terminal-status-panel host state collector
+Documentation=https://github.com/edutap-collective/terminal_status_panel
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+User=status-collector
+SupplementaryGroups=systemd-journal
+RuntimeDirectory=terminal-status-panel
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StateDirectory=terminal-status-panel
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+# The one privileged step: ask keepalived for its state. "-" never stops the
+# run, "+" lifts User= and the namespacing for this line only.
+ExecStartPre=-+/usr/lib/terminal-status-panel/keepalived-dump
+ExecStart={bin_dir}/status-collect
+# The dump copy holds the VRRP password. status-collect deletes it on every
+# run; this catches a run that never started. No "+": the runtime directory
+# belongs to the dynamic user, which may delete in it.
+ExecStopPost=-/bin/rm -f %t/terminal-status-panel/keepalived.json

@@ -1,0 +1,73 @@
+#!/bin/sh
+# Ask keepalived for a JSON dump of its VRRP state and hand the collector a
+# private copy. The dump contains the VRRP password when one is set, which is
+# why the copy is 0600 and owned by the collector (the owner of the runtime
+# directory), which deletes it after reading.
+#
+# Runs as root, so nothing in a user-writable place is trusted: the pid file
+# must name a keepalived process, and the dump must be a regular file owned by
+# root with no second name (link count 1). The TSP_* variables exist for the
+# tests; production uses the defaults.
+pidfile=${TSP_PIDFILE:-/run/keepalived.pid}
+dump=${TSP_DUMP:-/tmp/keepalived.json}
+rundir=${TSP_RUNDIR:-/run/terminal-status-panel}
+owner=${TSP_OWNER:-0}
+proc=${TSP_PROC:-/proc}
+keepalived=${TSP_KEEPALIVED:-keepalived}
+dest=$rundir/keepalived.json
+workroot=${TSP_WORKROOT:-/run}
+
+[ -r "$pidfile" ] || exit 0
+command -v "$keepalived" >/dev/null 2>&1 || exit 0
+pid=$(cat "$pidfile" 2>/dev/null) || exit 0
+case $pid in
+'' | *[!0-9]*) exit 0 ;;
+esac
+[ "$(cat "$proc/$pid/comm" 2>/dev/null)" = keepalived ] || exit 0
+sig=$("$keepalived" --signum=JSON 2>/dev/null) || exit 0
+case $sig in
+'' | *[!0-9]*) exit 0 ;;
+esac
+rm -f "$dump"
+kill "-$sig" "$pid" 2>/dev/null || exit 0
+# keepalived may write the dump in several parts: it is complete once its
+# size is the same on two polls 0.1 s apart. Within about one second, or not
+# at all -- an unfinished dump is not copied. It then stays as keepalived
+# left it (root, 0600), and the next run removes it before signalling.
+i=0
+last=
+settled=
+while [ "$i" -lt 10 ]; do
+    sleep 0.1
+    i=$((i + 1))
+    [ -s "$dump" ] || continue
+    size=$(stat -c %s "$dump" 2>/dev/null) || continue
+    if [ "$size" = "$last" ]; then
+        settled=1
+        break
+    fi
+    last=$size
+done
+[ -n "$settled" ] || exit 0
+[ -f "$dump" ] && [ ! -L "$dump" ] && [ "$(stat -c %u "$dump")" = "$owner" ] || exit 0
+# A second name for the inode is a hard link someone else made: refuse it
+# without relying on fs.protected_hardlinks alone.
+[ "$(stat -c %h "$dump")" = 1 ] || exit 0
+[ -s "$dump" ] || exit 0
+
+# The copy is made in a fresh directory only root can enter (mktemp -d is
+# 0700), never in the collector's runtime directory, where it could plant a
+# symlink, FIFO or device. Only the finished file is moved into place.
+work=$(mktemp -d "$workroot/terminal-status-panel-dump.XXXXXX") || exit 0
+copy=$work/keepalived.json
+if (
+    umask 077
+    cat "$dump" >"$copy"
+) && chown -h --reference="$rundir" "$copy" && mv -fT "$copy" "$dest"; then
+    :
+else
+    rm -f "$copy"
+fi
+rmdir "$work" 2>/dev/null
+rm -f "$dump"
+exit 0

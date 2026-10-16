@@ -162,6 +162,10 @@ class TroubleEntry:
     #: than admitting the gap.
     cause: str | None = None
     severity: str = "dead"
+    #: Where the row comes from: ``swarm`` (a task history), ``container`` (a
+    #: local inspect) or ``host`` (the collector's journal counts). Rendered
+    #: together; kept apart so each source can say what it can and cannot know.
+    source: str = "container"
 
     @property
     def rank(self) -> int:

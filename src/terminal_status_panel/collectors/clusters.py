@@ -1101,26 +1101,37 @@ def probe_rustfs(
     return service
 
 
-_PROBES: dict[str, Callable[[ContainerIndex, float, ProbeSettings], ClusterService]] = {
+def _docker_index(index: ContainerIndex | None) -> ContainerIndex:
+    """The index a Docker-bound probe needs; ``probe_cluster`` reports its absence."""
+    if index is None:
+        raise RuntimeError("no Docker client")
+    return index
+
+
+_PROBES: dict[str, Callable[[ContainerIndex | None, float, ProbeSettings], ClusterService]] = {
     # The three docker-exec probes cannot enforce a timeout themselves:
     # docker-py bounds an exec by the client's socket timeout, not per call.
     # Their configured timeout is enforced by the budget thread that runs them
     # (``budget.run_with_budget``), and the health client's socket timeout is
     # built so that it never expires first (``cli._health_socket_timeout``).
-    "postgres": lambda index, _timeout, settings: probe_postgres(index, settings),
+    "postgres": lambda index, _timeout, settings: probe_postgres(_docker_index(index), settings),
     # Unlike its two neighbours this one *does* use its timeout: not to bound
     # the exec, which docker-py cannot do per call, but to compute the deadline
     # the fan-out inside mongosh checks itself.
-    "mongodb": lambda index, timeout, settings: probe_mongodb(index, timeout, settings),
-    "kafka": lambda index, _timeout, settings: probe_kafka(index, settings),
+    "mongodb": lambda index, timeout, settings: probe_mongodb(
+        _docker_index(index), timeout, settings
+    ),
+    "kafka": lambda index, _timeout, settings: probe_kafka(_docker_index(index), settings),
     # These two spawn their own child process / curl and enforce it directly.
     "glusterfs": lambda _index, timeout, _settings: probe_glusterfs(timeout),
-    "rustfs": lambda index, timeout, settings: probe_rustfs(index, timeout, settings),
+    "rustfs": lambda index, timeout, settings: probe_rustfs(
+        _docker_index(index), timeout, settings
+    ),
 }
 
 
 def probe_cluster(
-    index: ContainerIndex,
+    index: ContainerIndex | None,
     kind: str,
     timeout: float = DEFAULT_KIND_TIMEOUT,
     settings: ProbeSettings | None = None,

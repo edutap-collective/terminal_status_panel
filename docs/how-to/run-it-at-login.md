@@ -75,7 +75,7 @@ Options:
 | `--panel` | `full` \| `server` \| `docker` \| `health` \| `traefik` | `full` | Which command to run; repeatable. |
 | `--shell` | `auto` \| `bash` \| `zsh` | `auto` | Target profile; `zsh` uses `zprofile` (zsh does not read `/etc/profile`). |
 | `--uninstall` | — | — | Remove a previous install. |
-| `--dry-run` | — | — | Show what would change, write nothing. |
+| `--dry-run` | — | — | Show what would change, write nothing. Not available with `--collector`, which refuses it (exit 1). |
 
 Global vs. user gives you flexibility: roll it out for everyone via
 `/etc/profile.d`, or let individual users opt in (or override the global one)

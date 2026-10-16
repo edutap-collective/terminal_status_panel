@@ -6,6 +6,8 @@ pip install terminal-status-panel     # from PyPI, once published
 pip install .
 ```
 
-This installs five panel commands (`status-full`, `status-server`,
-`status-docker`, `status-health`, `status-traefik`) plus an `install-panel`
-helper to wire it into a login shell.
+This installs six panel commands (`status-full`, `status-server`,
+`status-docker`, `status-health`, `status-trouble`, `status-traefik`), the
+`status-collect` collector, and an `install-panel` helper to wire the panel
+into a login shell. The collector is optional; see
+{doc}`install-the-collector`.

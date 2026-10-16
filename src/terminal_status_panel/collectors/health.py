@@ -17,19 +17,25 @@ from __future__ import annotations
 import socket
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 
 from ..budget import run_with_budget
 from ..config import Config
 from ..model import ClusterService, DnsCheck, HealthInfo, PeerReachability
+from ..model.host import HostCheck, HostStateRead
 from .clusters import DEFAULT_KIND_TIMEOUT, ContainerIndex, ProbeSettings, probe_cluster
 from .dns import collect_dns
+from .host import HOST_KINDS, check_apache, check_vrrp, probe_systemd
 from .network import collect_peers
 
 # Cluster tasks are registered under a prefix so a configured kind can never
 # collide with the "peers" or "dns" task names.
 _CLUSTER_TASK_PREFIX = "cluster:"
+_HOST_TASK_PREFIX = "host:"
+
+#: Cluster kinds whose probe runs on this host and needs no Docker client.
+HOST_RUN_CLUSTER_KINDS = ("glusterfs",)
 
 
 @dataclass
@@ -46,6 +52,9 @@ class _HealthTasks:
     #: had to be resolved counts as having probed the peers even when the
     #: check itself ran out of budget.
     resolved_peers: list[list[str]]
+    #: Docker-bound kinds that could not run for lack of a client on a host that
+    #: has Docker: reported as errors, not silently dropped.
+    unchecked: list[str] = field(default_factory=list)
 
 
 def _build_health_tasks(
@@ -54,6 +63,7 @@ def _build_health_tasks(
     client,
     resolve_fqdn: Callable[[], str] | None,
     resolve_peer_names: Callable[[], list[str]] | None,
+    docker_present: bool = True,
 ) -> _HealthTasks:
     """Everything the budget will run, with the deadline each one gets."""
     health_cfg = cfg.health
@@ -61,15 +71,23 @@ def _build_health_tasks(
     timeouts: dict[str, float] = {}
 
     kinds = list(dict.fromkeys(health_cfg.enabled))
-    clusters_probed = client is not None and bool(kinds)
-    if clusters_probed:
-        index = ContainerIndex(client)
-        settings = ProbeSettings.from_config(cfg)
-        for kind in kinds:
-            timeout = health_cfg.timeouts.get(kind, DEFAULT_KIND_TIMEOUT)
-            key = _CLUSTER_TASK_PREFIX + kind
-            tasks[key] = partial(probe_cluster, index, kind, timeout, settings=settings)
-            timeouts[key] = timeout
+    cluster_kinds = [k for k in kinds if k not in HOST_KINDS]
+    # Docker-bound kinds need a client; host-run ones (glusterfs) do not.
+    runnable = [k for k in cluster_kinds if client is not None or k in HOST_RUN_CLUSTER_KINDS]
+    unchecked = [k for k in cluster_kinds if k not in runnable] if docker_present else []
+    clusters_probed = bool(runnable) or bool(unchecked)
+    index = ContainerIndex(client) if client is not None else None
+    settings = ProbeSettings.from_config(cfg)
+    for kind in runnable:
+        timeout = health_cfg.timeouts.get(kind, DEFAULT_KIND_TIMEOUT)
+        key = _CLUSTER_TASK_PREFIX + kind
+        tasks[key] = partial(probe_cluster, index, kind, timeout, settings=settings)
+        timeouts[key] = timeout
+    if "systemd" in kinds:
+        timeout = health_cfg.timeouts.get("systemd", 1.0)
+        key = _HOST_TASK_PREFIX + "systemd"
+        tasks[key] = partial(probe_systemd, timeout, health_cfg.systemd.ignore)
+        timeouts[key] = timeout
 
     # Resolved at most once, by whichever of the two tasks needs it first.
     resolved_peers: list[list[str]] = []
@@ -116,13 +134,16 @@ def _build_health_tasks(
     return _HealthTasks(
         tasks=tasks,
         timeouts=timeouts,
-        kinds=kinds,
+        kinds=runnable,
         clusters_probed=clusters_probed,
         resolved_peers=resolved_peers,
+        unchecked=unchecked,
     )
 
 
-def _clusters_from(outcome, kinds: list[str], clusters_probed: bool) -> list[ClusterService]:
+def _clusters_from(
+    outcome, kinds: list[str], clusters_probed: bool, unchecked: list[str]
+) -> list[ClusterService]:
     """One entry per kind that produced an answer, in configured order.
 
     A kind that ran out of time contributes no entry -- it is named in
@@ -137,6 +158,9 @@ def _clusters_from(outcome, kinds: list[str], clusters_probed: bool) -> list[Clu
             clusters.append(outcome.results[key])
         elif key in outcome.failed:
             clusters.append(ClusterService(kind=kind, error=outcome.failed[key]))
+    clusters.extend(
+        ClusterService(kind=kind, error="not checked (no Docker client)") for kind in unchecked
+    )
     return clusters
 
 
@@ -153,12 +177,21 @@ def _peers_and_dns_from(outcome) -> tuple[list[PeerReachability], list[DnsCheck]
     return peers, dns
 
 
+def _journal_error(read: HostStateRead, cfg: Config) -> str | None:
+    """The journal read's error code, where host events are enabled and it failed."""
+    if not cfg.trouble_host_events or read.state is None:
+        return None
+    return (read.state.errors or {}).get("events")
+
+
 def collect_health(
     cfg: Config,
     peer_names: list[str],
     client=None,
     resolve_fqdn: Callable[[], str] | None = None,
     resolve_peer_names: Callable[[], list[str]] | None = None,
+    host: HostStateRead | None = None,
+    docker_present: bool = True,
 ) -> HealthInfo:
     """Collect cluster, peer and DNS health under the configured budget.
 
@@ -175,15 +208,37 @@ def collect_health(
     plain list because the caller often already has it for free (the Docker
     section collected it), and using it then costs nothing.
     """
-    plan = _build_health_tasks(cfg, peer_names, client, resolve_fqdn, resolve_peer_names)
+    plan = _build_health_tasks(
+        cfg, peer_names, client, resolve_fqdn, resolve_peer_names, docker_present
+    )
     outcome = run_with_budget(plan.tasks, budget=cfg.health.budget, timeouts=plan.timeouts)
 
     peers, dns = _peers_and_dns_from(outcome)
+    read = host or HostStateRead(problem="missing")
+    host_checks: list[HostCheck] = []
+    for kind in dict.fromkeys(cfg.health.enabled):
+        key = _HOST_TASK_PREFIX + kind
+        if kind == "vrrp":
+            host_checks.append(check_vrrp(read, cfg.health.vrrp))
+        elif kind == "apache":
+            host_checks.append(check_apache(read, cfg.health.apache))
+        elif kind == "systemd" and key in outcome.results:
+            host_checks.append(outcome.results[key])
+        elif kind == "systemd" and key in outcome.failed:
+            host_checks.append(HostCheck("systemd", "error", outcome.failed[key]))
     return HealthInfo(
-        clusters=_clusters_from(outcome, plan.kinds, plan.clusters_probed),
+        clusters=_clusters_from(outcome, plan.kinds, plan.clusters_probed, plan.unchecked),
         peers=peers,
         dns=dns,
-        truncated=[name.removeprefix(_CLUSTER_TASK_PREFIX) for name in outcome.truncated],
+        host=host_checks,
+        docker_present=docker_present,
+        host_state_age=read.age_s,
+        host_state_stale=read.stale,
+        journal_error=_journal_error(read, cfg),
+        truncated=[
+            name.removeprefix(_CLUSTER_TASK_PREFIX).removeprefix(_HOST_TASK_PREFIX)
+            for name in outcome.truncated
+        ],
         clusters_probed=plan.clusters_probed,
         # We had either an answer or something to ask about -- a peer name to
         # check. A truncated peers check still had peer names, so it counts as

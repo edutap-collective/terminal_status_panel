@@ -21,6 +21,7 @@ tutorials/first-run
 
 how-to/install
 how-to/run-it-at-login
+how-to/install-the-collector
 how-to/diagnose-an-empty-panel
 how-to/enable-the-traefik-cross-check
 how-to/regenerate-the-logos
@@ -42,6 +43,7 @@ reference/stability
 :caption: Explanation
 :maxdepth: 1
 
+explanation/host-health
 explanation/cluster-health
 explanation/traefik-wiring
 explanation/docker-panel
