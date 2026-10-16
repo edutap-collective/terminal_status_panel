@@ -23,8 +23,14 @@ def isolated_cli(monkeypatch):
     purely local collectors that read state instantly (system, resources) are
     left alone.
 
+    ``docker_present`` decides the default sections of ``status-full`` from
+    the real ``/var/run/docker.sock``. It is pinned to True so the output does
+    not depend on whether the test machine runs Docker -- CI runners on macOS
+    and FreeBSD have no socket. Tests about the Docker-less default override it.
+
     A test that wants a specific ``collect_health`` simply overrides it again.
     """
+    monkeypatch.setattr(cli, "docker_present", lambda *a, **k: True)
     monkeypatch.setattr(cli, "_docker_client", lambda cfg: None)
     monkeypatch.setattr(cli, "collect_health", lambda *a, **k: None)
     monkeypatch.setattr(cli, "collect_updates", lambda timeout=None, host=None: None)
