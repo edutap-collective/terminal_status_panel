@@ -27,6 +27,8 @@ from . import apache, apt, journal, vrrp
 DEFAULT_RUNTIME_DIR = "/run/terminal-status-panel"
 DEFAULT_STATE_DIR = "/var/lib/terminal-status-panel"
 STATE_FILE_NAME = "host.json"
+#: The copy of keepalived's dump the root-side helper hands over (see keepalived-dump).
+DUMP_FILE_NAME = "keepalived.json"
 
 
 @dataclass
@@ -82,22 +84,30 @@ def run(
     """Collect every enabled source, write the state file, return what was written."""
     sources = sources or Sources()
     target = runtime_dir / STATE_FILE_NAME
+    dump = runtime_dir / DUMP_FILE_NAME
     previous = _previous(target)
     errors: dict[str, str | None] = {"vrrp": None, "apache": None, "updates": None, "events": None}
     state = HostState(written_at=now, collector=panel_version())
-    if "vrrp" in cfg.health.enabled:
-        state.vrrp, errors["vrrp"] = _guarded(sources.vrrp, runtime_dir / "keepalived.json")
-    if "apache" in cfg.health.enabled and cfg.health.apache.url:
-        state.apache, errors["apache"] = _guarded(
-            sources.apache, cfg.health.apache.url, state_dir / "apache.json", now
+    try:
+        if "vrrp" in cfg.health.enabled:
+            state.vrrp, errors["vrrp"] = _guarded(sources.vrrp, dump)
+        if "apache" in cfg.health.enabled and cfg.health.apache.url:
+            state.apache, errors["apache"] = _guarded(
+                sources.apache, cfg.health.apache.url, state_dir / "apache.json", now
+            )
+        state.updates, errors["updates"] = _guarded(
+            sources.updates, previous.updates if previous else None, now
         )
-    state.updates, errors["updates"] = _guarded(
-        sources.updates, previous.updates if previous else None, now
-    )
-    events, errors["events"] = _guarded(
-        sources.events, state_dir / "journal.json", now, cfg.trouble_host_events
-    )
-    state.events = events or {}
+        events, errors["events"] = _guarded(
+            sources.events, state_dir / "journal.json", now, cfg.trouble_host_events
+        )
+        state.events = events or {}
+    finally:
+        # The helper runs before every collection, whether vrrp is enabled or
+        # not, and the copy holds the VRRP password: it never outlives a run,
+        # whatever happened to the VRRP source.
+        if vrrp.remove_dump(dump):
+            errors["vrrp"] = "cleanup"
     state.errors = errors
     write_state(state, target)
     return state

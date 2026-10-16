@@ -20,6 +20,15 @@ def test_unit_is_hardened_with_exactly_one_privileged_step():
     assert service.count("ExecStartPre=") == 1
     assert "ExecStartPre=-+/usr/lib/terminal-status-panel/keepalived-dump" in service
     assert "ExecStart=/opt/tsp/bin/status-collect" in service
+    assert "+" not in "".join(
+        line for line in service.splitlines() if line.startswith("ExecStopPost=")
+    )
+
+
+def test_service_removes_the_dump_copy_after_every_run():
+    # Also when ExecStart never started: the copy holds the VRRP password.
+    service = install.render_collector_units("/x")["terminal-status-panel-collect.service"]
+    assert "ExecStopPost=-/bin/rm -f %t/terminal-status-panel/keepalived.json" in service
 
 
 def test_service_keeps_the_runtime_directory_between_runs():

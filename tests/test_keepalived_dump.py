@@ -162,3 +162,27 @@ def test_failing_copy_leaves_no_work_directory(script, env, tmp_path, target_fac
     env["TSP_RUNDIR"] = str(tmp_path / "missing")  # chown --reference fails
     assert run(script, env).returncode == 0
     assert list(Path(env["TSP_WORKROOT"]).iterdir()) == []
+
+
+@needs_gnu
+def test_hardlinked_dump_is_ignored(script, env, tmp_path, target_factory):
+    # The target replaces the dump with a hard link to a file we own: a second
+    # name for the same inode, which a plain owner check does not catch.
+    other = tmp_path / "other.json"
+    other.write_text("{}")
+    target = tmp_path / "linker.sh"
+    trap = f"ln -f '{other}' '{env['TSP_DUMP']}'"
+    body = ["#!/bin/sh", f'trap "{trap}" USR1', "while :; do sleep 0.05; done"]
+    target.write_text("\n".join(body) + "\n")
+    process = subprocess.Popen(["sh", str(target)])  # noqa: S603, S607
+    try:
+        time.sleep(0.3)
+        (Path(env["TSP_PROC"]) / str(process.pid)).mkdir()
+        (Path(env["TSP_PROC"]) / str(process.pid) / "comm").write_text("keepalived\n")
+        Path(env["TSP_PIDFILE"]).write_text(f"{process.pid}\n")
+        assert run(script, env).returncode == 0
+    finally:
+        process.kill()
+        process.wait()
+    assert list(Path(env["TSP_RUNDIR"]).iterdir()) == []
+    assert os.stat(other).st_nlink == 2  # the link was left alone, not followed

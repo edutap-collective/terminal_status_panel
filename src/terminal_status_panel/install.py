@@ -289,6 +289,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.collector:
+        if args.dry_run:
+            # Refused rather than half-honoured: the collector install writes
+            # units and calls systemctl, and has no dry run of its own.
+            print("error: --collector does not support --dry-run", file=sys.stderr)
+            return 1
         bin_dir = str(Path(sys.executable).parent)
         try:
             if not args.uninstall:

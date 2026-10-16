@@ -1,4 +1,8 @@
 import json
+import os
+import threading
+
+import pytest
 
 from terminal_status_panel.collectors.hoststate import host_trouble, read_host_state
 from terminal_status_panel.model.host import EventCount, HostState, HostStateRead
@@ -141,3 +145,50 @@ def test_stale_state_marks_every_row_with_its_age():
     rows = host_trouble(read, now=300.0, enabled=("oom_kill", "unit_failed"))
     assert rows[0].cause == "last 5m ago (state 5 min old)"
     assert rows[1].cause == "(state 5 min old)"
+
+
+# -- the reader never blocks and never lets a bad field through --
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs os.mkfifo")
+def test_fifo_at_the_state_path_is_unreadable_and_does_not_block(tmp_path):
+    path = tmp_path / "host.json"
+    os.mkfifo(path)
+    result = {}
+    reader = threading.Thread(
+        target=lambda: result.update(read=read_host_state(str(path), now=1.0)), daemon=True
+    )
+    reader.start()
+    reader.join(timeout=2.0)
+    if reader.is_alive():  # free the blocked open() so the thread can end
+        os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(timeout=2.0)
+        pytest.fail("read_host_state blocked on a FIFO")
+    assert result["read"].problem == "unreadable"
+
+
+def test_directory_at_the_state_path_is_unreadable(tmp_path):
+    (tmp_path / "host.json").mkdir()
+    assert read_host_state(str(tmp_path / "host.json"), now=1.0).problem == "unreadable"
+
+
+def test_oversized_state_file_is_unreadable(tmp_path):
+    body = {"schema": 1, "written_at": 0.0, "collector": "x" * (64 * 1024)}
+    assert read_host_state(_write(tmp_path, json.dumps(body)), now=1.0).problem == "unreadable"
+
+
+def test_state_file_just_under_the_limit_is_read(tmp_path):
+    body = {"schema": 1, "written_at": 0.0, "collector": "x" * (60 * 1024)}
+    assert read_host_state(_write(tmp_path, json.dumps(body)), now=1.0).problem is None
+
+
+def test_wrong_field_type_is_unreadable_and_trouble_still_renders(tmp_path):
+    body = {
+        "schema": 1,
+        "written_at": 0.0,
+        "collector": "x",
+        "events": {"oom_kill": {"count": "3", "last": 0.0}},
+    }
+    read = read_host_state(_write(tmp_path, json.dumps(body)), now=1.0)
+    assert read.state is None and read.problem == "unreadable"
+    assert host_trouble(read, now=1.0, enabled=("oom_kill",)) == []

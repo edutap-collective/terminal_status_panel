@@ -130,3 +130,60 @@ def test_status_collect_exits_one_with_one_stderr_line_when_write_fails(
     assert err.count("\n") == 1
     assert str(target_dir / "host.json") in err
     assert "No such file" not in err
+
+
+# -- the keepalived dump copy never outlives a run --
+
+
+def _without_vrrp() -> Config:
+    cfg = _config()
+    kinds = [kind for kind in cfg.health.enabled if kind != "vrrp"]
+    return replace(cfg, health=replace(cfg.health, enabled=kinds))
+
+
+def test_dump_copy_is_removed_when_vrrp_is_disabled(tmp_path):
+    dump = tmp_path / "keepalived.json"
+    dump.write_text('[{"data": {"iname": "vi_1", "auth_data": "secret"}}]')
+    state = runmod.run(_without_vrrp(), tmp_path, tmp_path, now=10.0, sources=_sources())
+    assert not dump.exists()
+    assert state.errors["vrrp"] is None
+
+
+def test_dump_copy_is_removed_when_the_vrrp_source_raises(tmp_path):
+    dump = tmp_path / "keepalived.json"
+    dump.write_text("[" * 100_000)
+
+    def deep(path):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    state = runmod.run(_config(), tmp_path, tmp_path, now=10.0, sources=_sources(vrrp=deep))
+    assert not dump.exists()
+    assert state.errors["vrrp"] == "internal"
+
+
+def test_no_dump_copy_records_nothing(tmp_path):
+    state = runmod.run(_without_vrrp(), tmp_path, tmp_path, now=10.0, sources=_sources())
+    assert state.errors["vrrp"] is None
+
+
+def test_undeletable_dump_copy_is_reported_and_the_other_blocks_stay(tmp_path):
+    (tmp_path / "keepalived.json").mkdir()  # unlink() on a directory fails
+    state = runmod.run(_without_vrrp(), tmp_path, tmp_path, now=10.0, sources=_sources())
+    assert state.errors["vrrp"] == "cleanup"
+    assert state.events["oom_kill"].count == 1
+    assert state.errors["apache"] == "unreachable"
+    written = json.loads((tmp_path / "host.json").read_text())
+    assert written["errors"]["vrrp"] == "cleanup"
+
+
+def test_dump_copy_is_removed_even_when_the_state_cannot_be_written(tmp_path, monkeypatch):
+    dump = tmp_path / "keepalived.json"
+    dump.write_text("{}")
+
+    def fail(state, path):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runmod, "write_state", fail)
+    with pytest.raises(OSError):
+        runmod.run(_without_vrrp(), tmp_path, tmp_path, now=10.0, sources=_sources())
+    assert not dump.exists()

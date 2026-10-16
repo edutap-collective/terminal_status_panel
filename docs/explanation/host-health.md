@@ -121,10 +121,13 @@ when one is configured. The design treats the file accordingly:
   parsed. If deleting fails, the VRRP block is still reported and its error
   code is `cleanup`, so a copy that stayed on disk is a visible finding rather
   than a silent one.
-- With `vrrp` left out of `health.enabled`, the collector does not read the
-  copy and therefore does not delete it either. The helper still runs; keep
-  `vrrp` enabled on a keepalived host, or remove the collector
-  (`install-panel --collector --uninstall` clears the runtime directory).
+- The copy **never outlives a run**. `status-collect` deletes it at the end of
+  every run, with `vrrp` in `health.enabled` or not, and also when reading it
+  failed in an unforeseen way; a copy it cannot delete is reported as `cleanup`.
+  For a run in which `status-collect` never started, the unit's
+  `ExecStopPost=-/bin/rm -f %t/terminal-status-panel/keepalived.json` removes
+  it. That line runs as the collector's own user, without `+`: the runtime
+  directory is the collector's, so no privilege is needed to delete in it.
 
 ### Assumptions about the host
 
@@ -260,3 +263,14 @@ attached to the host rows of TROUBLE (`(state 3 min old)`).
 If the file is missing, THIS HOST says so instead of showing nothing:
 `host state unavailable (collector not running?)`; a file that cannot be parsed
 reads `host state unreadable`. *Not measured* must never look like *quiet*.
+
+That line appears only where the figure is expected. `vrrp` shows it only when
+keepalived's pid file `/run/keepalived.pid` exists, and `apache` only when
+`[health.apache] url` is set; otherwise the kind reads `n/a here`. Most nodes
+of a cluster run neither keepalived nor the collector, and a red line on every
+one of them would teach the reader to ignore it.
+
+The reader never waits for the file. It opens it without blocking, accepts a
+regular file of at most 64 KiB only, and checks the type of every field it
+reads (a count is an integer, a timestamp a number, a state a string). Anything
+else reads `host state unreadable`; the rest of the panel renders as usual.

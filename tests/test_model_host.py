@@ -70,3 +70,51 @@ def test_non_finite_written_at_is_refused():
     data["written_at"] = float("nan")
     with pytest.raises(ValueError):
         HostState.from_dict(data)
+
+
+def _with(path: tuple, value):
+    """The test state as a dict, with the field at *path* replaced by *value*."""
+    data = _state().to_dict()
+    target = data
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    return data
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("written_at",), "1000.0"),
+        (("written_at",), True),
+        (("collector",), 14),
+        (("events_window_s",), 1.5),
+        (("events_window_s",), "43200"),
+        (("events", "vrrp_state", "count"), "3"),
+        (("events", "vrrp_state", "count"), True),
+        (("events", "vrrp_state", "last"), "990"),
+        (("vrrp", "source"), 1),
+        (("vrrp", "instances", 0, "name"), 1),
+        (("vrrp", "instances", 0, "state"), None),
+        (("vrrp", "instances", 0, "base_priority"), "200"),
+        (("vrrp", "instances", 0, "effective_priority"), 191.0),
+        (("vrrp", "instances", 0, "master_priority"), False),
+        (("apache", "window_s"), "30"),
+        (("apache", "requests_per_s"), "112.4"),
+        (("apache", "slots_finishing"), 0.5),
+        (("updates", "available"), "3"),
+        (("updates", "source"), None),
+        (("errors", "vrrp"), 5),
+        (("errors",), ["parse"]),
+    ],
+)
+def test_wrong_field_types_are_refused(path, value):
+    with pytest.raises(ValueError):
+        HostState.from_dict(_with(path, value))
+
+
+def test_integers_are_accepted_where_floats_are_expected():
+    data = _with(("written_at",), 1000)
+    data["apache"]["requests_per_s"] = 112
+    state = HostState.from_dict(data)
+    assert state.written_at == 1000.0 and state.apache.requests_per_s == 112

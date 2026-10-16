@@ -196,3 +196,16 @@ def test_check_bin_dir_refuses_hidden_paths_after_resolving(tmp_path):
     link.symlink_to(tmp_path)
     (tmp_path / "status-collect").write_text("")
     install.check_collector_bin_dir(str(link))  # resolves to a plain tmp dir
+
+
+@pytest.mark.parametrize("extra", [[], ["--uninstall"]])
+def test_collector_dry_run_is_refused_and_touches_nothing(monkeypatch, capsys, extra):
+    def touched(*args, **kwargs):
+        raise AssertionError("apply_collector must not run under --dry-run")
+
+    monkeypatch.setattr(install, "check_collector_bin_dir", lambda bin_dir: None)
+    monkeypatch.setattr(install, "apply_collector", touched)
+    assert install.main(["--collector", "--dry-run", *extra]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("\n") == 1 and "--dry-run" in captured.err

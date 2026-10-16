@@ -22,3 +22,7 @@ RestrictSUIDSGID=yes
 # run, "+" lifts User= and the namespacing for this line only.
 ExecStartPre=-+/usr/lib/terminal-status-panel/keepalived-dump
 ExecStart={bin_dir}/status-collect
+# The dump copy holds the VRRP password. status-collect deletes it on every
+# run; this catches a run that never started. No "+": the runtime directory
+# belongs to the dynamic user, which may delete in it.
+ExecStopPost=-/bin/rm -f %t/terminal-status-panel/keepalived.json

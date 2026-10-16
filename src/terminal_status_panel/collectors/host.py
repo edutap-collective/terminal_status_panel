@@ -7,12 +7,17 @@ request rate needs a window the login path cannot wait for.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 from ..config import ApacheProbe, VrrpProbe
 from ..model.host import HostCheck, HostStateRead
 
 HOST_KINDS = ("vrrp", "apache", "systemd")
+
+#: keepalived's pid file. Without a state file, it decides whether VRRP is a
+#: missing figure (keepalived runs here) or not applicable (it does not).
+KEEPALIVED_PIDFILE = "/run/keepalived.pid"
 
 _ORDER = ("ok", "warn", "crit")
 
@@ -74,6 +79,10 @@ def check_vrrp(read: HostStateRead, probe: VrrpProbe) -> HostCheck:
     """One clause per instance: who holds it here, priorities, lead where known."""
     problem = _state_problem("vrrp", read)
     if problem:
+        # Most nodes run neither the collector nor keepalived; a red line there
+        # would be noise. A stat on /run does not block.
+        if not os.path.exists(KEEPALIVED_PIDFILE):
+            return HostCheck(kind="vrrp", status="na", summary="n/a here")
         return problem
     vrrp = read.state.vrrp if read.state else None
     if vrrp is None or not vrrp.instances:

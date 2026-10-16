@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import time
 
 from ..model import TroubleEntry
@@ -15,6 +17,9 @@ from ..model.host import (
     UnknownSchemaError,
 )
 
+#: Far above a real state file (about 1 KiB); anything larger is not one.
+MAX_STATE_BYTES = 64 * 1024
+
 __all__ = [
     "HOST_EVENT_KINDS",
     "STALE_AFTER_SECONDS",
@@ -22,6 +27,32 @@ __all__ = [
     "host_trouble",
     "read_host_state",
 ]
+
+
+def _read_regular_file(path: str) -> str:
+    """The text of the regular file at *path*, at most MAX_STATE_BYTES of it.
+
+    The runtime directory belongs to the collector's user, so the name may be
+    anything: O_NONBLOCK keeps a FIFO from blocking the open, the fstat refuses
+    everything but a regular file, and the size cap bounds the read.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("state file is not a regular file")
+        chunks = []
+        size = 0
+        while size <= MAX_STATE_BYTES:
+            chunk = os.read(fd, MAX_STATE_BYTES + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        if size > MAX_STATE_BYTES:
+            raise ValueError("state file is too large")
+        return b"".join(chunks).decode("utf-8")
+    finally:
+        os.close(fd)
 
 
 def read_host_state(path: str = STATE_PATH, now: float | None = None) -> HostStateRead:
@@ -33,8 +64,7 @@ def read_host_state(path: str = STATE_PATH, now: float | None = None) -> HostSta
     """
     now = time.time() if now is None else now
     try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
+        data = json.loads(_read_regular_file(path))
     except FileNotFoundError:
         return HostStateRead(problem="missing")
     except Exception:  # noqa: BLE001 -- any parse or read failure is "unreadable"

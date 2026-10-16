@@ -475,3 +475,52 @@ def test_truncated_host_task_is_named_without_prefix(monkeypatch):
         _config(budget=0.3, enabled=["systemd"]), [], client=None, resolve_fqdn=_fqdn
     )
     assert "systemd" in info.truncated
+
+
+def test_swarm_node_without_collector_or_keepalived_shows_no_red_vrrp_line(monkeypatch, tmp_path):
+    """A Docker node with clusters and peers, no state file and no keepalived."""
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from terminal_status_panel.collectors import host
+    from terminal_status_panel.collectors.hoststate import HostStateRead
+    from terminal_status_panel.render import icons
+    from terminal_status_panel.render.health import health_section
+
+    monkeypatch.setattr(host, "KEEPALIVED_PIDFILE", str(tmp_path / "keepalived.pid"))
+    monkeypatch.setattr(
+        host.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="")
+    )
+    monkeypatch.setattr(
+        health_collector,
+        "probe_cluster",
+        lambda index, kind, timeout, settings=None: ClusterService(
+            kind=kind, name=f"demo_{kind}", reachable=True, quorum_ok=True
+        ),
+    )
+    monkeypatch.setattr(
+        health_collector,
+        "collect_peers",
+        lambda names, timeout: [PeerReachability(name="node-b", method="wireguard", ok=True)],
+    )
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **k: [])
+    cfg = Config()
+    info = health_collector.collect_health(
+        cfg,
+        ["node-b"],
+        client=object(),
+        resolve_fqdn=_fqdn,
+        host=HostStateRead(problem="missing"),
+        docker_present=True,
+    )
+    console = Console(width=120, force_terminal=False, color_system=None)
+    with console.capture() as capture:
+        console.print(health_section(info, cfg))
+    out = capture.get()
+    assert "CLUSTERS" in out and "demo_postgres" in out
+    assert "PEERS" in out and "node-b" in out
+    assert "host state unavailable" not in out
+    assert f"{icons.FAILED} VRRP" not in out
+    na_line = next(line for line in out.splitlines() if "n/a here:" in line)
+    assert "VRRP" in na_line

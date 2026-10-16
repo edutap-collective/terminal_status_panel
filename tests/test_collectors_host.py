@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from terminal_status_panel.collectors import host
 from terminal_status_panel.collectors.hoststate import HostStateRead
 from terminal_status_panel.config import ApacheProbe, VrrpProbe
@@ -79,8 +81,39 @@ def test_apache_not_configured_is_not_applicable():
     assert host.check_apache(_read(), ApacheProbe()).status == "na"
 
 
-def test_missing_state_is_an_error_line_not_quiet():
+@pytest.fixture
+def keepalived_pid(tmp_path, monkeypatch):
+    """Point the keepalived pid file into tmp_path; absent until the test writes it."""
+    path = tmp_path / "keepalived.pid"
+    monkeypatch.setattr(host, "KEEPALIVED_PIDFILE", str(path))
+    return path
+
+
+def test_missing_state_is_an_error_line_where_keepalived_runs(keepalived_pid):
+    keepalived_pid.write_text("1\n")
     check = host.check_vrrp(HostStateRead(problem="missing"), VrrpProbe())
+    assert check.status == "error" and "collector not running" in check.summary
+
+
+@pytest.mark.parametrize("problem", ["missing", "unreadable", "unknown schema"])
+def test_no_state_without_keepalived_is_not_applicable(keepalived_pid, problem):
+    check = host.check_vrrp(HostStateRead(problem=problem), VrrpProbe())
+    assert (check.status, check.summary) == ("na", "n/a here")
+
+
+def test_unreadable_state_is_an_error_line_where_keepalived_runs(keepalived_pid):
+    keepalived_pid.write_text("1\n")
+    check = host.check_vrrp(HostStateRead(problem="unreadable"), VrrpProbe())
+    assert (check.status, check.summary) == ("error", "host state unreadable")
+
+
+def test_missing_state_without_apache_url_is_not_applicable():
+    check = host.check_apache(HostStateRead(problem="missing"), ApacheProbe())
+    assert check.status == "na"
+
+
+def test_missing_state_with_apache_url_is_an_error_line():
+    check = host.check_apache(HostStateRead(problem="missing"), ApacheProbe(url="http://x"))
     assert check.status == "error" and "collector not running" in check.summary
 
 

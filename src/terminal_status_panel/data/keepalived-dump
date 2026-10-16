@@ -6,7 +6,8 @@
 #
 # Runs as root, so nothing in a user-writable place is trusted: the pid file
 # must name a keepalived process, and the dump must be a regular file owned by
-# root. The TSP_* variables exist for the tests; production uses the defaults.
+# root with no second name (link count 1). The TSP_* variables exist for the
+# tests; production uses the defaults.
 pidfile=${TSP_PIDFILE:-/run/keepalived.pid}
 dump=${TSP_DUMP:-/tmp/keepalived.json}
 rundir=${TSP_RUNDIR:-/run/terminal-status-panel}
@@ -32,6 +33,9 @@ kill "-$sig" "$pid" 2>/dev/null || exit 0
 i=0
 while [ ! -s "$dump" ] && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i + 1)); done
 [ -f "$dump" ] && [ ! -L "$dump" ] && [ "$(stat -c %u "$dump")" = "$owner" ] || exit 0
+# A second name for the inode is a hard link someone else made: refuse it
+# without relying on fs.protected_hardlinks alone.
+[ "$(stat -c %h "$dump")" = 1 ] || exit 0
 [ -s "$dump" ] || exit 0
 
 # The copy is made in a fresh directory only root can enter (mktemp -d is

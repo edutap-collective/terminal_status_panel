@@ -76,11 +76,20 @@ guesswork dressed as a record.
   read-only, home directories hidden, no device access and no new privileges.
   Exactly one step runs privileged (`ExecStartPre=-+`): the helper that asks
   keepalived for its JSON dump.
-- The keepalived dump contains the VRRP password. The helper copies it in a
+- The keepalived dump contains the VRRP password. The helper refuses a dump
+  that is not a regular root-owned file with a single link, copies it in a
   directory only root can enter, as mode `0600`, and removes the original; the
-  collector reads five fields (name, state, three priorities) and deletes the
-  copy after reading. The state file never holds log text, paths or client
-  addresses.
+  collector reads five fields (name, state, three priorities). The copy never
+  outlives a run: `status-collect` deletes it on every run, `vrrp` enabled or
+  not and whatever the VRRP source did, and the unit's `ExecStopPost=` removes
+  it when `status-collect` never started. The state file never holds log
+  text, paths or client addresses.
+- The panel reads the state file without blocking (a FIFO in its place cannot
+  hang a login), only as a regular file of at most 64 KiB, and refuses fields
+  of the wrong type as `host state unreadable` rather than failing the whole
+  panel.
+- `install-panel --collector --dry-run` is refused (exit 1): the collector
+  install has no dry run, and the flag must not be taken for one.
 - `install-panel --collector` refuses an interpreter under `/home`, `/root` or
   `/run/user`, which the hardened service could not run from.
 

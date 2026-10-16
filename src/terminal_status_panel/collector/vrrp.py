@@ -58,7 +58,7 @@ def parse_keepalived_json(text: str) -> list[VrrpInstance]:
     return instances
 
 
-def _remove_dump(dump_path: Path) -> str | None:
+def remove_dump(dump_path: Path) -> str | None:
     """None when the dump is gone; ``cleanup`` when it could not be removed.
 
     A dump that stays on disk holds the VRRP password, so the failure is
@@ -82,12 +82,12 @@ def collect_vrrp(dump_path: Path) -> tuple[VrrpState | None, str | None]:
     except FileNotFoundError:
         return None, "not-installed"
     except OSError:
-        return None, _remove_dump(dump_path) or "no-permission"
+        return None, remove_dump(dump_path) or "no-permission"
     except ValueError:  # UnicodeDecodeError: not text, so not a dump we can read
-        return None, _remove_dump(dump_path) or "parse"
+        return None, remove_dump(dump_path) or "parse"
     try:
         instances = parse_keepalived_json(text)
     except ValueError:
-        return None, _remove_dump(dump_path) or "parse"
+        return None, remove_dump(dump_path) or "parse"
     state = VrrpState(source="keepalived-json", instances=instances)
-    return state, _remove_dump(dump_path)
+    return state, remove_dump(dump_path)
