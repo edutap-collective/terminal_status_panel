@@ -104,7 +104,7 @@ dev = [
     {include-group = "typecheck"},
     {include-group = "docs"},
     "pdbp>=1.5",
-    "ruff>=0.16,<0.17",
+    "ruff>=0.17,<0.18",
     "pillow>=11",  # only to regenerate bundled logos via tools/generate_logos.py
 ]
 
