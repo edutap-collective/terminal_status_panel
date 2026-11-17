@@ -63,7 +63,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: hynek/build-and-inspect-python-package@v3.0.1
+      - uses: hynek/build-and-inspect-python-package@v3.0.2
         with:
           attest-build-provenance-github: 'true'
 
