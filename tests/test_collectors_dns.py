@@ -207,3 +207,42 @@ def test_collect_dns_never_raises_when_the_resolver_explodes(tmp_path):
         hosts_path=_hosts(tmp_path, ""),
     )
     assert all(check.ok is not True for check in checks)
+
+
+class _SearchListResolver(_StubResolver):
+    """Answers a bare name only when asked to apply the search list.
+
+    dnspython's ``Resolver.resolve`` does not apply the ``search`` line of
+    resolv.conf unless ``search=True`` is passed or ``use_search_by_default``
+    is set -- unlike getaddrinfo, which always does. A Swarm node name is
+    usually the bare hostname, so without the search list it never resolves.
+    """
+
+    def __init__(self, domain, answers):
+        super().__init__(answers=answers)
+        self._domain = domain
+
+    def resolve(self, name, rdtype="A", **kwargs):
+        name = str(name).rstrip(".")
+        if "." not in name:
+            if not kwargs.get("search"):
+                raise LookupError(f"no answer for bare {name!r} without the search list")
+            name = f"{name}.{self._domain}"
+        return super().resolve(name, rdtype)
+
+
+def test_a_bare_peer_name_is_resolved_through_the_search_list(tmp_path):
+    resolver = _SearchListResolver(
+        "example.net",
+        answers={("node1.example.net", "A"): ["10.0.0.1"]},
+    )
+    checks = dns_collector.collect_dns(
+        fqdn="node1.example.net",
+        peer_names=["node1"],
+        expectations=[],
+        timeout=1.0,
+        resolver=resolver,
+        hosts_path=_hosts(tmp_path, ""),
+    )
+    peers = [c for c in checks if c.label == "Peers"][0]
+    assert peers.ok is True, peers.detail
