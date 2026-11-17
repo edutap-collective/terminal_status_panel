@@ -13,6 +13,28 @@ This file starts at 0.10.0. Earlier releases are described by their git tags
 and commit messages; reconstructing entries for them after the fact would be
 guesswork dressed as a record.
 
+## [Unreleased]
+
+### Added
+
+- TRAEFIK WIRING finds Traefik by its image when no name matches
+  `traefik.match`: a single Swarm service or plain container whose image
+  repository is exactly `traefik` is used, with a dim note saying so and
+  naming the setting. Several candidates are listed in the banner, not chosen
+  between. A name match still wins, and `traefik.match = []` still reads
+  nothing.
+
+### Fixed
+
+- The CLUSTERS block no longer claims `not checked (no Docker client)` when
+  `health.enabled` names no cluster kind. It now reads `no cluster checks
+  enabled (health.enabled)`; a real missing client still shows one error row
+  per kind, as before.
+- DNS checks apply the resolver's search list. dnspython leaves it off by
+  default, so a bare Swarm node name such as `node1` was looked up as `node1.`
+  and every peer reported `no answer` on hosts whose DNS answered for
+  `node1.<search domain>`. Fully qualified names are tried as given first.
+
 ## [0.14.0] - 2026-10-16
 
 ### Added
