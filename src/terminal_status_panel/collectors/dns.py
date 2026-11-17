@@ -39,8 +39,17 @@ def read_hosts_file(path: str = "/etc/hosts") -> dict[str, set[str]]:
 
 
 def _addresses(resolver, name: str) -> list[str]:
-    """A-record addresses for *name* as plain strings. Raises on failure."""
-    return [str(record) for record in resolver.resolve(name, "A")]
+    """A-record addresses for *name* as plain strings. Raises on failure.
+
+    ``search=True`` applies the ``search``/``domain`` line of resolv.conf, as
+    getaddrinfo would. dnspython leaves it off by default
+    (``Resolver.use_search_by_default = False``), and a Swarm node name is
+    usually the bare hostname: without the search list every peer reported
+    "no answer" on a host whose DNS answered for it perfectly well. A name
+    with at least ``ndots`` dots (one by default) is still tried as given
+    before the search list, so fully qualified names resolve as before.
+    """
+    return [str(record) for record in resolver.resolve(name, "A", search=True)]
 
 
 def _default_resolver(timeout: float):

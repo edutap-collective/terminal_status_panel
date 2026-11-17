@@ -110,6 +110,12 @@ class HealthInfo:
     # kinds enabled). An empty ``clusters`` list means "nothing found" only
     # when this is True; otherwise it means "not attempted".
     clusters_probed: bool = False
+    #: False when ``health.enabled`` names no cluster kind at all, which is the
+    #: one reason a collected run on a Docker host leaves ``clusters_probed``
+    #: False: a missing Docker client turns every kind into an error row and
+    #: so counts as probed. True by default, so the renderer's fallback for a
+    #: missing section keeps claiming no cause it does not know.
+    cluster_kinds_enabled: bool = True
     # False when there was nothing to probe: no peer names and no WireGuard
     # answer. An empty ``peers`` list means "no peers" only when this is True.
     peers_probed: bool = False

@@ -396,6 +396,7 @@ entrypoint list to check against, the code cannot tell "not on this one" from
 | State | Reason stated in the banner | Where it is produced |
 |---|---|---|
 | No Traefik service or container matches `traefik.match` — where the containers were listed, and either the services were too or `docker info` reports Swarm inactive on this node | `no Traefik service or container matches traefik.match (<patterns>)` | `collect_traefik`, `collectors/traefik.py` |
+| No name matches `traefik.match`, and more than one Swarm service or plain container runs the Traefik image — the panel does not choose between them | `no Traefik service or container matches traefik.match (<patterns>), and several run the Traefik image: <names> -- set traefik.match to the one to show` | `_by_image`, `collectors/traefik.py` |
 | No service matches and the container listing failed — the containers are an unread list, not an empty one, so only the services are spoken for | `no Traefik service matches traefik.match (<patterns>); containers could not be listed: <reason>` | `collect_traefik`, `collectors/traefik.py` |
 | A relative `--configFile` with no declared working directory | `--configFile=<path> is relative and the container's working directory is not declared — not read` | `_find_static_file`, `collectors/traefik.py` |
 | `--configFile` not backed by any checkable mount | `--configFile=<path> is not mounted — it may be part of the image, or absent (then Traefik falls back to its default locations and flags)` | `_find_static_file`, `collectors/traefik.py` |
@@ -420,6 +421,17 @@ the panel has no more specific reason it could back up:
   container. Whether a service matches `traefik.match` was never looked at,
   so the panel does not claim that none does — it shows the banner 0.12.2
   showed.
+
+Where no name matches but exactly one Swarm service or plain container runs
+the Traefik image (repository `traefik`, whatever the registry, tag or
+digest), the tree is drawn from that one, and a dim line above it says it was
+found by its image and that `traefik.match` would name it. Look-alikes such as
+`traefik-forward-auth` do not count. A name match always wins over the image.
+The fallback only searches inventories that were read in full: the
+containers must have been listed, and the services too -- or `docker info`
+must report Swarm inactive, so that there are none. Where either list is
+unread, a workload in it could match `traefik.match` or be a second Traefik,
+and the banner from the table above stays.
 
 A file found beside other command-line flags does draw a tree; Traefik
 ignores those flags, and the panel notes that in one dim line above the tree

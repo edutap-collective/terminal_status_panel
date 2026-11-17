@@ -120,8 +120,13 @@ def _truncated_kinds(health: HealthInfo) -> list[str]:
 
 def _clusters_body(health: HealthInfo) -> RenderableType:
     if not health.clusters_probed:
-        # Never ran: no Docker client, or every kind disabled. Rendering this as
-        # "nothing found" would report a gap in coverage as a clean bill of health.
+        # Never ran. Rendering this as "nothing found" would report a gap in
+        # coverage as a clean bill of health -- so the line stays, and names
+        # its cause where the collector knows it. With no cluster kind
+        # enabled, blaming the Docker client sent the reader after a daemon
+        # that DOCKER INFOS was reading without trouble.
+        if not health.cluster_kinds_enabled:
+            return Text(f"{UNKNOWN} no cluster checks enabled (health.enabled)", style="dim")
         return Text(f"{UNKNOWN} not checked (no Docker client)", style="dim")
     truncated = _truncated_kinds(health)
     if not health.clusters and not truncated:

@@ -173,13 +173,55 @@ def _matches(name: str, match: tuple[str, ...]) -> bool:
     return any(pattern.casefold() in folded for pattern in match)
 
 
-def _absorb_swarm_services(client, info: TraefikInfo, match: tuple[str, ...]) -> Any:
+#: The image repository the fallback looks for, compared after registry,
+#: tag and digest are cut off.
+TRAEFIK_IMAGE = "traefik"
+
+
+def _image_repository(reference: object) -> str:
+    """The last path component of an image reference, without tag or digest.
+
+    ``registry.example.org:5000/proxy/library/traefik:v3.7@sha256:...`` reads
+    as ``traefik``. A registry port is not mistaken for a tag because only the
+    last path component is split at the colon.
+    """
+    if not isinstance(reference, str):
+        return ""
+    name = reference.split("@", 1)[0].rsplit("/", 1)[-1]
+    return name.split(":", 1)[0].casefold()
+
+
+def _runs_traefik_image(reference: object) -> bool:
+    """Whether *reference* names the Traefik image -- exactly, not by prefix.
+
+    ``traefik-forward-auth`` and the like share the prefix and are not Traefik.
+    """
+    return _image_repository(reference) == TRAEFIK_IMAGE
+
+
+def _service_image(service) -> object:
+    return _mapping(_mapping(_spec_of(service).get("TaskTemplate")).get("ContainerSpec")).get(
+        "Image"
+    )
+
+
+def _container_image(container) -> object:
+    return _mapping(_mapping(getattr(container, "attrs", None)).get("Config")).get("Image")
+
+
+def _absorb_swarm_services(
+    client, info: TraefikInfo, match: tuple[str, ...]
+) -> tuple[Any, list[Any]]:
     """List Swarm services, take their wiring, and return the Traefik service.
 
-    ``None`` when the listing failed or no service matched *match*. Last match
-    wins, as it did before. The service is returned as docker-py handed it:
-    turning it into a ``Workload`` is part of reading Traefik's own
-    configuration, which the caller guards.
+    The first element is ``None`` when the listing failed or no service
+    matched *match*. Last match wins, as it did before. The service is
+    returned as docker-py handed it: turning it into a ``Workload`` is part of
+    reading Traefik's own configuration, which the caller guards.
+
+    The second element lists every service that runs the Traefik image --
+    the candidates for the fallback the caller applies only when no name
+    matched at all.
     """
     try:
         services = client.services.list()
@@ -189,16 +231,19 @@ def _absorb_swarm_services(client, info: TraefikInfo, match: tuple[str, ...]) ->
         # returns on every call. Degrade like the container pass does; only the
         # two failing together means genuinely nothing could be read.
         info.service_error = f"{type(exc).__name__}: {exc}"
-        return None
+        return None, []
 
     info.reachable = True
     traefik = None
+    by_image: list[Any] = []
     for service in services:
         name = getattr(service, "name", "") or ""
         if _matches(name, match):
             traefik = service
+        if _runs_traefik_image(_service_image(service)):
+            by_image.append(service)
         _absorb(info, parse_labels(_labels_of(service), origin=name))
-    return traefik
+    return traefik, by_image
 
 
 def _list_containers(client, info: TraefikInfo) -> list:
@@ -242,6 +287,53 @@ def _absorb_containers(info: TraefikInfo, containers: list) -> None:
         # project-label condition included, so the two stay in step without a
         # second, drifting copy of that rule here.
         _absorb(info, parse_labels(labels, origin=name, docker_name=compose_identity(labels, name)))
+
+
+def _traefik_image_containers(containers: list) -> list[Any]:
+    """Plain (non-Swarm) containers running the Traefik image.
+
+    Swarm task containers are skipped for the same reason as in
+    ``_traefik_container``: their service is already a candidate, and
+    counting both would make a single Traefik look ambiguous.
+    """
+    return [
+        container
+        for container in containers
+        if SWARM_SERVICE_LABEL not in container_labels(container)
+        and _runs_traefik_image(_container_image(container))
+    ]
+
+
+def _by_image(
+    services: list[Any], containers: list[Any], match: tuple[str, ...]
+) -> tuple[Any, Any, str | None, str | None]:
+    """Pick the Traefik workload by its image, when no configured name matched.
+
+    Returns ``(service, container, note, problem)``. Exactly one candidate is
+    used, and *note* says that it was found by its image and how to name it
+    instead. Several candidates are not chosen between -- drawing the tree of
+    a Traefik nobody named would be a guess presented as a reading -- and
+    *problem* lists them. No candidate leaves all four ``None``.
+    """
+    patterns = ", ".join(match)
+    candidates = [("service", s) for s in services] + [("container", c) for c in containers]
+    names = [getattr(obj, "name", "") or "?" for _kind, obj in candidates]
+    if len(candidates) == 1:
+        kind, obj = candidates[0]
+        # Short enough for one line at the widths the panel is checked at: the
+        # configured patterns are left out, `traefik.match` says where to look.
+        note = f"Traefik found by its image ({kind} {names[0]}); set traefik.match to name it"
+        if kind == "service":
+            return obj, None, note, None
+        return None, obj, note, None
+    if len(candidates) > 1:
+        problem = (
+            f"no Traefik service or container matches traefik.match ({patterns}), "
+            f"and several run the Traefik image: {', '.join(sorted(names))} -- "
+            "set traefik.match to the one to show"
+        )
+        return None, None, None, problem
+    return None, None, None, None
 
 
 def _traefik_container(containers: list, match: tuple[str, ...]) -> Any:
@@ -736,7 +828,10 @@ def collect_traefik(
     both listings failing together means nothing could be read at all.
 
     The Traefik workload is found by *match*: a Swarm service first, a plain
-    container otherwise. Its static configuration is read from the source
+    container otherwise. Where no name matches, a single service or plain
+    container running the Traefik image is used instead, with a note saying
+    so; several such candidates are listed, not chosen between. Its static
+    configuration is read from the source
     Traefik itself would use, and the file provider by the path that
     configuration names.
 
@@ -750,7 +845,7 @@ def collect_traefik(
         return info
     daemon = _DaemonInfo(client)
     with _socket_timeout(client, timeout):
-        service = _absorb_swarm_services(client, info, match)
+        service, image_services = _absorb_swarm_services(client, info, match)
         containers = _list_containers(client, info)
         if not info.reachable:
             # Both listings failed: there is no wiring left to show, unlike
@@ -760,6 +855,26 @@ def collect_traefik(
         _absorb_containers(info, containers)
         container = _traefik_container(containers, match) if service is None else None
         services_listed = info.service_error is None
+        ambiguous = None
+        # The configured name found nothing: fall back to the image, but only
+        # where that is unambiguous (see `_by_image`) and only over
+        # inventories read in full. An unread list is not an empty one: a
+        # workload in it could match traefik.match or be a second Traefik.
+        # The services count as read where they were listed or `docker info`
+        # reports Swarm inactive (then there are none) -- the same test the
+        # "nothing matches" reason below uses. Evaluated in this order so
+        # `docker info` is asked no more often than before.
+        if (
+            service is None
+            and container is None
+            and info.container_error is None
+            and (services_listed or daemon.swarm_state() == "inactive")
+        ):
+            service, container, by_image_note, ambiguous = _by_image(
+                image_services, _traefik_image_containers(containers), match
+            )
+            if by_image_note:
+                info.static_notes.append(by_image_note)
         # Swarm configs exist only on a Swarm daemon. When the services listing
         # failed, the daemon is asked once whether Swarm is active: a worker --
         # which can never list services -- or a manager whose listing failed
@@ -788,7 +903,10 @@ def collect_traefik(
             # missing. Reaching this with an unread container list means the
             # services were read: both listings failing returns above.
             patterns = ", ".join(match)
-            if info.container_error is not None:
+            if ambiguous is not None:
+                # A finding about what was read, whichever listing failed.
+                info.static_problem = ambiguous
+            elif info.container_error is not None:
                 info.static_problem = (
                     f"no Traefik service matches traefik.match ({patterns}); "
                     f"containers could not be listed: {info.container_error}"

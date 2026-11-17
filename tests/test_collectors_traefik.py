@@ -15,10 +15,12 @@ from terminal_status_panel.model import TraefikRouter
 
 
 class _FakeService:
-    def __init__(self, name, labels=None, args=None, configs=None):
+    def __init__(self, name, labels=None, args=None, configs=None, image=None):
         self.name = name
         spec = {"Labels": labels or {}}
         container = {}
+        if image is not None:
+            container["Image"] = image
         if args is not None:
             container["Args"] = args
         if configs is not None:
@@ -42,9 +44,11 @@ class _FakeConfig:
 class _FakeContainer:
     """Labels in the inspect shape, which is what `containers.list()` returns."""
 
-    def __init__(self, name, labels=None):
+    def __init__(self, name, labels=None, image=None):
         self.name = name
         self.attrs = {"Config": {"Labels": dict(labels or {})}}
+        if image is not None:
+            self.attrs["Config"]["Image"] = image
 
 
 class _SparseFakeContainer:
@@ -1908,3 +1912,159 @@ def test_a_config_served_static_file_behind_a_failed_listing_says_the_listing_fa
         " traefik_static_v1: Docker configs could not be listed"
     )
     assert info.file_provider_error == "TimeoutError: Read timed out."
+
+
+# --------------------------------------------------------------------------- #
+# No name matches: the Traefik image is the fallback, when it is unambiguous
+# --------------------------------------------------------------------------- #
+
+
+def _obs_services(*extra):
+    """A one-stack deployment whose Traefik is not named ``traefik_traefik``."""
+    return [
+        _FakeService(
+            "observability_traefik",
+            image="traefik:v3.7.19@sha256:" + "0" * 64,
+            args=["--entryPoints.websecure.address=:443"],
+        ),
+        _FakeService("observability_grafana", image="grafana/grafana:13.3.1"),
+        *extra,
+    ]
+
+
+def test_a_single_service_running_the_traefik_image_is_used_when_no_name_matches():
+    info = collector.collect_traefik(_FakeClient(services=_obs_services()))
+
+    assert info.static_problem is None
+    assert [e.name for e in info.entrypoints] == ["websecure"]
+
+
+def test_finding_traefik_by_its_image_says_so_and_names_the_setting():
+    """The reader must learn the panel guessed from the image rather than read
+    a configured name -- and how to make it stop guessing."""
+    info = collector.collect_traefik(_FakeClient(services=_obs_services()))
+
+    assert any(
+        "observability_traefik" in note and "traefik.match" in note for note in info.static_notes
+    ), info.static_notes
+
+
+def test_a_registry_prefixed_traefik_image_counts():
+    service = _FakeService(
+        "edge_proxy",
+        image="registry.example.org/proxy/library/traefik:v3.7",
+        args=["--entryPoints.web.address=:80"],
+    )
+    info = collector.collect_traefik(_FakeClient(services=[service]))
+
+    assert [e.name for e in info.entrypoints] == ["web"]
+
+
+def test_an_image_that_only_starts_with_traefik_is_not_traefik():
+    service = _FakeService("auth_forward", image="thomseddon/traefik-forward-auth:2")
+    info = collector.collect_traefik(_FakeClient(services=[service]))
+
+    assert info.entrypoints == []
+    assert info.static_problem == (
+        "no Traefik service or container matches traefik.match (traefik_traefik)"
+    )
+
+
+def test_two_services_running_the_traefik_image_are_not_chosen_between():
+    """Picking one would draw a tree for a Traefik nobody named."""
+    second = _FakeService(
+        "lab_traefik", image="traefik:v3.6", args=["--entryPoints.lab.address=:8080"]
+    )
+    info = collector.collect_traefik(_FakeClient(services=_obs_services(second)))
+
+    assert info.entrypoints == []
+    assert "lab_traefik" in info.static_problem
+    assert "observability_traefik" in info.static_problem
+    assert "traefik.match" in info.static_problem
+
+
+def test_a_name_match_wins_over_the_image():
+    """The fallback exists only for when the configured name finds nothing."""
+    named = _FakeService(
+        "traefik_traefik", image="traefik:v3.7", args=["--entryPoints.adminpanel.address=:2020"]
+    )
+    info = collector.collect_traefik(_FakeClient(services=[*_obs_services(), named]))
+
+    assert [e.name for e in info.entrypoints] == ["adminpanel"]
+    assert not any("image" in note for note in info.static_notes)
+
+
+def test_a_plain_container_running_the_traefik_image_is_used_when_no_name_matches():
+    container = _FakeContainer("edge-proxy-1", image="traefik:v3.7")
+    info = collector.collect_traefik(_FakeClient(services=[], containers=[container]))
+
+    assert info.static_problem is None or "matches traefik.match" not in info.static_problem
+    assert any("edge-proxy-1" in note for note in info.static_notes), info.static_notes
+
+
+def test_an_empty_match_still_reads_nothing_even_with_a_traefik_image_present():
+    info = collector.collect_traefik(_FakeClient(services=_obs_services()), match=())
+
+    assert info.entrypoints == []
+    assert info.static_notes == []
+
+
+# The fallback may only count candidates in inventories that were read in
+# full: an unread list is not an empty one (review on PR #56).
+
+
+class _ServicesFail(_FakeClient):
+    """The services listing fails; `docker info` reports *state*."""
+
+    def __init__(self, state, containers):
+        super().__init__(containers=containers)
+        self.state = state
+
+    @property
+    def services(self):
+        class _Failing:
+            def list(self, *a, **k):
+                raise RuntimeError("This node is not a swarm manager.")
+
+        return _Failing()
+
+    def info(self):
+        return {"Swarm": {"LocalNodeState": self.state}}
+
+
+class _ContainersFail(_FakeClient):
+    @property
+    def containers(self):
+        class _Failing:
+            def list(self, *a, **k):
+                raise TimeoutError("Read timed out.")
+
+        return _Failing()
+
+
+def test_no_image_fallback_when_the_containers_could_not_be_listed():
+    """An unread container could match traefik.match or be a second candidate."""
+    info = collector.collect_traefik(_ContainersFail(services=_obs_services()))
+
+    assert info.entrypoints == []
+    assert not any("found by its image" in note for note in info.static_notes)
+    assert info.static_problem == (
+        "no Traefik service matches traefik.match (traefik_traefik); "
+        "containers could not be listed: TimeoutError: Read timed out."
+    )
+
+
+def test_no_image_fallback_when_services_are_unread_on_an_active_swarm():
+    """A worker cannot list services: a service may match by name."""
+    container = _FakeContainer("edge-proxy-1", image="traefik:v3.7")
+    info = collector.collect_traefik(_ServicesFail("active", [container]))
+
+    assert not any("found by its image" in note for note in info.static_notes)
+
+
+def test_image_fallback_on_a_compose_host_where_swarm_is_inactive():
+    """No Swarm here, so there are no services to miss: the containers are all."""
+    container = _FakeContainer("edge-proxy-1", image="traefik:v3.7")
+    info = collector.collect_traefik(_ServicesFail("inactive", [container]))
+
+    assert any("edge-proxy-1" in note for note in info.static_notes), info.static_notes

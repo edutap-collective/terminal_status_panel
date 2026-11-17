@@ -48,6 +48,8 @@ class _HealthTasks:
     #: not become two tasks under one name, and then one result reported twice.
     kinds: list[str]
     clusters_probed: bool
+    #: Whether ``health.enabled`` names any cluster kind at all.
+    cluster_kinds_enabled: bool
     #: Filled by the check threads, read after they finish: a peer list that
     #: had to be resolved counts as having probed the peers even when the
     #: check itself ran out of budget.
@@ -136,6 +138,7 @@ def _build_health_tasks(
         timeouts=timeouts,
         kinds=runnable,
         clusters_probed=clusters_probed,
+        cluster_kinds_enabled=bool(cluster_kinds),
         resolved_peers=resolved_peers,
         unchecked=unchecked,
     )
@@ -240,6 +243,7 @@ def collect_health(
             for name in outcome.truncated
         ],
         clusters_probed=plan.clusters_probed,
+        cluster_kinds_enabled=plan.cluster_kinds_enabled,
         # We had either an answer or something to ask about -- a peer name to
         # check. A truncated peers check still had peer names, so it counts as
         # probed too.
