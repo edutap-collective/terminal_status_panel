@@ -31,6 +31,17 @@ def test_unprobed_clusters_are_not_rendered_as_all_clear():
     assert "no clustered services found" not in output
 
 
+def test_no_enabled_cluster_kind_names_the_setting_not_the_docker_client():
+    """Measured on a single-node Swarm whose config enabled no cluster kind:
+    the block claimed "no Docker client" while DOCKER INFOS beside it read the
+    same daemon without trouble."""
+    output = _render(HealthInfo(clusters_probed=False, cluster_kinds_enabled=False))
+    assert "no cluster checks enabled" in output
+    assert "health.enabled" in output
+    assert "no Docker client" not in output
+    assert "no clustered services found" not in output
+
+
 def test_probed_but_empty_clusters_say_so():
     output = _render(HealthInfo(clusters_probed=True, peers_probed=True, dns_probed=True))
     assert "no clustered services found" in output

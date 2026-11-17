@@ -258,6 +258,10 @@ matter:
   hidden: the Docker-bound kinds show `⬜ not checked (no Docker client)`, and
   the Docker section keeps its own warning. A broken Docker on a Swarm node
   must stay visible.
+- Where `health.enabled` names **no cluster kind at all**, the CLUSTERS block
+  reads `⬜ no cluster checks enabled (health.enabled)`. Until 0.14.0 it said
+  `not checked (no Docker client)` here too, and so blamed a daemon that
+  DOCKER INFOS beside it was reading without trouble.
 
 The top-level `sections` key overrides the default section list; see
 {doc}`the configuration reference </reference/configuration>`.

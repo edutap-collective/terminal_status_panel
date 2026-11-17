@@ -117,8 +117,9 @@ for a quorum verdict:
 
 All three blocks can additionally read `not checked (…)` instead of a false
 clean result: the CLUSTERS block shows `not checked (no Docker client)` when
-there is no Docker socket to probe from (or every cluster kind is disabled in
-config), the PEERS block shows `not checked (no peer list available)` when
+there is no Docker socket to probe from, and `no cluster checks enabled
+(health.enabled)` when `health.enabled` names no cluster kind at all, the
+PEERS block shows `not checked (no peer list available)` when
 the check produced no result *and* there were no peer names to check in
 the first place — i.e. neither the `wg`/TCP probe answered nor a Swarm node
 list gave it anything to ask about — and the DNS block shows `not checked

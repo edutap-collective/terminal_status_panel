@@ -117,6 +117,31 @@ def test_no_enabled_kinds_means_clusters_never_probed(monkeypatch):
     assert health.clusters_probed is False
 
 
+def test_no_cluster_kind_enabled_is_recorded_as_such(monkeypatch):
+    """Only host kinds enabled, a Docker client present: the clusters were not
+    probed because none was asked for -- not for lack of a client. The
+    renderer can say which only if the collector records it."""
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+    health = health_collector.collect_health(
+        _config(enabled=["systemd"]), peer_names=[], client=object(), resolve_fqdn=_fqdn
+    )
+    assert health.clusters_probed is False
+    assert health.cluster_kinds_enabled is False
+
+
+def test_an_enabled_cluster_kind_is_recorded_as_enabled(monkeypatch):
+    monkeypatch.setattr(
+        health_collector, "probe_cluster", lambda *a, **k: ClusterService(kind="postgres")
+    )
+    monkeypatch.setattr(health_collector, "collect_peers", lambda names, timeout: [])
+    monkeypatch.setattr(health_collector, "collect_dns", lambda **kwargs: [])
+    health = health_collector.collect_health(
+        _config(enabled=["postgres"]), peer_names=[], client=object(), resolve_fqdn=_fqdn
+    )
+    assert health.cluster_kinds_enabled is True
+
+
 def test_clusters_probed_and_empty_is_distinct_from_never_probed(monkeypatch):
     """The pair that makes the distinction real: a run whose every kind ran out
     of time must still be marked as probed, unlike the two cases above — the
