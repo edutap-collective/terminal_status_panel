@@ -15,6 +15,8 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-17
+
 ### Added
 
 - TRAEFIK WIRING finds Traefik by its image when no name matches
@@ -364,7 +366,8 @@ guesswork dressed as a record.
 
 See the git history and the release tags.
 
-[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/edutap-collective/terminal_status_panel/compare/v0.12.1...v0.12.2
