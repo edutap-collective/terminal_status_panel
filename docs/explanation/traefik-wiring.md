@@ -427,6 +427,11 @@ the Traefik image (repository `traefik`, whatever the registry, tag or
 digest), the tree is drawn from that one, and a dim line above it says it was
 found by its image and that `traefik.match` would name it. Look-alikes such as
 `traefik-forward-auth` do not count. A name match always wins over the image.
+The fallback only searches inventories that were read in full: the
+containers must have been listed, and the services too -- or `docker info`
+must report Swarm inactive, so that there are none. Where either list is
+unread, a workload in it could match `traefik.match` or be a second Traefik,
+and the banner from the table above stays.
 
 A file found beside other command-line flags does draw a tree; Traefik
 ignores those flags, and the panel notes that in one dim line above the tree

@@ -854,16 +854,27 @@ def collect_traefik(
             return info
         _absorb_containers(info, containers)
         container = _traefik_container(containers, match) if service is None else None
+        services_listed = info.service_error is None
         ambiguous = None
-        if service is None and container is None:
-            # The configured name found nothing: fall back to the image, but
-            # only where that is unambiguous (see `_by_image`).
+        # The configured name found nothing: fall back to the image, but only
+        # where that is unambiguous (see `_by_image`) and only over
+        # inventories read in full. An unread list is not an empty one: a
+        # workload in it could match traefik.match or be a second Traefik.
+        # The services count as read where they were listed or `docker info`
+        # reports Swarm inactive (then there are none) -- the same test the
+        # "nothing matches" reason below uses. Evaluated in this order so
+        # `docker info` is asked no more often than before.
+        if (
+            service is None
+            and container is None
+            and info.container_error is None
+            and (services_listed or daemon.swarm_state() == "inactive")
+        ):
             service, container, by_image_note, ambiguous = _by_image(
                 image_services, _traefik_image_containers(containers), match
             )
             if by_image_note:
                 info.static_notes.append(by_image_note)
-        services_listed = info.service_error is None
         # Swarm configs exist only on a Swarm daemon. When the services listing
         # failed, the daemon is asked once whether Swarm is active: a worker --
         # which can never list services -- or a manager whose listing failed

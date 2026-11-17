@@ -2007,3 +2007,64 @@ def test_an_empty_match_still_reads_nothing_even_with_a_traefik_image_present():
 
     assert info.entrypoints == []
     assert info.static_notes == []
+
+
+# The fallback may only count candidates in inventories that were read in
+# full: an unread list is not an empty one (review on PR #56).
+
+
+class _ServicesFail(_FakeClient):
+    """The services listing fails; `docker info` reports *state*."""
+
+    def __init__(self, state, containers):
+        super().__init__(containers=containers)
+        self.state = state
+
+    @property
+    def services(self):
+        class _Failing:
+            def list(self, *a, **k):
+                raise RuntimeError("This node is not a swarm manager.")
+
+        return _Failing()
+
+    def info(self):
+        return {"Swarm": {"LocalNodeState": self.state}}
+
+
+class _ContainersFail(_FakeClient):
+    @property
+    def containers(self):
+        class _Failing:
+            def list(self, *a, **k):
+                raise TimeoutError("Read timed out.")
+
+        return _Failing()
+
+
+def test_no_image_fallback_when_the_containers_could_not_be_listed():
+    """An unread container could match traefik.match or be a second candidate."""
+    info = collector.collect_traefik(_ContainersFail(services=_obs_services()))
+
+    assert info.entrypoints == []
+    assert not any("found by its image" in note for note in info.static_notes)
+    assert info.static_problem == (
+        "no Traefik service matches traefik.match (traefik_traefik); "
+        "containers could not be listed: TimeoutError: Read timed out."
+    )
+
+
+def test_no_image_fallback_when_services_are_unread_on_an_active_swarm():
+    """A worker cannot list services: a service may match by name."""
+    container = _FakeContainer("edge-proxy-1", image="traefik:v3.7")
+    info = collector.collect_traefik(_ServicesFail("active", [container]))
+
+    assert not any("found by its image" in note for note in info.static_notes)
+
+
+def test_image_fallback_on_a_compose_host_where_swarm_is_inactive():
+    """No Swarm here, so there are no services to miss: the containers are all."""
+    container = _FakeContainer("edge-proxy-1", image="traefik:v3.7")
+    info = collector.collect_traefik(_ServicesFail("inactive", [container]))
+
+    assert any("edge-proxy-1" in note for note in info.static_notes), info.static_notes
