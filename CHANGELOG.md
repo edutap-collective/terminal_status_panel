@@ -15,6 +15,33 @@ guesswork dressed as a record.
 
 ## [Unreleased]
 
+### Added
+
+- DOCKER INFOS has an **Objects** row under Disk: containers running, stopped
+  and in Swarm's task history; images with the unused and dangling ones;
+  volumes with the unused and anonymous ones; and the number of networks.
+  Counts the response did not carry are left out rather than shown as zero.
+- A **Cleanup** line appears under it when a rule fires — `cleanup due`
+  (yellow) or `cleanup overdue` (red), worst reason first. Unused volumes at
+  ten times the ones in use are critical. The thresholds are configurable in
+  the new `[docker.cleanup]` table.
+- The Disk row names what each category could give back:
+  `images 4.4 GB (↺ 61.0 MB)`.
+
+### Changed
+
+- The unused-volume count moved from the Disk row to the Objects row.
+- Docker's reclaimable figure is coloured by `thresholds.filesystem.warning`
+  and `.critical` — yellow, now also red — instead of a fixed 80 %, with the
+  same inclusive boundaries as the DISK bars.
+
+### Fixed
+
+- The DISK bars read `thresholds.filesystem.warning` and `.critical`. They
+  used a fixed 80 / 90 while the documented keys went unread.
+- A whole-number setting given as `inf` falls back to its default and is
+  reported by `--debug`, instead of raising and taking every command down.
+
 ## [0.15.0] - 2026-11-17
 
 ### Added

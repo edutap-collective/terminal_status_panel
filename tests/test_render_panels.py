@@ -1998,7 +1998,14 @@ def test_the_disk_line_leads_with_what_can_be_reclaimed():
     out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
     line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
     assert line.index("reclaimable") < line.index("images")
-    assert "178/185 unused" in line
+
+
+def test_the_unused_volume_count_moved_to_the_objects_row():
+    out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
+    disk = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    objects = next(line for line in out.splitlines() if line.strip().startswith("Objects"))
+    assert "unused" not in disk
+    assert "volumes 185 (178 unused" in objects
 
 
 def test_a_missing_disk_reading_says_so_rather_than_vanishing():
@@ -2042,8 +2049,11 @@ def test_disk_colour_follows_real_pressure_not_the_reclaimable_size():
     roomy = ResourceUsage(filesystems=[_fs("/", 22.0)])
     assert panels._disk_style(_disk(), roomy) is None
 
-    tight = ResourceUsage(filesystems=[_fs("/", 91.0)])
+    tight = ResourceUsage(filesystems=[_fs("/", 85.0)])
     assert panels._disk_style(_disk(), tight) == "yellow"
+
+    full = ResourceUsage(filesystems=[_fs("/", 91.0)])
+    assert panels._disk_style(_disk(), full) == "red"
 
 
 def test_disk_colour_picks_the_mount_that_actually_holds_the_root_dir():
@@ -2520,3 +2530,22 @@ def test_updates_panel_names_a_failed_check():
     )
     out = _text(panels.updates_panel(info, now=1000.0 + 600))
     assert "last check failed (timeout)" in out
+
+
+def test_the_disk_bars_follow_the_configured_filesystem_thresholds():
+    """They used fixed 80/90 while the documented keys went unread."""
+    from terminal_status_panel.config import Thresholds
+    from terminal_status_panel.model import FilesystemUsage, ResourceUsage
+
+    res = ResourceUsage(filesystems=[FilesystemUsage("/", 100, 85, 85.0)])
+    default = panels._filesystem_table(res, bar_width=10)
+    strict = panels._filesystem_table(
+        res, bar_width=10, thresholds=Thresholds(filesystem_warning=70, filesystem_critical=75)
+    )
+    assert _text(default) == _text(strict)  # same text, so compare the styles
+    console = Console(width=100, force_terminal=True, color_system="truecolor", record=True)
+    console.print(default)
+    yellow = console.export_html(inline_styles=True)
+    console.print(strict)
+    red = console.export_html(inline_styles=True)
+    assert yellow != red

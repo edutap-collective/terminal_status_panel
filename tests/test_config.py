@@ -477,3 +477,51 @@ def test_repeated_names_are_kept_once_in_order(tmp_path):
     )
     assert cfg.sections == ("trouble", "server")
     assert cfg.trouble_host_events == ("oom_kill", "unit_failed")
+
+
+def test_cleanup_thresholds_default_without_a_file(tmp_path):
+    cleanup = load_config(tmp_path / "does-not-exist.toml").docker_cleanup
+    assert cleanup.unused_volumes == 10
+    assert cleanup.unused_volumes_ratio == 10.0
+    assert cleanup.stopped_containers == 10
+    assert cleanup.dangling_images == 10
+    assert cleanup.unused_images == 20
+
+
+def test_cleanup_thresholds_are_read_from_their_table(tmp_path):
+    path = _write(
+        tmp_path,
+        "[docker.cleanup]\nunused_volumes = 50\nunused_volumes_ratio = 4\nunused_images = 5\n",
+    )
+    cleanup = load_config(path).docker_cleanup
+    assert (cleanup.unused_volumes, cleanup.unused_volumes_ratio, cleanup.unused_images) == (
+        50,
+        4.0,
+        5,
+    )
+
+
+def test_a_misspelt_cleanup_key_is_reported(tmp_path):
+    path = _write(tmp_path, "[docker.cleanup]\nunused_volume = 50\n")
+    cfg = load_config(path)
+    assert any(p.key == "docker.cleanup.unused_volume" for p in cfg.problems)
+    assert cfg.docker_cleanup.unused_volumes == 10
+
+
+def test_a_cleanup_ratio_below_one_is_refused(tmp_path):
+    """A ratio under 1 would call a node with more volumes in use than unused overdue."""
+    path = _write(tmp_path, "[docker.cleanup]\nunused_volumes_ratio = 0.5\n")
+    cfg = load_config(path)
+    assert cfg.docker_cleanup.unused_volumes_ratio == 10.0
+    assert any(p.key == "docker.cleanup.unused_volumes_ratio" for p in cfg.problems)
+
+
+def test_a_non_finite_cleanup_count_falls_back_instead_of_crashing(tmp_path):
+    """TOML allows `inf`; int(inf) raises OverflowError, which took the panel down."""
+    path = _write(tmp_path, "[docker.cleanup]\nunused_volumes = inf\nunused_images = nan\n")
+    cfg = load_config(path)
+    assert cfg.docker_cleanup.unused_volumes == 10
+    assert cfg.docker_cleanup.unused_images == 20
+    assert {"docker.cleanup.unused_volumes", "docker.cleanup.unused_images"} <= {
+        p.key for p in cfg.problems
+    }

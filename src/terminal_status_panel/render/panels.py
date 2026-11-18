@@ -38,6 +38,9 @@ from ..model import (
 )
 from . import icons
 from .bars import STATUS_COLORS, classify, format_bytes, render_bar
+from .cleanup import CRITICAL as _CRITICAL
+from .cleanup import STYLES as _CLEANUP_STYLES
+from .cleanup import CleanupFinding, cleanup_findings, disk_pressure
 from .icons import DEAD as _DEAD
 from .icons import OK as _OK
 from .icons import WARN as _WARN
@@ -386,8 +389,11 @@ _FS_BAR_GAP = 2
 _UNBOUNDED_WIDTH = 10_000
 
 
-def _filesystem_table(res: ResourceUsage, bar_width: int | None) -> Table:
+def _filesystem_table(
+    res: ResourceUsage, bar_width: int | None, thresholds: Thresholds | None = None
+) -> Table:
     """Build the filesystem table, with a usage bar column iff *bar_width* is given."""
+    t = thresholds or Thresholds()
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True, max_width=14)
     table.add_column(justify="right")
@@ -407,7 +413,7 @@ def _filesystem_table(res: ResourceUsage, bar_width: int | None) -> Table:
         return table
     _row("Mounted on", "Size", "Used", "Avail", "Use%")
     for fs in res.filesystems:
-        status = classify(fs.percent, 80.0, 90.0)
+        status = classify(fs.percent, t.filesystem_warning, t.filesystem_critical)
         avail = max(fs.total - fs.used, 0)
         cells: list[RenderableType] = [
             _short_mount(fs.mountpoint, 14),
@@ -447,23 +453,24 @@ class _FilesystemBody:
     available width exactly as before.
     """
 
-    def __init__(self, res: ResourceUsage) -> None:
+    def __init__(self, res: ResourceUsage, thresholds: Thresholds | None = None) -> None:
         self._res = res
+        self._thresholds = thresholds
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        base = _filesystem_table(self._res, bar_width=None)
+        base = _filesystem_table(self._res, bar_width=None, thresholds=self._thresholds)
         natural_width = Measurement.get(
             console, options.update_width(_UNBOUNDED_WIDTH), base
         ).maximum
         bar_width = min(options.max_width - natural_width - _FS_BAR_GAP, _MEMORY_BAR_WIDTH)
         if bar_width >= _MIN_FS_BAR_WIDTH:
-            yield _filesystem_table(self._res, bar_width=bar_width)
+            yield _filesystem_table(self._res, bar_width=bar_width, thresholds=self._thresholds)
         else:
             yield base
 
 
-def _filesystem_body(res: ResourceUsage) -> RenderableType:
-    return _FilesystemBody(res)
+def _filesystem_body(res: ResourceUsage, thresholds: Thresholds | None = None) -> RenderableType:
+    return _FilesystemBody(res, thresholds)
 
 
 #: Truncate a service name that will not fit rather than wrapping it. A wrapped
@@ -608,7 +615,7 @@ def system_status(
         _memory_body(res, cfg),
         Text(""),
         _subhead("FILESYSTEM USAGE"),
-        _filesystem_body(res),
+        _filesystem_body(res, cfg.thresholds),
     )
     grid = Table.grid(expand=True, padding=(0, 4))
     grid.add_column(ratio=3)
@@ -637,11 +644,11 @@ def memory_panel(res: ResourceUsage | None, cfg: Config) -> Group:
     return section("MEMORY & SWAP", _memory_body(res, cfg))
 
 
-def filesystem_panel(res: ResourceUsage | None) -> Group:
+def filesystem_panel(res: ResourceUsage | None, thresholds: Thresholds | None = None) -> Group:
     """The FILESYSTEM USAGE block."""
     if res is None:
         return section("FILESYSTEM USAGE", Text("not available", style="dim"))
-    return section("FILESYSTEM USAGE", _filesystem_body(res))
+    return section("FILESYSTEM USAGE", _filesystem_body(res, thresholds))
 
 
 # --------------------------------------------------------------------------- #
@@ -649,40 +656,25 @@ def filesystem_panel(res: ResourceUsage | None) -> Group:
 # --------------------------------------------------------------------------- #
 
 
-#: Above this, the filesystem holding Docker's data is under real pressure and
-#: reclaimable bytes are worth acting on. Below it the same figures are just
-#: housekeeping, and a warning that glows while a disk is a fifth full becomes
-#: wallpaper -- unread on the day it finally means something.
-_DISK_PRESSURE_PERCENT = 80.0
-
-
-def _disk_style(disk, resources) -> str | None:
-    """Yellow where Docker's data sits on a filesystem under pressure.
+def _disk_style(disk, resources, thresholds: Thresholds | None = None) -> str | None:
+    """Yellow or red where Docker's data sits on a filesystem under pressure.
 
     The colour follows the *disk*, not the size of the reclaimable heap: 28 GB
     of recoverable images matter on a full volume and matter not at all on an
-    empty one.
-
-    The mount is found by longest match rather than by assuming "/", because a
-    node that gives Docker its own volume is exactly the node where the two
-    filesystems disagree. Without filesystem data no colour is chosen at all --
-    an unmeasured disk is not evidence of comfort, but claiming pressure would
-    be a finding nobody took.
+    empty one. The bands are the filesystem thresholds the DISK bars use, so
+    one filesystem never shows two verdicts. See ``cleanup.disk_pressure``.
     """
-    if disk is None or disk.error or resources is None or not disk.root_dir:
-        return None
-    best = None
-    for fs in resources.filesystems:
-        base = fs.mountpoint.rstrip("/")
-        if disk.root_dir == fs.mountpoint or disk.root_dir.startswith(f"{base}/"):
-            if best is None or len(fs.mountpoint) > len(best.mountpoint):
-                best = fs
-    if best is None or best.percent is None:
-        return None
-    return "yellow" if best.percent > _DISK_PRESSURE_PERCENT else None
+    pressure = disk_pressure(disk, resources, thresholds or Thresholds())
+    return _CLEANUP_STYLES.get(pressure) if pressure else None
 
 
-def _disk_line(disk, resources=None) -> Text:
+def _category(label: str, size: int, reclaimable: int) -> str:
+    """``images 4.4 GB (↺ 1.2 GB)`` -- the share a prune of this kind returns."""
+    text = f"{label} {format_bytes(size)}"
+    return f"{text} (↺ {format_bytes(reclaimable)})" if reclaimable else text
+
+
+def _disk_line(disk, resources=None, thresholds: Thresholds | None = None) -> Text:
     """The one-line Docker footprint, or a stated absence.
 
     Absence renders rather than disappears. A missing line reads as "nothing to
@@ -692,22 +684,95 @@ def _disk_line(disk, resources=None) -> Text:
         return Text("n/a", style="dim")
     if disk.error:
         return Text(f"n/a ({disk.error})", style="dim")
-    style = _disk_style(disk, resources)
+    style = _disk_style(disk, resources, thresholds)
     line = Text()
     if disk.node:
         line.append(disk.node, style="bold")
         line.append("  ·  ")
     line.append(f"{format_bytes(disk.used)} used")
     line.append(f"  ·  ↺ {format_bytes(disk.reclaimable)} reclaimable", style=style or "")
-    line.append(
-        f"  ·  images {format_bytes(disk.images)}"
-        f"  ·  cache {format_bytes(disk.build_cache)}"
-        f"  ·  volumes {format_bytes(disk.volumes)}",
-        style="dim",
+    categories = (
+        _category("images", disk.images, disk.images_reclaimable),
+        _category("cache", disk.build_cache, disk.cache_reclaimable),
+        _category("volumes", disk.volumes, disk.volumes_reclaimable),
     )
-    if disk.volumes_total:
-        line.append(f"  ·  {disk.volumes_unused}/{disk.volumes_total} unused", style=style or "dim")
+    line.append("".join(f"  ·  {c}" for c in categories), style="dim")
     return line
+
+
+def _objects_segments(disk) -> list[tuple[str, str]]:
+    """(subject, text) per object kind, leaving out what was never counted.
+
+    A count of zero is a statement about the daemon; a count nobody took is
+    not, and rendering it as zero would claim a clean node nobody looked at.
+    """
+    segments: list[tuple[str, str]] = []
+    if disk.containers_total is not None:
+        text = f"containers {disk.containers_running} running, {disk.containers_stopped} stopped"
+        if disk.containers_swarm_history:
+            text += f", {disk.containers_swarm_history} swarm history"
+        segments.append(("containers", text))
+    if disk.images_total is not None:
+        details = [f"{disk.images_unused} unused"]
+        if disk.images_dangling is not None:
+            details.append(f"{disk.images_dangling} dangling")
+        segments.append(("images", f"images {disk.images_total} ({', '.join(details)})"))
+    if disk.volumes_total is not None:
+        details = []
+        if disk.volumes_unused is not None:
+            details.append(f"{disk.volumes_unused} unused")
+        if disk.volumes_anonymous:
+            details.append(f"{disk.volumes_anonymous} anonymous")
+        text = f"volumes {disk.volumes_total}"
+        segments.append(("volumes", f"{text} ({', '.join(details)})" if details else text))
+    if disk.networks is not None:
+        segments.append(("networks", f"networks {disk.networks}"))
+    return segments
+
+
+def _objects_line(disk, findings: Sequence[CleanupFinding]) -> Text:
+    """What the daemon holds, counted; each kind coloured by its own finding."""
+    severity = {f.subject: f.severity for f in findings}
+    line = Text()
+    for index, (subject, text) in enumerate(_objects_segments(disk)):
+        if index:
+            line.append("  ·  ", style="dim")
+        line.append(text, style=_CLEANUP_STYLES.get(severity.get(subject, ""), "dim"))
+    return line
+
+
+def _cleanup_line(findings: Sequence[CleanupFinding]) -> Text:
+    """Why this node needs a prune, worst first, in words as well as colour.
+
+    "overdue" and "due" carry the severity for a reader whose terminal shows
+    no colour -- red and yellow alone would be the same line there.
+    """
+    worst = findings[0].severity
+    line = Text()
+    verdict = "cleanup overdue: " if worst == _CRITICAL else "cleanup due: "
+    line.append(f"{_WARN}{verdict}", style=f"bold {_CLEANUP_STYLES[worst]}")
+    for index, finding in enumerate(findings):
+        if index:
+            line.append("  ·  ", style="dim")
+        line.append(finding.text, style=_CLEANUP_STYLES[finding.severity])
+    return line
+
+
+def _add_disk_rows(table: Table, disk, resources, cfg: Config) -> None:
+    """Disk, then Objects and Cleanup where there is something to say.
+
+    Objects and Cleanup are left out on a failed reading: the Disk row already
+    says n/a and why, and counts or rules on a reading that never happened
+    would be zeros dressed as facts. Cleanup appears only with a finding -- a
+    line present every day stops being read on the day it matters.
+    """
+    table.add_row("Disk", _disk_line(disk, resources, cfg.thresholds))
+    if disk is None or disk.error:
+        return
+    findings = cleanup_findings(disk, resources, cfg)
+    table.add_row("Objects", _objects_line(disk, findings))
+    if findings:
+        table.add_row("Cleanup", _cleanup_line(findings))
 
 
 #: How many trouble rows the block ever renders. A node reboot brings every
@@ -1042,7 +1107,9 @@ def _node_tunnel_note(node: SwarmNode, peers: list[PeerReachability] | None) -> 
     return Text(f" (wg: {reason})", style="red")
 
 
-def _swarm_body(swarm: SwarmInfo, peers=None, resources=None) -> RenderableType:
+def _swarm_body(
+    swarm: SwarmInfo, peers=None, resources=None, cfg: Config | None = None
+) -> RenderableType:
     role = swarm.node_role or "?"
     n_nodes = swarm.node_count if swarm.node_count is not None else len(swarm.nodes)
     n_stacks = len({s.stack for s in swarm.services if s.stack})
@@ -1083,7 +1150,7 @@ def _swarm_body(swarm: SwarmInfo, peers=None, resources=None) -> RenderableType:
     quorum = _manager_quorum(swarm.nodes)
     if quorum is not None:
         table.add_row("", quorum)
-    table.add_row("Disk", _disk_line(swarm.disk, resources))
+    _add_disk_rows(table, swarm.disk, resources, cfg or Config())
     return table
 
 
@@ -1451,12 +1518,12 @@ def _stack_columns(
     return Group(*parts)
 
 
-def _disk_row(disk, resources) -> Table:
-    """The disk line on its own grid, for the layout that has no SWARM block."""
+def _disk_row(disk, resources, cfg: Config) -> Table:
+    """The disk rows on their own grid, for the layout that has no SWARM block."""
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold cyan")
     grid.add_column()
-    grid.add_row("Disk", _disk_line(disk, resources))
+    _add_disk_rows(grid, disk, resources, cfg)
     return grid
 
 
@@ -1542,14 +1609,14 @@ def services_section(
         # width pressure that argues for brevity comes from a cluster panel
         # with dozens of services; a host without a swarm has the room, and an
         # accumulated Docker is likelier there, not less.
-        plain: list[RenderableType] = [*legend, _disk_row(swarm.disk, resources), Text("")]
+        plain: list[RenderableType] = [*legend, _disk_row(swarm.disk, resources, cfg), Text("")]
         plain.append(_stack_columns(swarm, cfg, health))
         return section("DOCKER INFOS", Group(*plain))
 
     parts: list[RenderableType] = [
         *legend,
         _subhead("SWARM"),
-        _swarm_body(swarm, health.peers if health else None, resources),
+        _swarm_body(swarm, health.peers if health else None, resources, cfg),
         Text(""),
     ]
     parts.append(_stack_columns(swarm, cfg, health))

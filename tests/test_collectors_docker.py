@@ -1836,3 +1836,189 @@ def test_the_shape_a_real_cluster_node_answers_with(monkeypatch):
     # 21 GiB of layers, 17 of them held by a container.
     assert disk.images == 21 * 2**30
     assert disk.reclaimable >= 4 * 2**30
+
+
+# --- /system/df: object counts for the Objects row --------------------------
+
+_SWARM_TASK = {"com.docker.swarm.task.id": "t1"}
+_ANONYMOUS = {"com.docker.volume.anonymous": ""}
+
+
+def _df_counts_payload():
+    """Lists shaped like Docker 26.1.5 answers them (measured on a production node, 2026-11-18).
+
+    The daemon omits ``SizeRw`` on a container whose writable layer is empty,
+    and labels sit on containers and volumes alike.
+    """
+    return {
+        "LayersSize": 10 * 2**30,
+        "Images": [
+            {"Size": 4 * 2**30, "SharedSize": 0, "Containers": 2, "RepoTags": ["app:1"]},
+            {"Size": 3 * 2**30, "SharedSize": 0, "Containers": 0, "RepoTags": ["app:0"]},
+            {"Size": 2 * 2**30, "SharedSize": 0, "Containers": 0, "RepoTags": []},
+            {"Size": 2**30, "SharedSize": 0, "Containers": 0, "RepoTags": ["<none>:<none>"]},
+        ],
+        "Containers": [
+            {"State": "running", "SizeRw": 2**20, "Labels": _SWARM_TASK},
+            {"State": "running", "Labels": {}},
+            {"State": "exited", "SizeRw": 3 * 2**20, "Labels": _SWARM_TASK},
+            {"State": "exited", "Labels": _SWARM_TASK},
+            {"State": "exited", "SizeRw": 5 * 2**20, "Labels": {}},
+            {"State": "created"},
+        ],
+        "Volumes": [
+            {"Name": "data", "Labels": {}, "UsageData": {"RefCount": 1, "Size": 2**30}},
+            {"Name": "x1", "Labels": _ANONYMOUS, "UsageData": {"RefCount": 0, "Size": 0}},
+            {"Name": "x2", "Labels": _ANONYMOUS, "UsageData": {"RefCount": 0, "Size": 0}},
+            {"Name": "old", "Labels": None, "UsageData": {"RefCount": 0, "Size": 2**20}},
+        ],
+        "BuildCache": [
+            {"Size": 2**30, "InUse": False, "Shared": False},
+        ],
+    }
+
+
+def _counts_disk(monkeypatch, payload):
+    client = _FakeClient("active", nodes=[_FakeNode("n1", "srv-01")], df=payload)
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    return docker_collector.collect_docker().disk
+
+
+def test_containers_are_counted_with_swarm_history_kept_apart(monkeypatch):
+    """Swarm prunes its own task history; only the rest is anyone's to clean up."""
+    disk = _counts_disk(monkeypatch, _df_counts_payload())
+    assert disk.containers_total == 6
+    assert disk.containers_running == 2
+    assert disk.containers_stopped == 2
+    assert disk.containers_swarm_history == 2
+
+
+def test_images_are_counted_as_unused_and_dangling(monkeypatch):
+    disk = _counts_disk(monkeypatch, _df_counts_payload())
+    assert disk.images_total == 4
+    assert disk.images_unused == 3
+    # No tag at all, and the placeholder older daemons report instead.
+    assert disk.images_dangling == 2
+
+
+def test_anonymous_volumes_are_counted(monkeypatch):
+    disk = _counts_disk(monkeypatch, _df_counts_payload())
+    assert (disk.volumes_unused, disk.volumes_total) == (3, 4)
+    assert disk.volumes_anonymous == 2
+
+
+def test_what_can_be_reclaimed_is_kept_per_category(monkeypatch):
+    disk = _counts_disk(monkeypatch, _df_counts_payload())
+    assert disk.images_reclaimable == 6 * 2**30
+    assert disk.containers_reclaimable == 8 * 2**20
+    assert disk.volumes_reclaimable == 2**20
+    assert disk.cache_reclaimable == 2**30
+    assert disk.reclaimable == (
+        disk.images_reclaimable
+        + disk.containers_reclaimable
+        + disk.volumes_reclaimable
+        + disk.cache_reclaimable
+    )
+
+
+def test_the_aggregate_form_keeps_its_reclaimable_per_category(monkeypatch):
+    disk = _counts_disk(monkeypatch, _df_payload())
+    assert disk.images_reclaimable == 13 * 2**30
+    assert disk.containers_reclaimable == 2**28
+    assert disk.volumes_reclaimable == 2 * 2**30
+    assert disk.cache_reclaimable == 2**30
+
+
+def test_counts_come_from_the_aggregate_items_where_the_lists_are_gone(monkeypatch):
+    """A daemon answering only the aggregate form still yields every count."""
+    legacy = _df_counts_payload()
+    payload = {
+        "LayersSize": legacy["LayersSize"],
+        "ImageUsage": {"TotalSize": 10 * 2**30, "Reclaimable": 0, "Items": legacy["Images"]},
+        "ContainerUsage": {"TotalSize": 0, "Reclaimable": 0, "Items": legacy["Containers"]},
+        "VolumeUsage": {"TotalSize": 2**30, "Reclaimable": 0, "Items": legacy["Volumes"]},
+        "BuildCacheUsage": {"TotalSize": 0, "Reclaimable": 0, "Items": []},
+    }
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.error is None
+    assert (disk.containers_total, disk.containers_stopped) == (6, 2)
+    assert (disk.images_total, disk.images_unused, disk.images_dangling) == (4, 3, 2)
+    assert (disk.volumes_total, disk.volumes_unused, disk.volumes_anonymous) == (4, 3, 2)
+
+
+def test_counts_are_unknown_rather_than_zero_without_a_list(monkeypatch):
+    """Zero would claim a clean daemon; nothing was counted."""
+    payload = {
+        "ImageUsage": {"TotalSize": 1, "Reclaimable": 0},
+        "VolumeUsage": {"TotalSize": 1, "Reclaimable": 0},
+    }
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.error is None
+    assert disk.containers_total is None
+    assert disk.images_total is None
+
+
+class _NetworkClient(_FakeClient):
+    def __init__(self, *a, networks=None, **k):
+        super().__init__(*a, **k)
+        self._networks = networks
+
+    @property
+    def networks(self):
+        if isinstance(self._networks, Exception):
+            raise self._networks
+        return self._Coll(self._networks)
+
+
+def test_networks_are_counted(monkeypatch):
+    client = _NetworkClient(
+        "active", nodes=[_FakeNode("n1", "srv-01")], df=_df_payload(), networks=[1, 2, 3]
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    assert docker_collector.collect_docker().disk.networks == 3
+
+
+def test_a_failing_network_listing_loses_only_the_count(monkeypatch):
+    client = _NetworkClient(
+        "inactive", df=_df_payload(), networks=RuntimeError("network listing broke")
+    )
+    monkeypatch.setattr(docker_collector.docker, "from_env", lambda *a, **k: client)
+    result = docker_collector.collect_docker()
+    assert result.reachable is True
+    assert result.disk.networks is None
+    assert result.disk.volumes_total == 3
+
+
+def test_paused_and_restarting_containers_are_not_stopped(monkeypatch):
+    """Only exited, created and dead containers are leftovers anyone can remove."""
+    payload = _df_counts_payload()
+    payload["Containers"] = [
+        {"State": "paused", "Labels": {}},
+        {"State": "restarting", "Labels": {}},
+        {"State": "restarting", "Labels": _SWARM_TASK},
+        {"State": "dead", "Labels": {}},
+        {"State": "exited", "Labels": _SWARM_TASK},
+    ]
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.containers_total == 5
+    assert disk.containers_stopped == 1
+    assert disk.containers_swarm_history == 1
+
+
+def test_volume_counts_are_unknown_without_a_volume_list(monkeypatch):
+    payload = _df_counts_payload()
+    del payload["Volumes"]
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.volumes_total is None
+    assert disk.volumes_unused is None
+    assert disk.volumes_anonymous is None
+
+
+def test_unused_volumes_are_unknown_where_the_daemon_did_not_count_references(monkeypatch):
+    """The API reports RefCount -1 (or no usage data) where it did not compute it."""
+    payload = _df_counts_payload()
+    payload["Volumes"].append({"Name": "y", "Labels": {}, "UsageData": {"RefCount": -1}})
+    payload["Volumes"].append({"Name": "z", "Labels": {}, "UsageData": None})
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.volumes_total == 6
+    assert disk.volumes_unused is None
