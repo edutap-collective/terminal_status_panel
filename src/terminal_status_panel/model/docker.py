@@ -203,14 +203,17 @@ class DockerDiskUsage:
     #: Volumes nothing references any more, and the total. A volume with no
     #: container still holds its bytes, and nothing else on the panel would
     #: ever mention it.
-    volumes_unused: int = 0
-    volumes_total: int = 0
+    #: ``None`` where the response carried no volume list, or -- for
+    #: ``volumes_unused`` -- where the daemon did not count references
+    #: (``RefCount`` -1). Zero would claim a clean store nobody counted.
+    volumes_unused: int | None = 0
+    volumes_total: int | None = 0
     #: Volumes Docker created on a container's behalf, without a name anyone
     #: chose. They are the ones that pile up: a ``VOLUME`` line in an image
     #: leaves one behind on every run whose container is removed without
     #: ``-v``. Measured on 2026-11-18: 2,175 of 2,178 volumes on one node,
     #: every one of them anonymous and unused.
-    volumes_anonymous: int = 0
+    volumes_anonymous: int | None = 0
     #: What each category could give back. ``reclaimable`` is their sum; kept
     #: apart because "28 GB reclaimable" does not say which prune to run.
     images_reclaimable: int = 0

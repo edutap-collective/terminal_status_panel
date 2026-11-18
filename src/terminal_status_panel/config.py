@@ -505,7 +505,9 @@ class _Reader:
             return default
         try:
             value = int(raw)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            # OverflowError: TOML allows `inf`, and int(inf) raises it rather
+            # than ValueError -- uncaught, it took every command down.
             self._note(key, raw, default, "expected a whole number")
             return default
         if clamp_to is not None and value < clamp_to:

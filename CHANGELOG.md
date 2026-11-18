@@ -32,8 +32,15 @@ guesswork dressed as a record.
 
 - The unused-volume count moved from the Disk row to the Objects row.
 - Docker's reclaimable figure is coloured by `thresholds.filesystem.warning`
-  and `.critical` — yellow, now also red — instead of a fixed 80 %. With the
-  defaults, yellow starts where it did.
+  and `.critical` — yellow, now also red — instead of a fixed 80 %, with the
+  same inclusive boundaries as the DISK bars.
+
+### Fixed
+
+- The DISK bars read `thresholds.filesystem.warning` and `.critical`. They
+  used a fixed 80 / 90 while the documented keys went unread.
+- A whole-number setting given as `inf` falls back to its default and is
+  reported by `--debug`, instead of raising and taking every command down.
 
 ## [0.15.0] - 2026-11-17
 

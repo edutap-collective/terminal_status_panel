@@ -129,9 +129,9 @@ category carries its own share in brackets, because the total does not say
 which prune to run.
 
 **Colour follows the disk, not the heap.** The reclaimable figure turns yellow
-when the filesystem holding `DockerRootDir` is above
-`thresholds.filesystem.warning` and red above `thresholds.filesystem.critical`
-— the same bands the DISK bars use, so one filesystem never shows two
+when the filesystem holding `DockerRootDir` reaches
+`thresholds.filesystem.warning` and red at `thresholds.filesystem.critical`
+— the same bands, boundaries included, the DISK bars use, so one filesystem never shows two
 verdicts. 28 GB of recoverable images matter on a full volume and not at all on
 an empty one. The mount is found by longest match rather than by assuming `/`,
 because a node that gives Docker its own volume is exactly where the two
@@ -143,7 +143,8 @@ render uncoloured rather than claiming a pressure nobody measured.
 **Objects** counts what the daemon holds, from the same `/system/df` reading —
 no further call except one listing for the network count.
 
-- **Containers** split into running, stopped, and *swarm history*. A stopped
+- **Containers** split into running, stopped (exited, created or dead — not
+  paused or restarting), and *swarm history*. A stopped
   container that ran a Swarm task is history Swarm keeps and prunes itself, up
   to its task-history retention limit; it is nobody's to clean up, so it is
   counted apart and never raises a finding.
@@ -170,7 +171,7 @@ Objects row.
 
 | Rule | Severity | Default |
 |------|----------|---------|
-| Docker's filesystem above `thresholds.filesystem.warning` / `.critical`, with at least 1 GiB reclaimable | warning / critical | 80 % / 90 % |
+| Docker's filesystem at or above `thresholds.filesystem.warning` / `.critical`, with at least 1 GiB reclaimable | warning / critical | 80 % / 90 % |
 | Unused volumes at least `docker.cleanup.unused_volumes` **and** more than the volumes in use | warning | 10 |
 | Unused volumes at least `docker.cleanup.unused_volumes_ratio` times the volumes in use (at least one) | critical | 10× |
 | Stopped containers outside Swarm's task history at least `docker.cleanup.stopped_containers` | warning | 10 |

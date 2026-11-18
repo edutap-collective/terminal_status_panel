@@ -640,6 +640,11 @@ _DF_LISTS = {
     "volumes": ("Volumes", "VolumeUsage"),
 }
 
+#: Container states that are leftovers: the container no longer runs and will
+#: not run again on its own. Paused, restarting and removing containers are
+#: still in someone's hands and are neither stopped nor history.
+_STOPPED_STATES = frozenset({"exited", "created", "dead"})
+
 #: Label Swarm sets on every container that runs one of its tasks.
 _SWARM_TASK_LABEL = "com.docker.swarm.task.id"
 
@@ -753,7 +758,7 @@ def _count_objects(raw: dict, usage: DockerDiskUsage) -> None:
     containers = _df_items(raw, "containers")
     if containers is not None:
         running = [c for c in containers if c.get("State") == "running"]
-        stopped = [c for c in containers if c.get("State") != "running"]
+        stopped = [c for c in containers if c.get("State") in _STOPPED_STATES]
         history = [c for c in stopped if _SWARM_TASK_LABEL in _entry_labels(c)]
         usage.containers_total = len(containers)
         usage.containers_running = len(running)
@@ -768,12 +773,19 @@ def _count_objects(raw: dict, usage: DockerDiskUsage) -> None:
             1 for i in images if not [t for t in (i.get("RepoTags") or []) if t != _UNTAGGED]
         )
 
-    volumes = _df_items(raw, "volumes") or []
+    volumes = _df_items(raw, "volumes")
+    if volumes is None:
+        usage.volumes_total = usage.volumes_unused = usage.volumes_anonymous = None
+        return
     usage.volumes_total = len(volumes)
-    usage.volumes_unused = sum(
-        1 for v in volumes if (v.get("UsageData") or {}).get("RefCount", -1) == 0
-    )
     usage.volumes_anonymous = sum(1 for v in volumes if _ANONYMOUS_VOLUME_LABEL in _entry_labels(v))
+    # The API reports RefCount -1, or no usage data at all, where it did not
+    # count references. One such volume makes the unused count unknown.
+    refcounts = [(v.get("UsageData") or {}).get("RefCount", -1) for v in volumes]
+    if any(not isinstance(r, int) or r < 0 for r in refcounts):
+        usage.volumes_unused = None
+    else:
+        usage.volumes_unused = sum(1 for r in refcounts if r == 0)
 
 
 def _network_count(client) -> int | None:

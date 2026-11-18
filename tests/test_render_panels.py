@@ -2530,3 +2530,22 @@ def test_updates_panel_names_a_failed_check():
     )
     out = _text(panels.updates_panel(info, now=1000.0 + 600))
     assert "last check failed (timeout)" in out
+
+
+def test_the_disk_bars_follow_the_configured_filesystem_thresholds():
+    """They used fixed 80/90 while the documented keys went unread."""
+    from terminal_status_panel.config import Thresholds
+    from terminal_status_panel.model import FilesystemUsage, ResourceUsage
+
+    res = ResourceUsage(filesystems=[FilesystemUsage("/", 100, 85, 85.0)])
+    default = panels._filesystem_table(res, bar_width=10)
+    strict = panels._filesystem_table(
+        res, bar_width=10, thresholds=Thresholds(filesystem_warning=70, filesystem_critical=75)
+    )
+    assert _text(default) == _text(strict)  # same text, so compare the styles
+    console = Console(width=100, force_terminal=True, color_system="truecolor", record=True)
+    console.print(default)
+    yellow = console.export_html(inline_styles=True)
+    console.print(strict)
+    red = console.export_html(inline_styles=True)
+    assert yellow != red

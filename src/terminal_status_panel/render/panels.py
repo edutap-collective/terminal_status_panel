@@ -389,8 +389,11 @@ _FS_BAR_GAP = 2
 _UNBOUNDED_WIDTH = 10_000
 
 
-def _filesystem_table(res: ResourceUsage, bar_width: int | None) -> Table:
+def _filesystem_table(
+    res: ResourceUsage, bar_width: int | None, thresholds: Thresholds | None = None
+) -> Table:
     """Build the filesystem table, with a usage bar column iff *bar_width* is given."""
+    t = thresholds or Thresholds()
     table = Table.grid(padding=(0, 2))
     table.add_column(style="bold cyan", no_wrap=True, max_width=14)
     table.add_column(justify="right")
@@ -410,7 +413,7 @@ def _filesystem_table(res: ResourceUsage, bar_width: int | None) -> Table:
         return table
     _row("Mounted on", "Size", "Used", "Avail", "Use%")
     for fs in res.filesystems:
-        status = classify(fs.percent, 80.0, 90.0)
+        status = classify(fs.percent, t.filesystem_warning, t.filesystem_critical)
         avail = max(fs.total - fs.used, 0)
         cells: list[RenderableType] = [
             _short_mount(fs.mountpoint, 14),
@@ -450,23 +453,24 @@ class _FilesystemBody:
     available width exactly as before.
     """
 
-    def __init__(self, res: ResourceUsage) -> None:
+    def __init__(self, res: ResourceUsage, thresholds: Thresholds | None = None) -> None:
         self._res = res
+        self._thresholds = thresholds
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        base = _filesystem_table(self._res, bar_width=None)
+        base = _filesystem_table(self._res, bar_width=None, thresholds=self._thresholds)
         natural_width = Measurement.get(
             console, options.update_width(_UNBOUNDED_WIDTH), base
         ).maximum
         bar_width = min(options.max_width - natural_width - _FS_BAR_GAP, _MEMORY_BAR_WIDTH)
         if bar_width >= _MIN_FS_BAR_WIDTH:
-            yield _filesystem_table(self._res, bar_width=bar_width)
+            yield _filesystem_table(self._res, bar_width=bar_width, thresholds=self._thresholds)
         else:
             yield base
 
 
-def _filesystem_body(res: ResourceUsage) -> RenderableType:
-    return _FilesystemBody(res)
+def _filesystem_body(res: ResourceUsage, thresholds: Thresholds | None = None) -> RenderableType:
+    return _FilesystemBody(res, thresholds)
 
 
 #: Truncate a service name that will not fit rather than wrapping it. A wrapped
@@ -611,7 +615,7 @@ def system_status(
         _memory_body(res, cfg),
         Text(""),
         _subhead("FILESYSTEM USAGE"),
-        _filesystem_body(res),
+        _filesystem_body(res, cfg.thresholds),
     )
     grid = Table.grid(expand=True, padding=(0, 4))
     grid.add_column(ratio=3)
@@ -640,11 +644,11 @@ def memory_panel(res: ResourceUsage | None, cfg: Config) -> Group:
     return section("MEMORY & SWAP", _memory_body(res, cfg))
 
 
-def filesystem_panel(res: ResourceUsage | None) -> Group:
+def filesystem_panel(res: ResourceUsage | None, thresholds: Thresholds | None = None) -> Group:
     """The FILESYSTEM USAGE block."""
     if res is None:
         return section("FILESYSTEM USAGE", Text("not available", style="dim"))
-    return section("FILESYSTEM USAGE", _filesystem_body(res))
+    return section("FILESYSTEM USAGE", _filesystem_body(res, thresholds))
 
 
 # --------------------------------------------------------------------------- #
@@ -713,10 +717,14 @@ def _objects_segments(disk) -> list[tuple[str, str]]:
         if disk.images_dangling is not None:
             details.append(f"{disk.images_dangling} dangling")
         segments.append(("images", f"images {disk.images_total} ({', '.join(details)})"))
-    details = [f"{disk.volumes_unused} unused"]
-    if disk.volumes_anonymous:
-        details.append(f"{disk.volumes_anonymous} anonymous")
-    segments.append(("volumes", f"volumes {disk.volumes_total} ({', '.join(details)})"))
+    if disk.volumes_total is not None:
+        details = []
+        if disk.volumes_unused is not None:
+            details.append(f"{disk.volumes_unused} unused")
+        if disk.volumes_anonymous:
+            details.append(f"{disk.volumes_anonymous} anonymous")
+        text = f"volumes {disk.volumes_total}"
+        segments.append(("volumes", f"{text} ({', '.join(details)})" if details else text))
     if disk.networks is not None:
         segments.append(("networks", f"networks {disk.networks}"))
     return segments

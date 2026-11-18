@@ -234,3 +234,32 @@ def test_a_failed_reading_renders_neither_objects_nor_cleanup():
     out = _section(_disk(error="timeout"))
     assert _row(out, "Objects") is None
     assert _row(out, "Cleanup") is None
+
+
+def test_unknown_volume_counts_raise_no_finding_and_are_left_out():
+    disk = _disk(volumes_total=None, volumes_unused=None, volumes_anonymous=None)
+    assert _severities(disk) == {}
+    assert "volumes" not in _row(_section(disk), "Objects")
+
+
+def test_a_known_total_with_unknown_unused_shows_only_the_total():
+    row = _row(_section(_disk(volumes_total=6, volumes_unused=None)), "Objects")
+    assert "volumes 6" in row
+    assert "unused" not in row.split("volumes 6")[1].split("·")[0]
+
+
+def test_disk_pressure_bands_are_inclusive_like_the_disk_bars():
+    thresholds = Config().thresholds
+    at_critical = ResourceUsage(filesystems=[_fs(90.0)])
+    at_warning = ResourceUsage(filesystems=[_fs(80.0)])
+    assert disk_pressure(_disk(), at_critical, thresholds) == "critical"
+    assert disk_pressure(_disk(), at_warning, thresholds) == "warning"
+
+
+def test_disk_pressure_follows_configured_thresholds():
+    from terminal_status_panel.config import Thresholds
+
+    thresholds = Thresholds(filesystem_warning=70.0, filesystem_critical=75.0)
+    assert disk_pressure(_disk(), ResourceUsage(filesystems=[_fs(85.0)]), thresholds) == (
+        "critical"
+    )

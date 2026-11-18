@@ -1987,3 +1987,38 @@ def test_a_failing_network_listing_loses_only_the_count(monkeypatch):
     assert result.reachable is True
     assert result.disk.networks is None
     assert result.disk.volumes_total == 3
+
+
+def test_paused_and_restarting_containers_are_not_stopped(monkeypatch):
+    """Only exited, created and dead containers are leftovers anyone can remove."""
+    payload = _df_counts_payload()
+    payload["Containers"] = [
+        {"State": "paused", "Labels": {}},
+        {"State": "restarting", "Labels": {}},
+        {"State": "restarting", "Labels": _SWARM_TASK},
+        {"State": "dead", "Labels": {}},
+        {"State": "exited", "Labels": _SWARM_TASK},
+    ]
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.containers_total == 5
+    assert disk.containers_stopped == 1
+    assert disk.containers_swarm_history == 1
+
+
+def test_volume_counts_are_unknown_without_a_volume_list(monkeypatch):
+    payload = _df_counts_payload()
+    del payload["Volumes"]
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.volumes_total is None
+    assert disk.volumes_unused is None
+    assert disk.volumes_anonymous is None
+
+
+def test_unused_volumes_are_unknown_where_the_daemon_did_not_count_references(monkeypatch):
+    """The API reports RefCount -1 (or no usage data) where it did not compute it."""
+    payload = _df_counts_payload()
+    payload["Volumes"].append({"Name": "y", "Labels": {}, "UsageData": {"RefCount": -1}})
+    payload["Volumes"].append({"Name": "z", "Labels": {}, "UsageData": None})
+    disk = _counts_disk(monkeypatch, payload)
+    assert disk.volumes_total == 6
+    assert disk.volumes_unused is None

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 from ..config import Config, Thresholds
 from ..model import DockerDiskUsage, ResourceUsage
-from .bars import format_bytes
+from .bars import classify, format_bytes
 
 WARNING = "warning"
 CRITICAL = "critical"
@@ -65,11 +65,10 @@ def disk_pressure(
                 best = fs
     if best is None or best.percent is None:
         return None
-    if best.percent > thresholds.filesystem_critical:
-        return CRITICAL
-    if best.percent > thresholds.filesystem_warning:
-        return WARNING
-    return None
+    # The DISK bars' own classification, so one filesystem never shows two
+    # verdicts -- not even at a boundary.
+    band = classify(best.percent, thresholds.filesystem_warning, thresholds.filesystem_critical)
+    return {"warning": WARNING, "critical": CRITICAL}.get(band)
 
 
 def _disk_finding(disk, resources, thresholds) -> CleanupFinding | None:
@@ -84,6 +83,8 @@ def _disk_finding(disk, resources, thresholds) -> CleanupFinding | None:
 def _volume_finding(disk, cfg: Config) -> CleanupFinding | None:
     rules = cfg.docker_cleanup
     unused = disk.volumes_unused
+    if unused is None or disk.volumes_total is None:
+        return None
     in_use = disk.volumes_total - unused
     if unused < rules.unused_volumes:
         return None

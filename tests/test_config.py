@@ -514,3 +514,14 @@ def test_a_cleanup_ratio_below_one_is_refused(tmp_path):
     cfg = load_config(path)
     assert cfg.docker_cleanup.unused_volumes_ratio == 10.0
     assert any(p.key == "docker.cleanup.unused_volumes_ratio" for p in cfg.problems)
+
+
+def test_a_non_finite_cleanup_count_falls_back_instead_of_crashing(tmp_path):
+    """TOML allows `inf`; int(inf) raises OverflowError, which took the panel down."""
+    path = _write(tmp_path, "[docker.cleanup]\nunused_volumes = inf\nunused_images = nan\n")
+    cfg = load_config(path)
+    assert cfg.docker_cleanup.unused_volumes == 10
+    assert cfg.docker_cleanup.unused_images == 20
+    assert {"docker.cleanup.unused_volumes", "docker.cleanup.unused_images"} <= {
+        p.key for p in cfg.problems
+    }
