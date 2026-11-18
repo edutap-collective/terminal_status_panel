@@ -88,12 +88,12 @@ def test_a_tidy_node_has_no_findings():
 
 
 def test_unused_volumes_ten_times_the_used_ones_are_critical():
-    """Measured on lrz, 2026-11-18: 2,175 unused volumes beside 3 in use."""
+    """Measured on a production node, 2026-11-18: 2,175 unused volumes beside 3 in use."""
     assert _severities(_disk(volumes_total=2178, volumes_unused=2175)) == {"volumes": "critical"}
 
 
 def test_more_unused_than_used_volumes_is_a_warning():
-    """Measured on lrz, 2026-11-18: 16 unused beside 9 in use, and growing."""
+    """Measured on a production node, 2026-11-18: 16 unused beside 9 in use, and growing."""
     assert _severities(_disk(volumes_total=25, volumes_unused=16)) == {"volumes": "warning"}
 
 

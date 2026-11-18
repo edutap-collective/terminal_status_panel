@@ -1845,7 +1845,7 @@ _ANONYMOUS = {"com.docker.volume.anonymous": ""}
 
 
 def _df_counts_payload():
-    """Lists shaped like Docker 26.1.5 answers them (measured on lrz, 2026-11-18).
+    """Lists shaped like Docker 26.1.5 answers them (measured on a production node, 2026-11-18).
 
     The daemon omits ``SizeRw`` on a container whose writable layer is empty,
     and labels sit on containers and volumes alike.
