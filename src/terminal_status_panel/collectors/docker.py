@@ -621,28 +621,49 @@ def _container_memory(container) -> tuple[int, int, int] | None:
 
 
 #: Categories the aggregated `/system/df` response reports, as (response key,
-#: attribute name). Added to the API well after the endpoint itself -- a daemon
-#: that predates them answers in lists instead, which `_disk_from_lists` reads.
+#: size attribute, reclaimable attribute). Added to the API well after the
+#: endpoint itself -- a daemon that predates them answers in lists instead,
+#: which `_disk_from_lists` reads.
 _DF_CATEGORIES = (
-    ("ImageUsage", "images"),
-    ("ContainerUsage", "containers"),
-    ("VolumeUsage", "volumes"),
-    ("BuildCacheUsage", "build_cache"),
+    ("ImageUsage", "images", "images_reclaimable"),
+    ("ContainerUsage", "containers", "containers_reclaimable"),
+    ("VolumeUsage", "volumes", "volumes_reclaimable"),
+    ("BuildCacheUsage", "build_cache", "cache_reclaimable"),
 )
+
+#: Where each object list sits, as (itemised key, aggregate key). The itemised
+#: form is what Docker 26.1.5 answers; newer daemons carry the same entries as
+#: ``Items`` under the aggregate (measured against Docker 29.9.3, 2026-11-18).
+_DF_LISTS = {
+    "images": ("Images", "ImageUsage"),
+    "containers": ("Containers", "ContainerUsage"),
+    "volumes": ("Volumes", "VolumeUsage"),
+}
+
+#: Label Swarm sets on every container that runs one of its tasks.
+_SWARM_TASK_LABEL = "com.docker.swarm.task.id"
+
+#: Label Docker sets on a volume it created without a name being given.
+_ANONYMOUS_VOLUME_LABEL = "com.docker.volume.anonymous"
+
+#: The tag older daemons report for an image that has none.
+_UNTAGGED = "<none>:<none>"
 
 
 def _disk_from_aggregates(raw: dict, usage: DockerDiskUsage) -> bool:
     """Fill *usage* from the aggregated response form. False if it is absent."""
     seen = False
-    for key, attribute in _DF_CATEGORIES:
+    for key, attribute, reclaimable_attribute in _DF_CATEGORIES:
         category = raw.get(key)
         if not isinstance(category, dict):
             continue
         seen = True
         size = int(category.get("TotalSize") or 0)
+        reclaimable = int(category.get("Reclaimable") or 0)
         setattr(usage, attribute, size)
+        setattr(usage, reclaimable_attribute, reclaimable)
         usage.used += size
-        usage.reclaimable += int(category.get("Reclaimable") or 0)
+        usage.reclaimable += reclaimable
     return seen
 
 
@@ -678,15 +699,15 @@ def _disk_from_lists(raw: dict, usage: DockerDiskUsage) -> bool:
         for i in (images or [])
         if i.get("Containers")
     )
-    images_reclaimable = max(0, usage.images - in_use)
+    usage.images_reclaimable = max(0, usage.images - in_use)
 
     usage.containers = sum(int(c.get("SizeRw") or 0) for c in (containers or []))
-    containers_reclaimable = sum(
+    usage.containers_reclaimable = sum(
         int(c.get("SizeRw") or 0) for c in (containers or []) if c.get("State") != "running"
     )
 
     usage.volumes = sum(int((v.get("UsageData") or {}).get("Size") or 0) for v in (volumes or []))
-    volumes_reclaimable = sum(
+    usage.volumes_reclaimable = sum(
         int((v.get("UsageData") or {}).get("Size") or 0)
         for v in (volumes or [])
         if (v.get("UsageData") or {}).get("RefCount", -1) == 0
@@ -695,15 +716,76 @@ def _disk_from_lists(raw: dict, usage: DockerDiskUsage) -> bool:
     # A shared cache entry's bytes belong to the entry that owns them; counting
     # them here as well would report the same blocks twice.
     usage.build_cache = sum(int(b.get("Size") or 0) for b in (cache or []) if not b.get("Shared"))
-    cache_reclaimable = sum(
+    usage.cache_reclaimable = sum(
         int(b.get("Size") or 0) for b in (cache or []) if not b.get("Shared") and not b.get("InUse")
     )
 
     usage.used = usage.images + usage.containers + usage.volumes + usage.build_cache
     usage.reclaimable = (
-        images_reclaimable + containers_reclaimable + volumes_reclaimable + cache_reclaimable
+        usage.images_reclaimable
+        + usage.containers_reclaimable
+        + usage.volumes_reclaimable
+        + usage.cache_reclaimable
     )
     return True
+
+
+def _df_items(raw: dict, kind: str) -> list[dict] | None:
+    """One object list from either response form, or None where neither has it."""
+    list_key, aggregate_key = _DF_LISTS[kind]
+    items = raw.get(list_key)
+    if isinstance(items, list):
+        return items
+    aggregate = raw.get(aggregate_key)
+    if isinstance(aggregate, dict) and isinstance(aggregate.get("Items"), list):
+        return aggregate["Items"]
+    return None
+
+
+def _entry_labels(item: dict) -> dict:
+    """An entry's labels; the daemon sends ``null`` where there are none."""
+    labels = item.get("Labels")
+    return labels if isinstance(labels, dict) else {}
+
+
+def _count_objects(raw: dict, usage: DockerDiskUsage) -> None:
+    """Fill the Objects row's counts from whichever lists the response carries."""
+    containers = _df_items(raw, "containers")
+    if containers is not None:
+        running = [c for c in containers if c.get("State") == "running"]
+        stopped = [c for c in containers if c.get("State") != "running"]
+        history = [c for c in stopped if _SWARM_TASK_LABEL in _entry_labels(c)]
+        usage.containers_total = len(containers)
+        usage.containers_running = len(running)
+        usage.containers_swarm_history = len(history)
+        usage.containers_stopped = len(stopped) - len(history)
+
+    images = _df_items(raw, "images")
+    if images is not None:
+        usage.images_total = len(images)
+        usage.images_unused = sum(1 for i in images if not i.get("Containers"))
+        usage.images_dangling = sum(
+            1 for i in images if not [t for t in (i.get("RepoTags") or []) if t != _UNTAGGED]
+        )
+
+    volumes = _df_items(raw, "volumes") or []
+    usage.volumes_total = len(volumes)
+    usage.volumes_unused = sum(
+        1 for v in volumes if (v.get("UsageData") or {}).get("RefCount", -1) == 0
+    )
+    usage.volumes_anonymous = sum(1 for v in volumes if _ANONYMOUS_VOLUME_LABEL in _entry_labels(v))
+
+
+def _network_count(client) -> int | None:
+    """How many networks the daemon knows, or None where it would not say.
+
+    Guarded on its own: `collect_docker` degrades to "not reachable" on any
+    exception, and a count of networks is not worth the whole section.
+    """
+    try:
+        return len(client.networks.list())
+    except Exception:
+        return None
 
 
 def _disk_failure(exc: Exception) -> str:
@@ -747,11 +829,7 @@ def _disk_usage(node: str | None, root_dir: str | None, timeout: float) -> Docke
     if not _disk_from_aggregates(raw, usage) and not _disk_from_lists(raw, usage):
         usage.error = "unreadable"
         return usage
-    volumes = raw.get("Volumes") or []
-    usage.volumes_total = len(volumes)
-    usage.volumes_unused = sum(
-        1 for v in volumes if (v.get("UsageData") or {}).get("RefCount", -1) == 0
-    )
+    _count_objects(raw, usage)
     return usage
 
 
@@ -952,6 +1030,10 @@ def collect_docker(
                 client, critical_set, description_label, id_to_name, group_label, memory
             )
             trouble = trouble + swarm_trouble
+            disk = _disk_usage(
+                local_node or info.get("Name"), info.get("DockerRootDir"), df_timeout
+            )
+            disk.networks = _network_count(client)
             return SwarmInfo(
                 reachable=True,
                 enabled=True,
@@ -961,9 +1043,7 @@ def collect_docker(
                 containers=containers,
                 nodes=nodes,
                 container_services=origins,
-                disk=_disk_usage(
-                    local_node or info.get("Name"), info.get("DockerRootDir"), df_timeout
-                ),
+                disk=disk,
                 trouble=trouble,
                 # Carried unconditionally, though it is only ever rendered
                 # where `nodes` came back empty: a worker may not list the
@@ -973,16 +1053,18 @@ def collect_docker(
         containers, origins, trouble, _memory = _container_services(
             client, critical_set, description_label, None
         )
+        disk = _disk_usage(
+            info.get("Name") if isinstance(info, dict) else None,
+            info.get("DockerRootDir") if isinstance(info, dict) else None,
+            df_timeout,
+        )
+        disk.networks = _network_count(client)
         return SwarmInfo(
             reachable=True,
             enabled=False,
             containers=containers,
             container_services=origins,
-            disk=_disk_usage(
-                info.get("Name") if isinstance(info, dict) else None,
-                info.get("DockerRootDir") if isinstance(info, dict) else None,
-                df_timeout,
-            ),
+            disk=disk,
             trouble=trouble,
         )
     except Exception:

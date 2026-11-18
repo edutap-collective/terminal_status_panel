@@ -49,6 +49,29 @@ class Thresholds:
 
 
 @dataclass
+class CleanupThresholds:
+    """When Docker's leftovers turn from housekeeping into a Cleanup line.
+
+    Counts, not bytes, for volumes: measured on 2026-11-18, a node held 2,175
+    unused volumes that ``/system/df`` sized at zero bytes in total. A rule on
+    bytes would have called that node clean.
+    """
+
+    #: Unused volumes from which they are worth a word at all -- and only
+    #: then if they outnumber the volumes in use.
+    unused_volumes: int = 10
+    #: Unused volumes at this multiple of the ones in use mean something is
+    #: creating volumes and nothing is removing them: critical, not a warning.
+    unused_volumes_ratio: float = 10.0
+    #: Stopped containers outside Swarm's own task history.
+    stopped_containers: int = 10
+    #: Images without a tag.
+    dangling_images: int = 10
+    #: Images no container uses -- and only if they outnumber the used ones.
+    unused_images: int = 20
+
+
+@dataclass
 class DnsExpectation:
     """A name the operator expects to resolve, and to what."""
 
@@ -330,6 +353,7 @@ class Config:
     #: read the icon reference -- and nobody at a login prompt has. Kept as a
     #: switch for the reader who has learnt the vocabulary and wants the line.
     docker_legend: bool = True
+    docker_cleanup: CleanupThresholds = field(default_factory=CleanupThresholds)
     infrastructure_stacks: list[str] = field(
         default_factory=lambda: list(DEFAULT_INFRASTRUCTURE_STACKS)
     )
@@ -879,6 +903,41 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         psi_critical=reader.number(psi, "thresholds.psi.critical", t.psi_critical, minimum=0.0),
     )
     docker = _section(data, "docker")
+    cleanup_section = _section(data, "docker", "cleanup")
+    reader.unknown_keys(
+        cleanup_section,
+        "docker.cleanup",
+        {
+            "unused_volumes",
+            "unused_volumes_ratio",
+            "stopped_containers",
+            "dangling_images",
+            "unused_images",
+        },
+    )
+    c = CleanupThresholds()
+    docker_cleanup = CleanupThresholds(
+        unused_volumes=reader.integer(
+            cleanup_section, "docker.cleanup.unused_volumes", c.unused_volumes, minimum=1
+        ),
+        # Below 1 the rule would call a node overdue that has more volumes in
+        # use than unused -- a value nobody can have meant.
+        unused_volumes_ratio=reader.number(
+            cleanup_section,
+            "docker.cleanup.unused_volumes_ratio",
+            c.unused_volumes_ratio,
+            minimum=1.0,
+        ),
+        stopped_containers=reader.integer(
+            cleanup_section, "docker.cleanup.stopped_containers", c.stopped_containers, minimum=1
+        ),
+        dangling_images=reader.integer(
+            cleanup_section, "docker.cleanup.dangling_images", c.dangling_images, minimum=1
+        ),
+        unused_images=reader.integer(
+            cleanup_section, "docker.cleanup.unused_images", c.unused_images, minimum=1
+        ),
+    )
     services = _section(data, "services")
     infra = docker.get("infrastructure_stacks", services.get("infrastructure", None))
     infra_uis = docker.get("infra_ui_services", None)
@@ -935,6 +994,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         group_label=reader.text(docker, "docker.group_label", DEFAULT_GROUP_LABEL),
         show_image=reader.flag(docker, "docker.show_image", True),
         docker_legend=reader.flag(docker, "docker.legend", True),
+        docker_cleanup=docker_cleanup,
         infrastructure_stacks=_list_setting(infra, DEFAULT_INFRASTRUCTURE_STACKS),
         infra_ui_services=_list_setting(infra_uis, DEFAULT_INFRA_UI_SERVICES),
         ignore_mountpoints=_list_setting(ignore, platform_defaults.ignore_mountpoints()),

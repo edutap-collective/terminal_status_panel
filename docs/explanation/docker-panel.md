@@ -110,11 +110,13 @@ reachability is not counted against: silence is not failure.
 # Docker's own disk footprint
 
 The filesystem bars report a full disk; they never report why. On a node that
-runs containers the cause is usually Docker itself, and one line under the
-swarm summary says so:
+runs containers the cause is usually Docker itself, and up to three rows under
+the swarm summary say so:
 
 ```
-Disk   swarm01-mgr-01 · 43.7 GB used · ↺ 28.3 GB reclaimable · images 13.5 GB · cache 12.4 GB · volumes 2.4 GB · 178/185 unused
+Disk     swarm01-mgr-01 · 43.7 GB used · ↺ 28.3 GB reclaimable · images 13.5 GB (↺ 9.1 GB) · cache 12.4 GB (↺ 12.4 GB) · volumes 2.4 GB (↺ 2.4 GB)
+Objects  containers 14 running, 3 stopped, 10 swarm history · images 31 (12 unused, 4 dangling) · volumes 185 (178 unused, 170 anonymous) · networks 11
+Cleanup  ⚠️ cleanup overdue: 178 unused volumes, 25× the 7 in use · 12 unused images (9.1 GB)
 ```
 
 The node name is not decoration. `/system/df` knows only the daemon it is
@@ -122,18 +124,74 @@ asked, so on a manager these figures describe that manager and nothing else;
 without the name the number reads as a statement about the cluster.
 
 `reclaimable` leads because it is the figure that leads to an action. "Docker
-occupies 43.7 GB" invites none; "28.3 GB of it can be had back" does. The
-unused-volume count is the part that matters most on a node running databases:
-a volume nothing references still holds its bytes, and no other part of the
-panel would ever mention it.
+occupies 43.7 GB" invites none; "28.3 GB of it can be had back" does. Each
+category carries its own share in brackets, because the total does not say
+which prune to run.
 
-**Colour follows the disk, not the heap.** The line turns yellow only when the
-filesystem holding `DockerRootDir` is itself above 80% full — 28 GB of
-recoverable images matter on a full volume and not at all on an empty one. The
-mount is found by longest match rather than by assuming `/`, because a node
-that gives Docker its own volume is exactly where the two disagree. Without
-filesystem data (running `status-docker` alone) the figures render uncoloured
-rather than claiming a pressure nobody measured.
+**Colour follows the disk, not the heap.** The reclaimable figure turns yellow
+when the filesystem holding `DockerRootDir` is above
+`thresholds.filesystem.warning` and red above `thresholds.filesystem.critical`
+— the same bands the DISK bars use, so one filesystem never shows two
+verdicts. 28 GB of recoverable images matter on a full volume and not at all on
+an empty one. The mount is found by longest match rather than by assuming `/`,
+because a node that gives Docker its own volume is exactly where the two
+disagree. Without filesystem data (running `status-docker` alone) the figures
+render uncoloured rather than claiming a pressure nobody measured.
+
+## The Objects row
+
+**Objects** counts what the daemon holds, from the same `/system/df` reading —
+no further call except one listing for the network count.
+
+- **Containers** split into running, stopped, and *swarm history*. A stopped
+  container that ran a Swarm task is history Swarm keeps and prunes itself, up
+  to its task-history retention limit; it is nobody's to clean up, so it is
+  counted apart and never raises a finding.
+- **Images** name the unused ones (no container uses them, running or stopped)
+  and the dangling ones (no tag).
+- **Volumes** name the unused and the anonymous ones. Anonymous volumes are the
+  ones that pile up: an image with a `VOLUME` line leaves one behind on every
+  run whose container is removed without `-v`.
+- **Networks** are a count only. A network occupies no disk, and "unused" would
+  cost one inspect per network and still be wrong for overlays on a Swarm node,
+  which show only the containers on the node asked.
+
+A count the response did not carry is left out rather than shown as zero: zero
+would claim a clean daemon nobody looked at. On a failed reading the row is
+left out entirely, because the Disk row already says n/a and why.
+
+## The Cleanup line
+
+**Cleanup** appears only when a rule fires, and names every reason, worst
+first. The severity is in the words as well as the colour — `cleanup due`
+(yellow) or `cleanup overdue` (red) — so a terminal without colour still tells
+the two apart. The kind a rule fires for is coloured the same way in the
+Objects row.
+
+| Rule | Severity | Default |
+|------|----------|---------|
+| Docker's filesystem above `thresholds.filesystem.warning` / `.critical`, with at least 1 GiB reclaimable | warning / critical | 80 % / 90 % |
+| Unused volumes at least `docker.cleanup.unused_volumes` **and** more than the volumes in use | warning | 10 |
+| Unused volumes at least `docker.cleanup.unused_volumes_ratio` times the volumes in use (at least one) | critical | 10× |
+| Stopped containers outside Swarm's task history at least `docker.cleanup.stopped_containers` | warning | 10 |
+| Dangling images at least `docker.cleanup.dangling_images` | warning | 10 |
+| Unused images at least `docker.cleanup.unused_images` **and** more than the images in use | warning | 20 |
+
+**Unused volumes tenfold are critical, not a warning.** That is never plain
+accumulation: some process creates a volume on every run and nothing removes
+it, and the count grows until something gives out. Measured on 2026-11-18 on a
+node running Docker 26.1.5: 2,175 unused volumes beside 3 in use, growing by
+the hour.
+
+**Volumes are counted, not weighed.** On that same node `/system/df` sized all
+2,175 volumes at zero bytes. A rule on bytes would have called it clean.
+
+**A full disk with nothing to reclaim is no cleanup case.** Below 1 GiB a
+prune would not help, and the line would send a reader off to run one anyway;
+the Disk row's colour still says the filesystem is full.
+
+The panel only reports. It runs no prune, and it names no command: on a managed
+host the cleanup belongs in the automation that runs the host, not in a shell.
 
 The reading is taken on a **separate client with its own timeout**
 (`docker.df_timeout`). The Docker collector degrades to "not reachable" on any

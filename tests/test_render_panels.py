@@ -1998,7 +1998,14 @@ def test_the_disk_line_leads_with_what_can_be_reclaimed():
     out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
     line = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
     assert line.index("reclaimable") < line.index("images")
-    assert "178/185 unused" in line
+
+
+def test_the_unused_volume_count_moved_to_the_objects_row():
+    out = _text(panels.services_section(_disk_swarm(_disk()), Config()), width=200)
+    disk = next(line for line in out.splitlines() if line.strip().startswith("Disk"))
+    objects = next(line for line in out.splitlines() if line.strip().startswith("Objects"))
+    assert "unused" not in disk
+    assert "volumes 185 (178 unused" in objects
 
 
 def test_a_missing_disk_reading_says_so_rather_than_vanishing():
@@ -2042,8 +2049,11 @@ def test_disk_colour_follows_real_pressure_not_the_reclaimable_size():
     roomy = ResourceUsage(filesystems=[_fs("/", 22.0)])
     assert panels._disk_style(_disk(), roomy) is None
 
-    tight = ResourceUsage(filesystems=[_fs("/", 91.0)])
+    tight = ResourceUsage(filesystems=[_fs("/", 85.0)])
     assert panels._disk_style(_disk(), tight) == "yellow"
+
+    full = ResourceUsage(filesystems=[_fs("/", 91.0)])
+    assert panels._disk_style(_disk(), full) == "red"
 
 
 def test_disk_colour_picks_the_mount_that_actually_holds_the_root_dir():

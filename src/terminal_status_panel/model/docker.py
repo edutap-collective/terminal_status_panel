@@ -205,6 +205,37 @@ class DockerDiskUsage:
     #: ever mention it.
     volumes_unused: int = 0
     volumes_total: int = 0
+    #: Volumes Docker created on a container's behalf, without a name anyone
+    #: chose. They are the ones that pile up: a ``VOLUME`` line in an image
+    #: leaves one behind on every run whose container is removed without
+    #: ``-v``. Measured on 2026-11-18: 2,175 of 2,178 volumes on one node,
+    #: every one of them anonymous and unused.
+    volumes_anonymous: int = 0
+    #: What each category could give back. ``reclaimable`` is their sum; kept
+    #: apart because "28 GB reclaimable" does not say which prune to run.
+    images_reclaimable: int = 0
+    containers_reclaimable: int = 0
+    volumes_reclaimable: int = 0
+    cache_reclaimable: int = 0
+    #: Object counts for the Objects row. ``None`` where the response carried
+    #: no list to count -- zero would claim a clean daemon nobody looked at.
+    containers_total: int | None = None
+    containers_running: int | None = None
+    #: Stopped containers that are nobody's but the operator's to remove.
+    containers_stopped: int | None = None
+    #: Stopped containers that belong to a Swarm task. Swarm keeps them as
+    #: task history and prunes them itself, up to its retention limit, so they
+    #: are counted apart and never called a cleanup finding.
+    containers_swarm_history: int | None = None
+    images_total: int | None = None
+    #: Images no container uses -- running or stopped.
+    images_unused: int | None = None
+    #: Images without a tag: superseded builds and pulls.
+    images_dangling: int | None = None
+    #: Networks this daemon knows, from a separate listing. Count only: a
+    #: network occupies no disk, and "unused" would cost one inspect per
+    #: network and still be wrong for overlays on a Swarm node.
+    networks: int | None = None
     #: Why there are no figures, where there are none. ``None`` when the
     #: reading succeeded.
     #:
